@@ -1,0 +1,58 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.uv/
+
+# Build artifacts
+.next/
+dist/
+build/
+*.egg-info/
+.turbo/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Test / coverage
+coverage/
+.coverage
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+*.lcov
+
+# Editor
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Supabase
+supabase/.temp/
+supabase/.branches/
+
+# Bootstrap scaffold (local reference only)
+job-assist-bootstrap/
+job-assist-bootstrap.zip
+
+# OAuth tokens (Gmail)
+apps/api/credentials.json
+apps/api/token.json
+apps/api/.gmail-cache/
