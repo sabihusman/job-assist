@@ -16,6 +16,7 @@ name: Deploy
 on:
   push:
     branches: [main]
+  workflow_dispatch:  # allow manual retrigger from Actions tab or gh CLI
 
 permissions:
   contents: read
