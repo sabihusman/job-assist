@@ -1,0 +1,166 @@
+name: Deploy
+
+# Runs on every merge to main. Steps are strictly ordered: migrations first,
+# API second, web third, smoke checks last. If any step fails, the workflow
+# halts — there is no retry logic. Surface the failure clearly and fix forward.
+#
+# Required secrets (set once in repo Settings → Secrets → Actions):
+#   DATABASE_URL          — Supabase production connection string (sync, psycopg2 format)
+#   RAILWAY_TOKEN         — Railway API token for the job-assist project
+#   API_URL               — Railway production URL (e.g. https://job-assist-api.railway.app)
+#   VERCEL_TOKEN          — Vercel personal access token
+#   VERCEL_ORG_ID         — Vercel team/org ID (from vercel link or dashboard)
+#   VERCEL_PROJECT_ID     — Vercel project ID (from vercel link or dashboard)
+#   VERCEL_PRODUCTION_URL — Production web URL (e.g. https://job-assist.vercel.app)
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  # Never cancel a deploy mid-flight — partial deploys are worse than queued ones.
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install API dependencies
+        working-directory: apps/api
+        run: uv sync --frozen
+
+      # -----------------------------------------------------------------------
+      # Step 1 — Apply Alembic migrations to production Supabase
+      # -----------------------------------------------------------------------
+      # Migrations run before the API deploy so the schema is ready when the
+      # new API version starts. If migration fails, the old API version continues
+      # running against the old schema — no downtime.
+      #
+      # Note: DATABASE_URL must use the sync psycopg2 format for Alembic:
+      #   postgresql://postgres:[password]@[host]:5432/postgres
+      # (Not postgresql+asyncpg:// — that is for the app runtime only.)
+      - name: Apply database migrations
+        # Skips gracefully if alembic.ini doesn't exist yet (expected until
+        # Week 1 when the first migration is added).
+        working-directory: apps/api
+        run: |
+          if [ ! -f "alembic.ini" ]; then
+            echo "No alembic.ini found — skipping migrations (expected until Week 1)."
+            exit 0
+          fi
+          uv run alembic upgrade head
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      # -----------------------------------------------------------------------
+      # Step 2 — Deploy API to Railway
+      # -----------------------------------------------------------------------
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy API to Railway
+        # --detach returns immediately after triggering the deploy.
+        # The health-check step below waits for the new version to be live.
+        working-directory: apps/api
+        run: railway up --service api --detach
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # Step 3 — Wait for API health check
+      # -----------------------------------------------------------------------
+      # Railway deploys typically take 90–180s (build + container start).
+      # Polling at 10s intervals up to 180s (18 attempts).
+      # If deploys regularly exceed 180s in practice, raise MAX_ATTEMPTS to 30
+      # (300s) rather than declaring the deploy failed.
+      - name: Wait for API health check
+        run: |
+          MAX_ATTEMPTS=18
+          INTERVAL=10
+          API_URL="${{ secrets.API_URL }}"
+
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${API_URL}/health" || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "API healthy after $((i * INTERVAL))s."
+              exit 0
+            fi
+            echo "Attempt $i/$MAX_ATTEMPTS — /health returned HTTP $STATUS. Retrying in ${INTERVAL}s …"
+            sleep "$INTERVAL"
+          done
+
+          echo "API did not become healthy within $((MAX_ATTEMPTS * INTERVAL))s. Halting deploy."
+          exit 1
+
+      # -----------------------------------------------------------------------
+      # Step 4 — Build and deploy web to Vercel
+      # -----------------------------------------------------------------------
+      # Uses the three-step Vercel CLI production deploy pattern:
+      #   vercel pull  → downloads env vars and project config
+      #   vercel build → builds the Next.js app locally (reproducible)
+      #   vercel deploy --prebuilt → uploads the pre-built output
+      - name: Install Vercel CLI
+        run: npm install -g vercel
+
+      - name: Pull Vercel environment and config
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Build web app for production
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Deploy web to Vercel production
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      # -----------------------------------------------------------------------
+      # Step 5 — Production smoke checks
+      # -----------------------------------------------------------------------
+      # A hard fail here means something is up in production. Investigate
+      # immediately — the Railway and Vercel dashboards are the first stop.
+      - name: Smoke check — API
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.API_URL }}/health")
+          if [ "$STATUS" != "200" ]; then
+            echo "Production API health check failed: HTTP $STATUS"
+            exit 1
+          fi
+          echo "API smoke check passed (HTTP $STATUS)."
+
+      - name: Smoke check — web
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.VERCEL_PRODUCTION_URL }}")
+          if [ "$STATUS" != "200" ]; then
+            echo "Production web smoke check failed: HTTP $STATUS"
+            exit 1
+          fi
+          echo "Web smoke check passed (HTTP $STATUS)."
