@@ -6,6 +6,7 @@ Personal job-search aggregation and triage system. Pulls postings from multiple 
 
 Monorepo with two deployable apps and shared types.
 
+
 ```
 job-assist/
 ├── apps/
