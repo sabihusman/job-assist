@@ -152,6 +152,74 @@ Check that browsers were installed (`playwright install --with-deps chromium`). 
 
 Verify Google Cloud Console → Credentials → OAuth client → Authorized redirect URIs includes `http://localhost:8000/oauth/gmail/callback`.
 
+## Public repo data discipline
+
+This repo is public. The following rules prevent personal job-search data from
+leaking into the commit history.
+
+### What must never be committed
+
+| Data | Why |
+|---|---|
+| Real company names tied to rejection state | Personally identifying; reputationally sensitive |
+| Gmail credential JSON or OAuth token files | Full account access |
+| Migration files that embed rejection patterns (e.g. seeded `outcome_event` rows) | Contains application history |
+| `apps/api/seeds/seeds.json` | Contains real target companies and rejection flags |
+
+`.gitignore` covers `apps/api/seeds/seeds.json`, `*.gmail-token`, and
+`credentials.json`. If you accidentally stage one of these, run
+`git rm --cached <file>` before committing.
+
+### Seed data
+
+Real seed data (target companies, triage rules, rejection patterns) lives in
+`apps/api/seeds/seeds.json` and is **gitignored**.
+
+A committed `apps/api/seeds/seeds.example.json` contains synthetic placeholder
+data so contributors can understand the schema without seeing real data:
+
+```json
+{
+  "target_companies": [
+    { "name": "Acme Wealthtech", "ats": "greenhouse", "tier": 1 },
+    { "name": "Example Fintech", "ats": "lever",      "tier": 2 }
+  ],
+  "hard_rule_overrides": [
+    { "company": "Example Corp", "rule": "non-pm-only", "active": true }
+  ]
+}
+```
+
+To load your real seeds locally:
+
+```bash
+cd apps/api
+cp seeds/seeds.example.json seeds/seeds.json
+# Edit seeds/seeds.json with real data — this file is gitignored
+uv run python -m job_assist.cli seed
+```
+
+### Application state and outcome data
+
+`application_state` and `outcome_event` rows live in Supabase only. They are
+never exported to fixtures, factory files, or any file tracked by git. If a
+test needs application-state data, generate it synthetically in the test itself:
+
+```python
+# Good — synthetic, never touches real rejection history
+app = ApplicationStateFactory(company="Fake Corp", state="rejected")
+
+# Bad — loading real outcome_event rows from a fixture file
+```
+
+### Test fixtures and E2E data
+
+Gmail classifier tests use synthetic email bodies, not real rejection emails.
+No fixture file in `apps/api/tests/` may contain a real company name paired
+with a rejection or non-response signal.
+
+---
+
 ### Adapter returns 0 results
 
 Hit the endpoint manually with `curl` first. Most likely causes:
