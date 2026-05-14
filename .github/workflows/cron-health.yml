@@ -1,0 +1,164 @@
+name: Cron Health Check
+
+# Dead-man's switch for the scheduled jobs.
+#
+# Runs daily at 08:00 UTC — one hour after the digest workflow fires at
+# 07:00 UTC — to verify that yesterday's cron jobs completed successfully.
+#
+# If any job reports a non-"ok" status, or if the health endpoint itself
+# is unreachable, this workflow opens a GitHub issue titled
+# "Cron failure: <date>" and labels it "cron-failure".
+#
+# Idempotent: will not open a duplicate issue if one is already open for
+# the same date. Safe to re-run manually.
+#
+# Low-stakes by design: this workflow runs in the background and opens
+# issues. It does not block deployments or PRs.
+#
+# Required secrets:
+#   API_URL — Railway production URL (same secret used by deploy.yml)
+#
+# One-time setup:
+#   Create a "cron-failure" label in the repo (Settings → Labels → New label)
+#   before this workflow first runs, so issues are correctly tagged.
+
+on:
+  schedule:
+    - cron: '0 8 * * *'  # 08:00 UTC daily
+  workflow_dispatch:      # allow manual trigger for debugging
+
+permissions:
+  contents: read
+
+jobs:
+  health-check:
+    name: Check Yesterday's Cron Status
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Query cron status endpoint
+        id: cron-status
+        run: |
+          YESTERDAY=$(date -u -d "yesterday" +%Y-%m-%d 2>/dev/null || date -u -v-1d +%Y-%m-%d)
+          echo "date=$YESTERDAY" >> "$GITHUB_OUTPUT"
+
+          API_URL="${{ secrets.API_URL }}"
+
+          # This endpoint is built in Week 1-2. Until then, HTTP 404 is expected
+          # and treated as "endpoint not yet built" — not a failure.
+          RESPONSE=$(curl -s -w "\n%{http_code}" "${API_URL}/admin/cron-status?date=${YESTERDAY}" || echo -e "\n000")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+
+          echo "HTTP status: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" = "404" ]; then
+            echo "Endpoint not yet built (HTTP 404) — expected until Week 1-2 ships. Nothing to check."
+            echo "status=endpoint_missing" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$HTTP_CODE" = "000" ]; then
+            echo "Could not reach API — connection failed."
+            echo "status=unreachable" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Unexpected response: HTTP $HTTP_CODE"
+            echo "status=error"         >> "$GITHUB_OUTPUT"
+            echo "error_body=$BODY"     >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "status=ok" >> "$GITHUB_OUTPUT"
+
+          # Expected response shape:
+          #   { "ingest": "ok"|"failed"|"missing",
+          #     "triage": "ok"|"failed"|"missing",
+          #     "digest": "ok"|"failed"|"missing",
+          #     "gmail_poll": "ok"|"failed"|"missing" }
+          FAILED=$(echo "$BODY" | python3 -c "
+          import json, sys
+          try:
+              data = json.load(sys.stdin)
+              failed = [k for k, v in data.items() if v != 'ok']
+              print(','.join(failed))
+          except Exception:
+              print('')
+          " 2>/dev/null || echo "")
+
+          echo "failed_jobs=$FAILED" >> "$GITHUB_OUTPUT"
+
+          if [ -n "$FAILED" ]; then
+            echo "Failed cron jobs: $FAILED"
+          else
+            echo "All cron jobs reported ok."
+          fi
+
+      - name: Open issue on failure
+        # Fires when any job failed, the API was unreachable, or an unexpected
+        # error occurred. Skips when the endpoint is missing (pre-Week-1) or
+        # all jobs are ok.
+        if: |
+          steps.cron-status.outputs.status == 'error' ||
+          steps.cron-status.outputs.status == 'unreachable' ||
+          steps.cron-status.outputs.failed_jobs != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const date       = '${{ steps.cron-status.outputs.date }}';
+            const status     = '${{ steps.cron-status.outputs.status }}';
+            const failedJobs = '${{ steps.cron-status.outputs.failed_jobs }}';
+            const errorBody  = '${{ steps.cron-status.outputs.error_body }}';
+            const title      = `Cron failure: ${date}`;
+
+            // Idempotency: skip if an open issue already exists for this date.
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              state: 'open',
+              labels: 'cron-failure',
+              per_page: 30,
+            });
+
+            if (issues.some(i => i.title === title)) {
+              core.info(`Issue already open for ${date} — skipping duplicate.`);
+              return;
+            }
+
+            let body;
+            if (failedJobs) {
+              const jobs = failedJobs.split(',').map(j => `- \`${j}\``).join('\n');
+              body = [
+                `The following scheduled jobs did not complete successfully on **${date}**:`,
+                '',
+                jobs,
+                '',
+                'Check the Railway logs for the API service for details.',
+                '',
+                `_Opened automatically by the [cron-health workflow](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/workflows/cron-health.yml)._`,
+              ].join('\n');
+            } else {
+              body = [
+                `The cron health check could not verify job status for **${date}**.`,
+                '',
+                `Status: \`${status}\``,
+                errorBody ? `\nAPI response: \`${errorBody}\`` : '',
+                '',
+                'Check that the API is reachable and the Railway deployment is healthy.',
+                '',
+                `_Opened automatically by the [cron-health workflow](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/workflows/cron-health.yml)._`,
+              ].join('\n');
+            }
+
+            const { data: issue } = await github.rest.issues.create({
+              owner:  context.repo.owner,
+              repo:   context.repo.repo,
+              title,
+              body,
+              labels: ['cron-failure'],
+            });
+
+            core.info(`Opened issue #${issue.number}: ${title}`);
