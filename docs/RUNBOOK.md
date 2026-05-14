@@ -55,6 +55,31 @@ cd apps/api
 uv run pytest
 ```
 
+## Regenerating shared TypeScript types
+
+`packages/shared-types/src/api.d.ts` is generated from the FastAPI OpenAPI schema. It is **not** auto-generated in CI — regeneration is a manual step before any PR that changes the API schema.
+
+When to regenerate:
+- You add, remove, or change any FastAPI route, request body, or response model.
+- Before opening a PR so reviewers see the type diff alongside the API diff.
+
+Steps:
+
+```bash
+# 1. Start the API locally (must be running to serve /openapi.json)
+cd apps/api
+uv run uvicorn job_assist.main:app --reload
+
+# 2. In a separate terminal, regenerate types
+pnpm --filter @job-assist/shared-types generate
+
+# 3. Commit the result as part of your feature branch
+git add packages/shared-types/src/api.d.ts
+git commit -m "chore: regenerate shared types"
+```
+
+The generated file is committed to the repo. CI does not regenerate it — if the file is stale, `pnpm --filter web typecheck` will fail on the types mismatch, which is the signal to regenerate.
+
 ## Operations
 
 ### Branch workflow
