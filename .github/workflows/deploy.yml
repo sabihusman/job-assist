@@ -62,8 +62,15 @@ jobs:
       #   postgresql://postgres:[password]@[host]:5432/postgres
       # (Not postgresql+asyncpg:// — that is for the app runtime only.)
       - name: Apply database migrations
+        # Skips gracefully if alembic.ini doesn't exist yet (expected until
+        # Week 1 when the first migration is added).
         working-directory: apps/api
-        run: uv run alembic upgrade head
+        run: |
+          if [ ! -f "alembic.ini" ]; then
+            echo "No alembic.ini found — skipping migrations (expected until Week 1)."
+            exit 0
+          fi
+          uv run alembic upgrade head
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
