@@ -9,7 +9,7 @@ Six-week build, intentionally phased. Each phase has a clear "useful" milestone.
 Build:
 - `target_company`, `source_map`, `job_posting`, `posting_source`, `ingest_run`, `application_state`, `outcome_event` tables
 - Greenhouse, Lever, Ashby adapters
-- Hard-rule filter (geo, PFG-non-PM, banned-verb scan in JD, ≥3-rejection company auto-flag)
+- Hard-rule filter (geo, [Company A]-non-PM, banned-verb scan in JD, ≥3-rejection company auto-flag)
 - Deterministic scoring (no LLM yet)
 - Gmail OAuth + backfill script + LLM classifier (Gemini Flash, free tier)
 - Continuous Gmail polling (15-min cadence)
