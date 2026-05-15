@@ -82,10 +82,11 @@ jobs:
         run: npm install -g @railway/cli
 
       - name: Deploy API to Railway
-        # --detach returns immediately after triggering the deploy.
-        # The health-check step below waits for the new version to be live.
-        working-directory: apps/api
-        run: railway up --service api --detach
+        # redeploy triggers Railway to rebuild from the GitHub-connected source,
+        # respecting the Root Directory: apps/api setting in the Railway service.
+        # This avoids the snapshot-upload path (railway up) which requires the
+        # full source to be present in the runner's working directory.
+        run: railway redeploy --service api --yes
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
 
@@ -97,10 +98,11 @@ jobs:
       # If deploys regularly exceed 180s in practice, raise MAX_ATTEMPTS to 30
       # (300s) rather than declaring the deploy failed.
       - name: Wait for API health check
+        env:
+          API_URL: ${{ secrets.API_URL }}
         run: |
           MAX_ATTEMPTS=18
           INTERVAL=10
-          API_URL="${{ secrets.API_URL }}"
 
           for i in $(seq 1 $MAX_ATTEMPTS); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${API_URL}/health" || echo "000")
@@ -149,8 +151,10 @@ jobs:
       # A hard fail here means something is up in production. Investigate
       # immediately — the Railway and Vercel dashboards are the first stop.
       - name: Smoke check — API
+        env:
+          API_URL: ${{ secrets.API_URL }}
         run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.API_URL }}/health")
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${API_URL}/health")
           if [ "$STATUS" != "200" ]; then
             echo "Production API health check failed: HTTP $STATUS"
             exit 1
@@ -158,8 +162,10 @@ jobs:
           echo "API smoke check passed (HTTP $STATUS)."
 
       - name: Smoke check — web
+        env:
+          VERCEL_PRODUCTION_URL: ${{ secrets.VERCEL_PRODUCTION_URL }}
         run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.VERCEL_PRODUCTION_URL }}")
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${VERCEL_PRODUCTION_URL}")
           if [ "$STATUS" != "200" ]; then
             echo "Production web smoke check failed: HTTP $STATUS"
             exit 1
