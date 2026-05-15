@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Annotated, Any
 
 import structlog
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from job_assist.config import settings
+from job_assist.db.session import get_db
 
 logger = structlog.get_logger(__name__)
 
@@ -38,6 +42,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+DbSession = Annotated[AsyncSession, Depends(get_db)]
+
+# ── Health ─────────────────────────────────────────────────────────────────────
+
 
 @app.get("/health")
 async def health() -> dict[str, str]:
@@ -49,6 +57,65 @@ async def health() -> dict[str, str]:
 async def root() -> dict[str, str]:
     """Root endpoint."""
     return {"name": "job-assist-api", "version": "0.0.1"}
+
+
+# ── Admin — ingestion ─────────────────────────────────────────────────────────
+
+
+@app.post("/admin/ingest/{ats}/{handle}")
+async def trigger_ingest(
+    ats: str,
+    handle: str,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Trigger an ingestion run for one ATS / handle combination.
+
+    Returns the IngestRun ID and initial status.  The run executes
+    synchronously within the request; a background-task variant can be
+    added later when latency matters.
+
+    TODO: add authentication before exposing this endpoint publicly.
+          Currently dev-mode only — single-user deployment.
+    """
+    from job_assist.adapters.greenhouse import GreenhouseAdapter
+    from job_assist.services.ingestion import IngestionService
+
+    _SUPPORTED = {"greenhouse"}
+    if ats not in _SUPPORTED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported ATS {ats!r}. Supported: {sorted(_SUPPORTED)}",
+        )
+
+    if ats == "greenhouse":
+        adapter: GreenhouseAdapter = GreenhouseAdapter()
+    else:
+        # Unreachable given the guard above, but keeps mypy happy.
+        raise HTTPException(status_code=400, detail=f"ATS {ats!r} not yet implemented")
+
+    service = IngestionService()
+    async with adapter:
+        run = await service.ingest_source(adapter, handle, db)
+
+    return {
+        "ingest_run_id": str(run.id),
+        "status": run.status,
+        "postings_fetched": run.postings_fetched,
+        "postings_new": run.postings_new,
+        "postings_updated": run.postings_updated,
+    }
+
+
+# ── Admin — cron status ────────────────────────────────────────────────────────
+
+
+@app.get("/admin/cron-status")
+async def cron_status() -> dict[str, str]:
+    """Cron health-check endpoint.  Returns ok when the API is reachable."""
+    return {"status": "ok"}
+
+
+# ── Logging setup ─────────────────────────────────────────────────────────────
 
 
 def _configure_logging() -> None:
@@ -67,3 +134,6 @@ def _configure_logging() -> None:
 
 
 _configure_logging()
+
+# Keep uuid import used by type system (run.id is UUID)
+_ = uuid

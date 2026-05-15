@@ -1,0 +1,37 @@
+{
+  "jobs": [
+    {
+      "id": 5012345,
+      "title": "Senior Product Manager, Payments",
+      "location": {"name": "San Francisco, CA"},
+      "absolute_url": "https://boards.greenhouse.io/stripe/jobs/5012345",
+      "content": "<div><h3>About the role</h3><p>Stripe is looking for a <strong>Senior Product Manager</strong> to join our Payments team.</p><ul><li>Lead the product roadmap for our core payments infrastructure</li><li>Partner closely with engineers, designers, and data scientists</li><li>Define success metrics and drive execution</li></ul><h3>Requirements</h3><p>5+ years of product management experience, ideally in fintech or payments.</p></div>",
+      "updated_at": "2026-05-01T15:00:00-07:00",
+      "first_published": "2026-04-01T10:00:00-07:00",
+      "departments": [{"id": 101, "name": "Product"}],
+      "offices": [{"id": 201, "name": "San Francisco"}]
+    },
+    {
+      "id": 5012346,
+      "title": "PM, Risk",
+      "location": {"name": "Remote"},
+      "absolute_url": "https://boards.greenhouse.io/stripe/jobs/5012346",
+      "content": "<p>Join Stripe's Risk team as a Product Manager. You will own the product strategy for fraud detection and risk mitigation tools.</p><ul><li>Define the vision for risk products</li><li>Work with ML engineers on fraud signals</li></ul>",
+      "updated_at": "2026-05-10T09:00:00-07:00",
+      "first_published": "2026-04-15T08:00:00-07:00",
+      "departments": [{"id": 102, "name": "Risk"}],
+      "offices": [{"id": 202, "name": "Remote"}]
+    },
+    {
+      "id": 5012347,
+      "title": "APM, Infrastructure",
+      "location": {"name": "New York, NY"},
+      "absolute_url": "https://boards.greenhouse.io/stripe/jobs/5012347",
+      "content": "<p>Associate Product Manager role for new graduates. Work on Stripe's core infrastructure products.</p><ul><li>Rotate across product areas</li><li>Work directly with engineering teams</li></ul>",
+      "updated_at": "2026-05-12T11:00:00-07:00",
+      "first_published": "2026-05-01T10:00:00-07:00",
+      "departments": [{"id": 101, "name": "Product"}],
+      "offices": [{"id": 203, "name": "New York"}]
+    }
+  ]
+}
