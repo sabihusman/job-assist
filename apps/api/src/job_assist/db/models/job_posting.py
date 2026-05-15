@@ -1,0 +1,97 @@
+"""JobPosting ORM model."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy import (
+    Enum as SAEnum,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.sql import func, text
+
+from job_assist.db.base import Base
+from job_assist.db.enums import RemoteType, RoleFamily, SalaryPeriod, SeniorityLevel
+
+
+class JobPosting(Base):
+    """A single job posting, deduplicated and normalised across ATS sources."""
+
+    __tablename__ = "job_posting"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    canonical_company_name: Mapped[str] = mapped_column(String, nullable=False)
+    target_company_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("target_company.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    normalized_title: Mapped[str] = mapped_column(String, nullable=False)
+    raw_title: Mapped[str] = mapped_column(String, nullable=False)
+    location_raw: Mapped[str | None] = mapped_column(String, nullable=True)
+    locations_normalized: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    remote_type: Mapped[RemoteType] = mapped_column(
+        SAEnum(RemoteType, name="remote_type", create_type=False),
+        nullable=False,
+        default=RemoteType.unknown,
+        server_default=RemoteType.unknown.value,
+    )
+    salary_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    salary_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    salary_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    salary_period: Mapped[SalaryPeriod] = mapped_column(
+        SAEnum(SalaryPeriod, name="salary_period", create_type=False),
+        nullable=False,
+        default=SalaryPeriod.unknown,
+        server_default=SalaryPeriod.unknown.value,
+    )
+    seniority_level: Mapped[SeniorityLevel] = mapped_column(
+        SAEnum(SeniorityLevel, name="seniority_level", create_type=False),
+        nullable=False,
+        default=SeniorityLevel.unknown,
+        server_default=SeniorityLevel.unknown.value,
+    )
+    role_family: Mapped[RoleFamily] = mapped_column(
+        SAEnum(RoleFamily, name="role_family", create_type=False),
+        nullable=False,
+        default=RoleFamily.other,
+        server_default=RoleFamily.other.value,
+    )
+    jd_text: Mapped[str] = mapped_column(Text, nullable=False)
+    jd_text_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    should_embed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+
+    __table_args__ = (
+        UniqueConstraint("content_hash", name="idx_job_posting_content_hash"),
+        Index("idx_job_posting_jd_text_hash", "jd_text_hash"),
+        Index("idx_job_posting_first_seen_at", "first_seen_at"),
+        Index("idx_job_posting_target_company_id", "target_company_id"),
+        Index(
+            "idx_job_posting_should_embed",
+            "first_seen_at",
+            postgresql_where=text("should_embed = true"),
+        ),
+    )
