@@ -35,7 +35,10 @@ def upgrade() -> None:
     # ------------------------------------------------------------------
     # Enum types
     # ------------------------------------------------------------------
-    ats_type = sa.Enum(
+    # create_type=False on every object so that op.create_table()'s
+    # before_create event does NOT re-emit CREATE TYPE for these names.
+    # We drive creation ourselves here, once, with checkfirst=True.
+    sa.Enum(
         "greenhouse",
         "lever",
         "ashby",
@@ -43,13 +46,13 @@ def upgrade() -> None:
         "other",
         "unknown",
         name="ats_type",
-    )
-    ats_type.create(op.get_bind(), checkfirst=True)
+        create_type=False,
+    ).create(op.get_bind(), checkfirst=True)
 
-    sa.Enum("onsite", "hybrid", "remote", "unknown", name="remote_type").create(
+    sa.Enum("onsite", "hybrid", "remote", "unknown", name="remote_type", create_type=False).create(
         op.get_bind(), checkfirst=True
     )
-    sa.Enum("hourly", "annual", "unknown", name="salary_period").create(
+    sa.Enum("hourly", "annual", "unknown", name="salary_period", create_type=False).create(
         op.get_bind(), checkfirst=True
     )
     sa.Enum(
@@ -61,6 +64,7 @@ def upgrade() -> None:
         "principal_pm",
         "unknown",
         name="seniority_level",
+        create_type=False,
     ).create(op.get_bind(), checkfirst=True)
     sa.Enum(
         "product_management",
@@ -69,11 +73,14 @@ def upgrade() -> None:
         "program_management",
         "other",
         name="role_family",
+        create_type=False,
     ).create(op.get_bind(), checkfirst=True)
-    sa.Enum("ok", "partial", "failed", name="fetch_status").create(op.get_bind(), checkfirst=True)
-    sa.Enum("running", "success", "partial", "failed", name="ingest_run_status").create(
+    sa.Enum("ok", "partial", "failed", name="fetch_status", create_type=False).create(
         op.get_bind(), checkfirst=True
     )
+    sa.Enum(
+        "running", "success", "partial", "failed", name="ingest_run_status", create_type=False
+    ).create(op.get_bind(), checkfirst=True)
     sa.Enum(
         "not_reviewed",
         "interested",
@@ -81,6 +88,7 @@ def upgrade() -> None:
         "applied",
         "snoozed",
         name="application_status",
+        create_type=False,
     ).create(op.get_bind(), checkfirst=True)
     sa.Enum(
         "application_confirmation",
@@ -97,6 +105,7 @@ def upgrade() -> None:
         "unrelated",
         "unclassified",
         name="outcome_type",
+        create_type=False,
     ).create(op.get_bind(), checkfirst=True)
     sa.Enum(
         "multiple_rejections",
@@ -105,6 +114,7 @@ def upgrade() -> None:
         "recruiter_unprofessional",
         "other",
         name="closed_channel_reason",
+        create_type=False,
     ).create(op.get_bind(), checkfirst=True)
 
     # ------------------------------------------------------------------
