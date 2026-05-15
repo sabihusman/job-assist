@@ -1,7 +1,10 @@
 """core_schema_targets_jobs_outcomes
 
 Creates the 8 core tables for ingestion, applications, and outcomes.
-Enum types are created first; tables are created in FK-dependency order.
+Enum types are created first via raw SQL; tables are created in
+FK-dependency order.  Using postgresql.ENUM(name=..., create_type=False)
+for every column type reference ensures op.create_table()'s before_create
+event never tries to re-emit CREATE TYPE.
 
 Partial indexes and descending sort indexes are created explicitly after
 table creation — Alembic autogenerate does not reliably emit these.
@@ -21,6 +24,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects.postgresql import ENUM as PGEnum
 
 # revision identifiers, used by Alembic.
 revision: str = "7b89ad40468f"
@@ -32,90 +36,63 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     """Create enum types, then tables, then indexes."""
 
-    # ------------------------------------------------------------------
-    # Enum types
-    # ------------------------------------------------------------------
-    # create_type=False on every object so that op.create_table()'s
-    # before_create event does NOT re-emit CREATE TYPE for these names.
-    # We drive creation ourselves here, once, with checkfirst=True.
-    sa.Enum(
-        "greenhouse",
-        "lever",
-        "ashby",
-        "workday",
-        "other",
-        "unknown",
-        name="ats_type",
-        create_type=False,
-    ).create(op.get_bind(), checkfirst=True)
+    conn = op.get_bind()
 
-    sa.Enum("onsite", "hybrid", "remote", "unknown", name="remote_type", create_type=False).create(
-        op.get_bind(), checkfirst=True
+    # ------------------------------------------------------------------
+    # Enum types — raw SQL so SQLAlchemy object machinery never touches them.
+    # Column types below use postgresql.ENUM(name=..., create_type=False) so
+    # op.create_table()'s before_create event is a guaranteed no-op.
+    # ------------------------------------------------------------------
+    conn.execute(
+        sa.text(
+            "CREATE TYPE ats_type AS ENUM "
+            "('greenhouse', 'lever', 'ashby', 'workday', 'other', 'unknown')"
+        )
     )
-    sa.Enum("hourly", "annual", "unknown", name="salary_period", create_type=False).create(
-        op.get_bind(), checkfirst=True
+    conn.execute(
+        sa.text("CREATE TYPE remote_type AS ENUM ('onsite', 'hybrid', 'remote', 'unknown')")
     )
-    sa.Enum(
-        "intern",
-        "apm",
-        "pm",
-        "senior_pm",
-        "lead_pm",
-        "principal_pm",
-        "unknown",
-        name="seniority_level",
-        create_type=False,
-    ).create(op.get_bind(), checkfirst=True)
-    sa.Enum(
-        "product_management",
-        "product_owner",
-        "product_marketing",
-        "program_management",
-        "other",
-        name="role_family",
-        create_type=False,
-    ).create(op.get_bind(), checkfirst=True)
-    sa.Enum("ok", "partial", "failed", name="fetch_status", create_type=False).create(
-        op.get_bind(), checkfirst=True
+    conn.execute(sa.text("CREATE TYPE salary_period AS ENUM ('hourly', 'annual', 'unknown')"))
+    conn.execute(
+        sa.text(
+            "CREATE TYPE seniority_level AS ENUM "
+            "('intern', 'apm', 'pm', 'senior_pm', 'lead_pm', 'principal_pm', 'unknown')"
+        )
     )
-    sa.Enum(
-        "running", "success", "partial", "failed", name="ingest_run_status", create_type=False
-    ).create(op.get_bind(), checkfirst=True)
-    sa.Enum(
-        "not_reviewed",
-        "interested",
-        "not_interested",
-        "applied",
-        "snoozed",
-        name="application_status",
-        create_type=False,
-    ).create(op.get_bind(), checkfirst=True)
-    sa.Enum(
-        "application_confirmation",
-        "recruiter_screen_invite",
-        "phone_interview_invite",
-        "video_interview_invite",
-        "onsite_interview_invite",
-        "panel_interview_invite",
-        "offer",
-        "rejection_pre_screen",
-        "rejection_post_screen",
-        "rejection_post_interview",
-        "withdrawn",
-        "unrelated",
-        "unclassified",
-        name="outcome_type",
-        create_type=False,
-    ).create(op.get_bind(), checkfirst=True)
-    sa.Enum(
-        "multiple_rejections",
-        "culture_concern",
-        "compensation_low",
-        "recruiter_unprofessional",
-        "other",
-        name="closed_channel_reason",
-        create_type=False,
-    ).create(op.get_bind(), checkfirst=True)
+    conn.execute(
+        sa.text(
+            "CREATE TYPE role_family AS ENUM "
+            "('product_management', 'product_owner', 'product_marketing', "
+            "'program_management', 'other')"
+        )
+    )
+    conn.execute(sa.text("CREATE TYPE fetch_status AS ENUM ('ok', 'partial', 'failed')"))
+    conn.execute(
+        sa.text("CREATE TYPE ingest_run_status AS ENUM ('running', 'success', 'partial', 'failed')")
+    )
+    conn.execute(
+        sa.text(
+            "CREATE TYPE application_status AS ENUM "
+            "('not_reviewed', 'interested', 'not_interested', 'applied', 'snoozed')"
+        )
+    )
+    conn.execute(
+        sa.text(
+            "CREATE TYPE outcome_type AS ENUM "
+            "('application_confirmation', 'recruiter_screen_invite', "
+            "'phone_interview_invite', 'video_interview_invite', "
+            "'onsite_interview_invite', 'panel_interview_invite', "
+            "'offer', 'rejection_pre_screen', 'rejection_post_screen', "
+            "'rejection_post_interview', 'withdrawn', 'unrelated', 'unclassified')"
+        )
+    )
+    conn.execute(
+        sa.text(
+            "CREATE TYPE closed_channel_reason AS ENUM "
+            "('multiple_rejections', 'culture_concern', 'compensation_low', "
+            "'recruiter_unprofessional', 'other')"
+        )
+    )
 
     # ------------------------------------------------------------------
     # target_company
@@ -126,16 +103,7 @@ def upgrade() -> None:
         sa.Column("name", sa.String(), nullable=False),
         sa.Column(
             "ats",
-            sa.Enum(
-                "greenhouse",
-                "lever",
-                "ashby",
-                "workday",
-                "other",
-                "unknown",
-                name="ats_type",
-                create_type=False,
-            ),
+            PGEnum(name="ats_type", create_type=False),
             nullable=False,
             server_default="unknown",
         ),
@@ -180,7 +148,7 @@ def upgrade() -> None:
         sa.Column("locations_normalized", postgresql.JSONB(), nullable=True),
         sa.Column(
             "remote_type",
-            sa.Enum("onsite", "hybrid", "remote", "unknown", name="remote_type", create_type=False),
+            PGEnum(name="remote_type", create_type=False),
             nullable=False,
             server_default="unknown",
         ),
@@ -189,37 +157,19 @@ def upgrade() -> None:
         sa.Column("salary_currency", sa.String(3), nullable=True),
         sa.Column(
             "salary_period",
-            sa.Enum("hourly", "annual", "unknown", name="salary_period", create_type=False),
+            PGEnum(name="salary_period", create_type=False),
             nullable=False,
             server_default="unknown",
         ),
         sa.Column(
             "seniority_level",
-            sa.Enum(
-                "intern",
-                "apm",
-                "pm",
-                "senior_pm",
-                "lead_pm",
-                "principal_pm",
-                "unknown",
-                name="seniority_level",
-                create_type=False,
-            ),
+            PGEnum(name="seniority_level", create_type=False),
             nullable=False,
             server_default="unknown",
         ),
         sa.Column(
             "role_family",
-            sa.Enum(
-                "product_management",
-                "product_owner",
-                "product_marketing",
-                "program_management",
-                "other",
-                name="role_family",
-                create_type=False,
-            ),
+            PGEnum(name="role_family", create_type=False),
             nullable=False,
             server_default="other",
         ),
@@ -277,16 +227,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "ats",
-            sa.Enum(
-                "greenhouse",
-                "lever",
-                "ashby",
-                "workday",
-                "other",
-                "unknown",
-                name="ats_type",
-                create_type=False,
-            ),
+            PGEnum(name="ats_type", create_type=False),
             nullable=False,
         ),
         sa.Column("source_job_id", sa.String(), nullable=False),
@@ -296,7 +237,7 @@ def upgrade() -> None:
         sa.Column("parser_version", sa.String(), nullable=False),
         sa.Column(
             "fetch_status",
-            sa.Enum("ok", "partial", "failed", name="fetch_status", create_type=False),
+            PGEnum(name="fetch_status", create_type=False),
             nullable=False,
             server_default="ok",
         ),
@@ -318,16 +259,7 @@ def upgrade() -> None:
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column(
             "source",
-            sa.Enum(
-                "greenhouse",
-                "lever",
-                "ashby",
-                "workday",
-                "other",
-                "unknown",
-                name="ats_type",
-                create_type=False,
-            ),
+            PGEnum(name="ats_type", create_type=False),
             nullable=False,
         ),
         sa.Column(
@@ -339,14 +271,7 @@ def upgrade() -> None:
         sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
             "status",
-            sa.Enum(
-                "running",
-                "success",
-                "partial",
-                "failed",
-                name="ingest_run_status",
-                create_type=False,
-            ),
+            PGEnum(name="ingest_run_status", create_type=False),
             nullable=False,
             server_default="running",
         ),
@@ -384,15 +309,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "status",
-            sa.Enum(
-                "not_reviewed",
-                "interested",
-                "not_interested",
-                "applied",
-                "snoozed",
-                name="application_status",
-                create_type=False,
-            ),
+            PGEnum(name="application_status", create_type=False),
             nullable=False,
             server_default="not_reviewed",
         ),
@@ -446,23 +363,7 @@ def upgrade() -> None:
         sa.Column("received_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column(
             "outcome_type",
-            sa.Enum(
-                "application_confirmation",
-                "recruiter_screen_invite",
-                "phone_interview_invite",
-                "video_interview_invite",
-                "onsite_interview_invite",
-                "panel_interview_invite",
-                "offer",
-                "rejection_pre_screen",
-                "rejection_post_screen",
-                "rejection_post_interview",
-                "withdrawn",
-                "unrelated",
-                "unclassified",
-                name="outcome_type",
-                create_type=False,
-            ),
+            PGEnum(name="outcome_type", create_type=False),
             nullable=False,
             server_default="unclassified",
         ),
@@ -535,15 +436,7 @@ def upgrade() -> None:
         sa.Column("company_name", sa.String(), nullable=False),
         sa.Column(
             "reason",
-            sa.Enum(
-                "multiple_rejections",
-                "culture_concern",
-                "compensation_low",
-                "recruiter_unprofessional",
-                "other",
-                name="closed_channel_reason",
-                create_type=False,
-            ),
+            PGEnum(name="closed_channel_reason", create_type=False),
             nullable=False,
             server_default="other",
         ),
@@ -582,7 +475,8 @@ def downgrade() -> None:
     op.drop_table("job_posting")
     op.drop_table("target_company")
 
-    # Drop enum types
+    # Drop enum types via raw SQL — mirrors the raw SQL creation above.
+    conn = op.get_bind()
     for enum_name in (
         "closed_channel_reason",
         "outcome_type",
@@ -595,4 +489,4 @@ def downgrade() -> None:
         "remote_type",
         "ats_type",
     ):
-        sa.Enum(name=enum_name).drop(op.get_bind(), checkfirst=True)
+        conn.execute(sa.text(f"DROP TYPE IF EXISTS {enum_name}"))
