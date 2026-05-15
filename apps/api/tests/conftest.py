@@ -10,15 +10,28 @@ Tests decorated with @_NEEDS_DB skip when the env var is absent.
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncGenerator
 
-import pytest
-import sqlalchemy as sa
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
+# ── CRITICAL: pin DATABASE_URL before any job_assist.* import ─────────────────
+# Both the FastAPI app (db/session.py) and Alembic env.py read
+# `settings.database_url`, which is created once at config-module import.
+# CI only sets TEST_DATABASE_URL, so we must mirror it into DATABASE_URL here,
+# at conftest module-load time, before any test or fixture triggers a
+# `from job_assist.config import settings` import.
 _TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", "")
+if _TEST_DATABASE_URL:
+    os.environ["DATABASE_URL"] = _TEST_DATABASE_URL
+
 _ALEMBIC_URL = _TEST_DATABASE_URL.replace("+asyncpg", "") if _TEST_DATABASE_URL else ""
 
+from collections.abc import AsyncGenerator  # noqa: E402
+
+import pytest  # noqa: E402
+import sqlalchemy as sa  # noqa: E402
+from sqlalchemy.ext.asyncio import (  # noqa: E402
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 # ── Migration setup (runs once per session) ────────────────────────────────────
 
