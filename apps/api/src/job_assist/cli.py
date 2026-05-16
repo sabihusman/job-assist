@@ -13,9 +13,14 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Callable
+from typing import Any
 
 import httpx
 import typer
+
+# (done, total) -> None — used by discover_target_companies to drive a progress bar.
+ProgressCallback = Callable[[int, int], None]
 
 app = typer.Typer(
     name="job-assist",
@@ -34,37 +39,71 @@ _PROBE_URLS: dict[str, str] = {
 
 # ── Handle generation ─────────────────────────────────────────────────────────
 
+# Trailing corporate suffixes worth stripping before generating handles.
+# Match at end-of-string so we don't accidentally drop mid-name "Group" tokens.
+_CORPORATE_SUFFIX_RE = re.compile(
+    r"\s+(?:inc|llc|ltd|corp|corporation|company|co|holdings?|group|plc|gmbh)\.?\s*$",
+    re.IGNORECASE,
+)
+
+# Names get split on these separators into independent sub-names. Each side
+# contributes its own handle variants — e.g. "John Hancock / Manulife US"
+# produces candidates for both halves.
+_NAME_SPLIT_RE = re.compile(r"\s*[/&]\s*")
+
+
+def _simple_handles(name: str) -> list[str]:
+    """Handle variants for a single, already-split sub-name."""
+    clean = re.sub(r"[^\w\s-]", "", name.lower())
+    words = clean.split()
+    out: list[str] = []
+    if not words:
+        return out
+    out.append("".join(words))  # all words joined
+    out.append("-".join(words))  # hyphenated
+    out.append(words[0])  # first word
+    if len(words) >= 2:
+        out.append("".join(words[:2]))  # first two words joined
+    return out
+
 
 def candidate_handles(name: str) -> list[str]:
     """Generate plausible ATS board handles from a company name.
 
     Examples
     --------
-    "Stripe"                          → ['stripe']
-    "Q2 Holdings"                     → ['q2holdings', 'q2-holdings', 'q2']
-    "Morgan Stanley Wealth Management"→ ['morganstanleywealthmanagement',
-                                         'morgan-stanley-wealth-management',
-                                         'morganstanley']
-    "Capital One"                     → ['capitalone', 'capital-one', 'capital']
+    "Stripe"                          -> ['stripe']
+    "Q2 Holdings"                     -> ['q2holdings', 'q2-holdings', 'q2']
+    "Morgan Stanley Wealth Management"-> ['morganstanleywealthmanagement',
+                                          'morgan-stanley-wealth-management',
+                                          'morganstanley']
+    "Capital One"                     -> ['capitalone', 'capital-one', 'capital']
+    "Acme Inc."                       -> includes 'acme' (suffix stripped)
+    "John Hancock / Manulife US"      -> includes 'johnhancock' and 'manulife'
+    "AT&T"                            -> includes 'att', 'at', 't'
     """
-    # Strip punctuation (keep hyphens), lowercase
-    clean = re.sub(r"[^\w\s-]", "", name.lower())
-    words = clean.split()
+    sub_names = [s.strip() for s in _NAME_SPLIT_RE.split(name) if s.strip()]
+    if not sub_names:
+        sub_names = [name]
 
     candidates: list[str] = []
 
-    # All words joined (e.g. "capitalone")
-    candidates.append("".join(words))
-    # All words hyphenated (e.g. "capital-one")
-    candidates.append("-".join(words))
-    # First word only (e.g. "stripe", "anthropic")
-    if words:
-        candidates.append(words[0])
-    # First two words joined (e.g. "morganstanley")
-    if len(words) >= 2:
-        candidates.append("".join(words[:2]))
+    # 1. Variants for the full original name (back-compat: callers that pass
+    #    "Capital One" still get its original candidate list first).
+    candidates.extend(_simple_handles(name))
 
-    # Deduplicate preserving order
+    # 2. Variants for each '/' or '&' split half.
+    if len(sub_names) > 1:
+        for sub in sub_names:
+            candidates.extend(_simple_handles(sub))
+
+    # 3. Variants with trailing corporate suffix stripped (e.g. "Acme Inc." -> "Acme").
+    for sub in sub_names if len(sub_names) > 1 else [name]:
+        stripped = _CORPORATE_SUFFIX_RE.sub("", sub).strip()
+        if stripped and stripped != sub:
+            candidates.extend(_simple_handles(stripped))
+
+    # Deduplicate, preserving the order above (most-specific first).
     seen: set[str] = set()
     deduped: list[str] = []
     for c in candidates:
@@ -211,46 +250,227 @@ def discover_ats(
     all_companies: bool = typer.Option(
         False, "--all", help="Probe all target_company rows with ats=unknown"
     ),
+    commit: bool = typer.Option(
+        False,
+        "--commit",
+        help="With --all, write detected ats + ats_handle back to target_company",
+    ),
 ) -> None:
     """Probe a company across Greenhouse / Lever / Ashby and report the ATS."""
     if not name and not all_companies:
         typer.echo("Provide --name <name> or --all", err=True)
         raise typer.Exit(1)
-    asyncio.run(_discover_async(name, all_companies))
+    if commit and not all_companies:
+        typer.echo("--commit is only meaningful with --all", err=True)
+        raise typer.Exit(1)
+    asyncio.run(_discover_async(name, all_companies, commit))
 
 
-async def _discover_async(name: str | None, all_companies: bool) -> None:
+# Cap concurrent HTTP fan-out during a full target_company sweep.
+_DISCOVER_CONCURRENCY = 10
+
+
+async def _probe_with_semaphore(
+    company_name: str,
+    client: httpx.AsyncClient,
+    sem: asyncio.Semaphore,
+) -> dict[str, object] | None:
+    async with sem:
+        return await _probe_company(company_name, client)
+
+
+async def _discover_async(
+    name: str | None,
+    all_companies: bool,
+    commit: bool,
+) -> None:
+    if all_companies:
+        await _discover_batch(commit)
+        return
+
+    # Single --name probe: one-liner, no DB writes.
+    assert name is not None
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        match = await _probe_company(name, client)
+    if match:
+        typer.echo(
+            f"✓  {name}: ats={match['ats']}  handle={match['handle']}  jobs={match['job_count']}"
+        )
+    else:
+        typer.echo(f"✗  {name}: unknown — suggest manual check")
+
+
+async def discover_target_companies(
+    session: Any,
+    *,
+    commit: bool,
+    on_progress: ProgressCallback | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Probe every ``target_company`` with ``ats='unknown'`` and return a summary.
+
+    Returns ``(matched, unmatched)``:
+      * ``matched`` — one dict per match with keys
+        ``id``, ``name``, ``ats``, ``handle``, ``job_count``.
+      * ``unmatched`` — list of company names that no probe could resolve.
+
+    If ``commit`` is True, also writes ``ats`` and ``ats_handle`` back onto the
+    matched rows inside this session and commits. The caller owns the session
+    lifecycle (the CLI opens its own engine; the FastAPI endpoint uses the
+    request-scoped dependency).
+
+    ``on_progress(done, total)`` is invoked after each probe completes — used
+    by the CLI to drive a Rich progress bar; FastAPI passes ``None``.
+    """
     from sqlalchemy import select
+
+    from job_assist.db.models.target_company import TargetCompany
+
+    rows = await session.execute(select(TargetCompany).where(TargetCompany.ats == "unknown"))
+    companies: list[TargetCompany] = list(rows.scalars().all())
+    if not companies:
+        return [], []
+
+    sem = asyncio.Semaphore(_DISCOVER_CONCURRENCY)
+    results: list[tuple[TargetCompany, dict[str, object] | None]] = []
+    completed = 0
+    total = len(companies)
+
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+
+        async def run_one(
+            c: TargetCompany,
+        ) -> tuple[TargetCompany, dict[str, object] | None]:
+            match = await _probe_with_semaphore(c.name, client, sem)
+            return c, match
+
+        for coro in asyncio.as_completed([run_one(c) for c in companies]):
+            results.append(await coro)
+            completed += 1
+            if on_progress is not None:
+                on_progress(completed, total)
+
+    # Preserve input order for deterministic output.
+    by_id = {c.id: r for c, r in results}
+    ordered = [(c, by_id[c.id]) for c in companies]
+
+    matched_pairs = [(c, m) for c, m in ordered if m is not None]
+    unmatched_names = [c.name for c, m in ordered if m is None]
+
+    if commit and matched_pairs:
+        for tc, match in matched_pairs:
+            tc.ats = str(match["ats"])  # type: ignore[assignment]
+            tc.ats_handle = str(match["handle"])
+        await session.commit()
+
+    matched_summary = [
+        {
+            "id": str(c.id),
+            "name": c.name,
+            "ats": str(m["ats"]),
+            "handle": str(m["handle"]),
+            "job_count": _as_int(m.get("job_count")),
+        }
+        for c, m in matched_pairs
+    ]
+    return matched_summary, unmatched_names
+
+
+def _as_int(value: object) -> int:
+    """Best-effort int conversion; defaults to 0 for unexpected types."""
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return 0
+
+
+async def _discover_batch(commit: bool) -> None:
+    """CLI entry into the shared discover flow with a Rich progress bar."""
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
     from job_assist.config import settings
-    from job_assist.db.models.target_company import TargetCompany
 
-    names: list[str]
+    engine = create_async_engine(settings.database_url)
+    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
 
-    if all_companies:
-        engine = create_async_engine(settings.database_url)
-        factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
-            engine, class_=AsyncSession, expire_on_commit=False
-        )
+    try:
         async with factory() as session:
-            rows = await session.execute(
-                select(TargetCompany).where(TargetCompany.ats == "unknown")
+            from rich.progress import (
+                BarColumn,
+                MofNCompleteColumn,
+                Progress,
+                TextColumn,
+                TimeElapsedColumn,
             )
-            companies = rows.scalars().all()
-        names = [c.name for c in companies]
-        await engine.dispose()
-    else:
-        assert name is not None
-        names = [name]
 
-    async with httpx.AsyncClient(follow_redirects=True) as client:
-        for company_name in names:
-            match = await _probe_company(company_name, client)
-            if match:
-                typer.echo(
-                    f"✓  {company_name}: ats={match['ats']}  "
-                    f"handle={match['handle']}  jobs={match['job_count']}"
+            # Pre-count so we can decide whether to render the progress bar
+            # and to print the opening "Probing N companies…" line.
+            from sqlalchemy import func, select
+
+            from job_assist.db.models.target_company import TargetCompany
+
+            count = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(TargetCompany)
+                    .where(TargetCompany.ats == "unknown")
                 )
-            else:
-                typer.echo(f"✗  {company_name}: unknown — suggest manual check")
+            ).scalar_one()
+
+            if count == 0:
+                typer.echo("No target_company rows with ats='unknown' — nothing to probe.")
+                return
+
+            typer.echo(f"Probing {count} companies across Greenhouse/Lever/Ashby…")
+
+            with Progress(
+                TextColumn("[bold]Probing[/bold]"),
+                BarColumn(),
+                MofNCompleteColumn(),
+                TextColumn("•"),
+                TimeElapsedColumn(),
+                transient=True,
+            ) as progress:
+                task_id = progress.add_task("probe", total=count)
+
+                def on_progress(done: int, total: int) -> None:
+                    progress.update(task_id, completed=done, total=total)
+
+                matched, unmatched = await discover_target_companies(
+                    session, commit=commit, on_progress=on_progress
+                )
+
+        _print_discover_summary(matched, unmatched, commit_applied=commit)
+        if commit and matched:
+            typer.echo(f"\nUpdated {len(matched)} target_company rows.")
+    finally:
+        await engine.dispose()
+
+
+def _print_discover_summary(
+    matched: list[dict[str, Any]],
+    unmatched: list[str],
+    *,
+    commit_applied: bool,
+) -> None:
+    typer.echo("")
+    typer.echo(f"Matched ({len(matched)}):")
+    if not matched:
+        typer.echo("  (none)")
+    for m in matched:
+        typer.echo(
+            f"  {m['name']:<40s}  {m['ats']:<10s}  {m['handle']:<25s}  {m['job_count']} postings"
+        )
+
+    typer.echo("")
+    typer.echo(f"Unmatched ({len(unmatched)}):")
+    if not unmatched:
+        typer.echo("  (none)")
+    for n in unmatched:
+        typer.echo(f"  {n}")
+
+    if matched and not commit_applied:
+        typer.echo("")
+        typer.echo("Re-run with --commit to write these matches to target_company.")

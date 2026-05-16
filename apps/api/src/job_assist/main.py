@@ -114,6 +114,34 @@ async def trigger_ingest(
     }
 
 
+# ── Admin — discover-ats batch ────────────────────────────────────────────────
+
+
+@app.post("/admin/discover-ats/run")
+async def discover_ats_run(
+    db: DbSession,
+    commit: bool = False,
+) -> dict[str, Any]:
+    """Probe every ``target_company`` where ``ats='unknown'`` and report matches.
+
+    Dry-run by default.  Pass ``?commit=true`` to also write the detected
+    ``ats`` and ``ats_handle`` back to the matched rows.
+
+    TODO: add authentication before exposing this endpoint publicly.
+          Currently dev-mode only — single-user deployment.
+    """
+    from job_assist.cli import discover_target_companies
+
+    matched, unmatched = await discover_target_companies(db, commit=commit)
+    return {
+        "committed": commit,
+        "matched_count": len(matched),
+        "unmatched_count": len(unmatched),
+        "matched": matched,
+        "unmatched": unmatched,
+    }
+
+
 # ── Admin — cron status ────────────────────────────────────────────────────────
 
 
