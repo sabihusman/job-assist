@@ -103,6 +103,40 @@ Response shape: `{"inserted": N, "skipped": M, "total": N+M}`.
 See `docs/RUNBOOK.md` → "Data discipline" for the full set of rules on
 what goes in the public repo vs. what stays private.
 
+## Gmail backfill
+
+The `POST /admin/gmail/backfill` endpoint pulls the last *N* days of mail,
+classifies each message with Gemini Flash Lite, and writes one
+`outcome_event` per classified message.
+
+### Required env vars
+
+| Var | Source |
+|---|---|
+| `GMAIL_CREDENTIALS_JSON` | Contents of the OAuth client JSON Google Cloud Console produces for a "Desktop application" client. Whole file as a string. |
+| `GMAIL_REFRESH_TOKEN` | Long-lived refresh token obtained from the one-time local OAuth flow (see `docs/RUNBOOK.md` → "Gmail OAuth setup"). |
+| `GEMINI_API_KEY` | Free-tier key from [aistudio.google.com](https://aistudio.google.com/apikey). |
+
+If any of these are missing at request time, the endpoint returns
+`503` with a clear hint instead of crashing.
+
+### Trigger a backfill
+
+```bash
+curl -X POST 'https://api-production-ca5ad.up.railway.app/admin/gmail/backfill?days=60'
+```
+
+Expected runtime: **5–10 minutes** for a 60-day window on the Gemini free
+tier (15 RPM throttle ⇒ ~4 s between classifications, ~500 emails over
+2 months). The request blocks until the backfill completes; idempotent so
+re-running over the same window simply skips messages already in
+`outcome_event`.
+
+The response is the full `BackfillReport` counters (`message_ids_listed`,
+`fetched`, `skipped_prefilter`, `skipped_already_classified`,
+`classified_job_related`, `classified_unrelated`,
+`outcome_events_inserted`, `target_company_links`, ...).
+
 ## Commands
 
 ```bash

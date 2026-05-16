@@ -177,6 +177,59 @@ async def seed_target_companies(
     return {"inserted": inserted, "skipped": skipped, "total": inserted + skipped}
 
 
+# ── Admin — Gmail backfill ────────────────────────────────────────────────────
+
+
+@app.post("/admin/gmail/backfill")
+async def gmail_backfill(
+    db: DbSession,
+    days: int = 60,
+) -> dict[str, Any]:
+    """Pull the last ``days`` days of mail, classify each, write outcome_event rows.
+
+    Long-running (~5-10 minutes for a 60-day window on the Gemini free tier
+    because of the 15 RPM throttle). Idempotent: re-running over the same
+    window skips messages whose ``email_message_id`` is already in the table.
+
+    Returns 503 with a clear hint when any of the required env vars
+    (``GMAIL_CREDENTIALS_JSON``, ``GMAIL_REFRESH_TOKEN``, ``GEMINI_API_KEY``)
+    are missing — preferable to a 500 stack trace.
+
+    TODO: add authentication before exposing this endpoint publicly.
+          Currently dev-mode only — single-user deployment.
+    """
+    missing = [
+        name
+        for name, value in (
+            ("GMAIL_CREDENTIALS_JSON", settings.gmail_credentials_json),
+            ("GMAIL_REFRESH_TOKEN", settings.gmail_refresh_token),
+            ("GEMINI_API_KEY", settings.gemini_api_key),
+        )
+        if not value
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Gmail backfill unavailable: missing env var(s) {missing}. "
+                "Set these on Railway (or .env locally) and retry."
+            ),
+        )
+
+    from job_assist.gmail.backfill import run_backfill
+    from job_assist.gmail.classifier import EmailClassifier
+    from job_assist.gmail.client import GmailClient
+
+    gmail = GmailClient(
+        credentials_json=settings.gmail_credentials_json,
+        refresh_token=settings.gmail_refresh_token,
+    )
+    classifier = EmailClassifier(api_key=settings.gemini_api_key)
+
+    report = await run_backfill(db, gmail, classifier, days_back=days)
+    return report.model_dump(mode="json")
+
+
 # ── Admin — cron status ────────────────────────────────────────────────────────
 
 
