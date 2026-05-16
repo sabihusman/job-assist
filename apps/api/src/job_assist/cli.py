@@ -117,7 +117,7 @@ async def _probe_company(
 
 @app.command()
 def ingest(
-    ats: str = typer.Argument(..., help="ATS source: greenhouse | lever"),
+    ats: str = typer.Argument(..., help="ATS source: greenhouse | lever | ashby"),
     handle: str | None = typer.Option(None, "--handle", help="Company handle"),
     all_companies: bool = typer.Option(
         False, "--all", help="Ingest all target_company rows for this ATS"
@@ -130,7 +130,7 @@ def ingest(
     asyncio.run(_ingest_async(ats, handle, all_companies))
 
 
-_SUPPORTED_ATS = {"greenhouse", "lever"}
+_SUPPORTED_ATS = {"greenhouse", "lever", "ashby"}
 
 
 async def _ingest_async(ats: str, handle: str | None, all_companies: bool) -> None:
@@ -159,6 +159,10 @@ async def _ingest_async(ats: str, handle: str | None, all_companies: bool) -> No
         from job_assist.adapters.lever import LeverAdapter
 
         adapter = LeverAdapter()
+    elif ats == "ashby":
+        from job_assist.adapters.ashby import AshbyAdapter
+
+        adapter = AshbyAdapter()
     else:  # pragma: no cover — guarded by _SUPPORTED_ATS above
         raise typer.Exit(1)
 

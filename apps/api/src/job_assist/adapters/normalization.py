@@ -170,3 +170,80 @@ def compute_content_hash(
         separators=(",", ":"),
     )
     return _sha256(payload)
+
+
+# ── Compensation parsing ──────────────────────────────────────────────────────
+#
+# Free-form compensation summary strings appear on Ashby (and will appear on
+# Workday + JSearch later). This helper extracts (min, max, currency, period)
+# from the common formats; it never raises and returns all-None when nothing
+# parseable is found, so adapters can safely chain it.
+#
+# Supported formats (case-insensitive):
+#   "$150K"                     → (150000, 150000, "USD", "annual")
+#   "$140K - $180K"             → (140000, 180000, "USD", "annual")
+#   "$140,000 - $180,000"       -> (140000, 180000, "USD", "annual")
+#   "$50/hr - $75/hr"           -> (50,     75,     "USD", "hourly")
+#   "£100K"                     → (100000, 100000, "GBP", "annual")
+#   "€100K"                     → (100000, 100000, "EUR", "annual")
+#   "C$120K - C$150K"           -> (120000, 150000, "CAD", "annual")
+
+# Match a number anchored to one of the supported currency glyphs, so that
+# stray digits elsewhere in the summary (e.g. "Q3 2026") don't get picked up.
+_COMP_NUMBER_RE = re.compile(r"[$£€]\s*(\d[\d,]*(?:\.\d+)?)\s*(K)?", re.IGNORECASE)
+_COMP_HOURLY_RE = re.compile(r"/\s*(hr|hour)\b", re.IGNORECASE)
+
+
+def parse_compensation(
+    summary: str | None,
+) -> tuple[int | None, int | None, str | None, str | None]:
+    """Parse a compensation-summary string into structured fields.
+
+    Returns ``(salary_min, salary_max, currency, period)``. Any input the
+    parser doesn't understand returns all four ``None`` — never raises.
+    """
+    if not summary or not summary.strip():
+        return None, None, None, None
+
+    s = summary.strip()
+
+    # Currency: check C$ before plain $ so Canadian dollars aren't shadowed
+    # by USD. £ / € are unambiguous.
+    currency: str | None
+    if "C$" in s:
+        currency = "CAD"
+    elif "$" in s:
+        currency = "USD"
+    elif "£" in s:
+        currency = "GBP"
+    elif "€" in s:
+        currency = "EUR"
+    else:
+        currency = None
+
+    # Period: only meaningful if we found a currency anchor.
+    period: str | None = None
+    if currency is not None:
+        period = "hourly" if _COMP_HOURLY_RE.search(s) else "annual"
+
+    # Extract every currency-anchored number in the string.
+    nums: list[int] = []
+    for raw_num, k_suffix in _COMP_NUMBER_RE.findall(s):
+        cleaned = raw_num.replace(",", "")
+        try:
+            value = float(cleaned)
+        except ValueError:
+            continue
+        if k_suffix:
+            value *= 1000
+        nums.append(int(value))
+
+    if not nums:
+        return None, None, None, None
+
+    if len(nums) == 1:
+        salary_min = salary_max = nums[0]
+    else:
+        salary_min, salary_max = nums[0], nums[1]
+
+    return salary_min, salary_max, currency, period
