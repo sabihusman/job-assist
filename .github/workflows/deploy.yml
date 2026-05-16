@@ -6,7 +6,6 @@ name: Deploy
 #
 # Required secrets (set once in repo Settings → Secrets → Actions):
 #   DATABASE_URL          — Supabase production connection string (sync, psycopg2 format)
-#   RAILWAY_TOKEN         — Railway API token for the job-assist project
 #   API_URL               — Railway production URL (e.g. https://job-assist-api.railway.app)
 #   VERCEL_TOKEN          — Vercel personal access token
 #   VERCEL_ORG_ID         — Vercel team/org ID (from vercel link or dashboard)
@@ -76,32 +75,27 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
       # -----------------------------------------------------------------------
-      # Step 2 — Deploy API to Railway
+      # Step 2 — Wait for Railway's GitHub auto-deploy to come up healthy
       # -----------------------------------------------------------------------
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Deploy API to Railway
-        # redeploy triggers Railway to rebuild from the GitHub-connected source,
-        # respecting the Root Directory: apps/api setting in the Railway service.
-        # This avoids the snapshot-upload path (railway up) which requires the
-        # full source to be present in the runner's working directory.
-        run: railway redeploy --service api --yes
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-
-      # -----------------------------------------------------------------------
-      # Step 3 — Wait for API health check
-      # -----------------------------------------------------------------------
+      # Railway is connected to this repo with auto-deploy on push to main, so
+      # the moment the merge commit lands Railway begins building. We do NOT
+      # invoke `railway redeploy` here because it races with the webhook-driven
+      # deploy and Railway rejects the second call ("cannot be redeployed —
+      # currently building"). Instead we wait for the auto-deploy to expose
+      # a healthy /health endpoint.
+      #
       # Railway deploys typically take 90–180s (build + container start).
-      # Polling at 10s intervals up to 180s (18 attempts).
-      # If deploys regularly exceed 180s in practice, raise MAX_ATTEMPTS to 30
-      # (300s) rather than declaring the deploy failed.
+      # Polling at 10s intervals up to 300s (30 attempts) — generous enough
+      # to absorb the additional build queue time on busy days.
+      #
+      # If you ever need to fall back to an explicit GitHub-Actions-driven
+      # deploy, disable Auto Deploy on the Railway api service first, then
+      # restore an `railway redeploy --service api --yes` step here.
       - name: Wait for API health check
         env:
           API_URL: ${{ secrets.API_URL }}
         run: |
-          MAX_ATTEMPTS=18
+          MAX_ATTEMPTS=30
           INTERVAL=10
 
           for i in $(seq 1 $MAX_ATTEMPTS); do
