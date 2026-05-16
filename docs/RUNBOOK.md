@@ -138,6 +138,84 @@ HAVING count(*) >= 3
 ORDER BY rejections DESC;
 ```
 
+### Gmail OAuth setup
+
+One-time operator setup to populate the env vars that the
+`/admin/gmail/backfill` endpoint requires. Read-only scope only; the app
+never sends mail, modifies labels, or persists access tokens to disk.
+
+**1. Create a Google Cloud project.** Reuse an existing one if you have it.
+
+**2. Enable APIs** in the Cloud Console:
+- Gmail API
+- Generative Language API
+
+**3. Configure the OAuth consent screen:**
+- User type: **External**
+- Publishing status: **Testing** (the only test user is your own Gmail)
+- Scope: `https://www.googleapis.com/auth/gmail.readonly` — nothing else
+- Test users: add the Gmail address you want to back-fill (just yours)
+
+**4. Create the OAuth client:**
+- Type: **Desktop application** (simplest for the one-off offline flow)
+- Download the JSON. This is what becomes `GMAIL_CREDENTIALS_JSON`.
+
+**5. Get a refresh token via a one-time local run.** From a Python shell
+on your machine (the package `google-auth-oauthlib` is already in
+`apps/api/pyproject.toml`):
+
+```python
+from google_auth_oauthlib.flow import InstalledAppFlow
+flow = InstalledAppFlow.from_client_secrets_file(
+    "credentials.json",
+    scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+)
+creds = flow.run_local_server(port=0, prompt="consent", access_type="offline")
+print(creds.refresh_token)
+```
+
+This opens a browser, you consent once, and the script prints the
+refresh token. **Copy it.**
+
+**6. Get a Gemini API key.** Free tier at
+[aistudio.google.com](https://aistudio.google.com/apikey).
+
+**7. Upload all three secrets to Railway** (Service → Variables):
+
+| Var | Value |
+|---|---|
+| `GMAIL_CREDENTIALS_JSON` | Paste the entire contents of `credentials.json` as a multi-line string |
+| `GMAIL_REFRESH_TOKEN` | The refresh token from step 5 |
+| `GEMINI_API_KEY` | The Gemini key from step 6 |
+
+Railway redeploys automatically. Verify with:
+
+```bash
+curl -s https://api-production-ca5ad.up.railway.app/health
+```
+
+Then trigger the backfill:
+
+```bash
+curl -X POST 'https://api-production-ca5ad.up.railway.app/admin/gmail/backfill?days=60'
+```
+
+The request blocks for 5–10 minutes (Gemini free tier 15 RPM throttle).
+The response is the full `BackfillReport` counters.
+
+**Refresh token rotation.** The refresh token does not expire as long as
+the OAuth client stays in *Testing* status and you remain a test user.
+If the token ever gets revoked (e.g. you remove the OAuth client),
+re-run step 5 and update `GMAIL_REFRESH_TOKEN` on Railway.
+
+**Never commit:**
+- `credentials.json`
+- The refresh token
+- Any cached token file
+
+`.gitignore` already covers these (`apps/api/credentials.json`,
+`*credentials*.json`, `*.gmail-token`).
+
 ## Troubleshooting
 
 ### CI fails on `pnpm-lock.yaml not found`
@@ -150,7 +228,17 @@ Check that browsers were installed (`playwright install --with-deps chromium`). 
 
 ### Gmail OAuth fails with "redirect_uri_mismatch"
 
-Verify Google Cloud Console → Credentials → OAuth client → Authorized redirect URIs includes `http://localhost:8000/oauth/gmail/callback`.
+With the Desktop OAuth client described in "Gmail OAuth setup", the
+redirect URI is automatically `http://localhost:<random-port>/` — set
+by `run_local_server(port=0)`. If you see a redirect-URI error, you're
+likely using a *Web application* OAuth client by mistake. Re-create the
+client as **Desktop application** type.
+
+### Gmail backfill returns 503 "missing env var(s)"
+
+The `/admin/gmail/backfill` endpoint requires `GMAIL_CREDENTIALS_JSON`,
+`GMAIL_REFRESH_TOKEN`, and `GEMINI_API_KEY`. Set them on Railway and
+trigger a redeploy. See "Gmail OAuth setup" above.
 
 ## Public repo data discipline
 

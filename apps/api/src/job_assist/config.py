@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     # Gmail
     gmail_credentials_path: str = Field(default="./credentials.json")
     gmail_token_path: str = Field(default="./token.json")
+    # Production path: paste the OAuth client JSON contents as a string into
+    # GMAIL_CREDENTIALS_JSON and the long-lived refresh token into
+    # GMAIL_REFRESH_TOKEN. Both default empty so the API still boots without
+    # them; the /admin/gmail/backfill endpoint surfaces a clear 503 if either
+    # is missing at request time.
+    gmail_credentials_json: str = Field(default="")
+    gmail_refresh_token: str = Field(default="")
 
     # Email
     resend_api_key: str = Field(default="")

@@ -96,6 +96,13 @@ plugins = ["pydantic.mypy"]
 module = ["selectolax.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+# Google's API client libraries don't ship py.typed markers; the Credentials
+# class is untyped under strict mode. Suppress missing-import / untyped-call
+# errors only for those modules — our own gmail/* code remains strict.
+module = ["googleapiclient.*", "google.oauth2.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
