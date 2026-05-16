@@ -77,12 +77,13 @@ async def trigger_ingest(
     TODO: add authentication before exposing this endpoint publicly.
           Currently dev-mode only — single-user deployment.
     """
+    from job_assist.adapters.ashby import AshbyAdapter
     from job_assist.adapters.base import Adapter
     from job_assist.adapters.greenhouse import GreenhouseAdapter
     from job_assist.adapters.lever import LeverAdapter
     from job_assist.services.ingestion import IngestionService
 
-    _SUPPORTED = {"greenhouse", "lever"}
+    _SUPPORTED = {"greenhouse", "lever", "ashby"}
     if ats not in _SUPPORTED:
         raise HTTPException(
             status_code=400,
@@ -94,6 +95,8 @@ async def trigger_ingest(
         adapter = GreenhouseAdapter()
     elif ats == "lever":
         adapter = LeverAdapter()
+    elif ats == "ashby":
+        adapter = AshbyAdapter()
     else:
         # Unreachable given the guard above, but keeps mypy happy.
         raise HTTPException(status_code=400, detail=f"ATS {ats!r} not yet implemented")
