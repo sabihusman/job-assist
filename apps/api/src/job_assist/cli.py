@@ -117,7 +117,7 @@ async def _probe_company(
 
 @app.command()
 def ingest(
-    ats: str = typer.Argument(..., help="ATS source (greenhouse)"),
+    ats: str = typer.Argument(..., help="ATS source: greenhouse | lever"),
     handle: str | None = typer.Option(None, "--handle", help="Company handle"),
     all_companies: bool = typer.Option(
         False, "--all", help="Ingest all target_company rows for this ATS"
@@ -130,22 +130,37 @@ def ingest(
     asyncio.run(_ingest_async(ats, handle, all_companies))
 
 
+_SUPPORTED_ATS = {"greenhouse", "lever"}
+
+
 async def _ingest_async(ats: str, handle: str | None, all_companies: bool) -> None:
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+    from job_assist.adapters.base import Adapter
     from job_assist.config import settings
     from job_assist.db.models.target_company import TargetCompany
     from job_assist.services.ingestion import IngestionService
 
-    if ats != "greenhouse":
+    if ats not in _SUPPORTED_ATS:
         typer.echo(
-            f"Unsupported ATS: {ats!r}. Only 'greenhouse' is available in this version.",
+            f"Unsupported ATS: {ats!r}. Supported: {sorted(_SUPPORTED_ATS)}",
             err=True,
         )
         raise typer.Exit(1)
 
-    from job_assist.adapters.greenhouse import GreenhouseAdapter
+    # Build the adapter for the requested ATS.
+    adapter: Adapter
+    if ats == "greenhouse":
+        from job_assist.adapters.greenhouse import GreenhouseAdapter
+
+        adapter = GreenhouseAdapter()
+    elif ats == "lever":
+        from job_assist.adapters.lever import LeverAdapter
+
+        adapter = LeverAdapter()
+    else:  # pragma: no cover — guarded by _SUPPORTED_ATS above
+        raise typer.Exit(1)
 
     engine = create_async_engine(settings.database_url)
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
@@ -158,23 +173,23 @@ async def _ingest_async(ats: str, handle: str | None, all_companies: bool) -> No
         async with factory() as session:
             rows = await session.execute(
                 select(TargetCompany).where(
-                    TargetCompany.ats == "greenhouse",
+                    TargetCompany.ats == ats,
                     TargetCompany.ats_handle.isnot(None),
                 )
             )
             companies = rows.scalars().all()
         handles = [c.ats_handle for c in companies if c.ats_handle]
         if not handles:
-            typer.echo("No target_company rows with ats=greenhouse and a handle set.")
+            typer.echo(f"No target_company rows with ats={ats} and a handle set.")
             return
     else:
         assert handle is not None
         handles = [handle]
 
-    async with GreenhouseAdapter() as adapter:
+    async with adapter:
         for h in handles:
             async with factory() as session:
-                typer.echo(f"Ingesting greenhouse/{h} …")
+                typer.echo(f"Ingesting {ats}/{h} …")
                 run = await service.ingest_source(adapter, h, session)
                 icon = "✓" if run.status == "success" else "✗"
                 typer.echo(
