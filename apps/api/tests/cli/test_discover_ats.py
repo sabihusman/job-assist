@@ -110,3 +110,72 @@ class TestProbeCompany:
         assert result["ats"] == "lever"
         assert result["handle"] == "acmecorp"
         assert result["job_count"] == 2
+
+
+class TestFirstWordFallbackThreshold:
+    """Multi-word company names must clear a posting-count threshold when the
+    match comes solely via the first-word fallback (e.g. 'charles' for
+    'Charles Schwab'). Single-word names are unaffected.
+    """
+
+    async def test_low_count_first_word_match_rejected(self) -> None:
+        """'Charles Schwab' must NOT match greenhouse/charles with only 3 postings."""
+        # The full-name and hyphenated candidates must 404 so the loop reaches
+        # the first-word fallback. Only that one returns a (small) job list.
+        client = _mock_client(
+            {
+                "https://boards-api.greenhouse.io/v1/boards/charles/jobs": (
+                    200,
+                    {"jobs": [{"id": 1}, {"id": 2}, {"id": 3}]},
+                ),
+            }
+        )
+        result = await _probe_company("Charles Schwab", client)
+        assert result is None, "3 postings is below the fallback threshold; expected no match"
+
+    async def test_high_count_first_word_match_accepted(self) -> None:
+        """A first-word match still accepts when the board has substantive postings."""
+        client = _mock_client(
+            {
+                "https://boards-api.greenhouse.io/v1/boards/charles/jobs": (
+                    200,
+                    {"jobs": [{"id": i} for i in range(10)]},
+                ),
+            }
+        )
+        result = await _probe_company("Charles Schwab", client)
+        assert result is not None
+        assert result["handle"] == "charles"
+        assert result["job_count"] == 10
+
+    async def test_single_word_name_not_affected(self) -> None:
+        """Single-word names like 'Stripe' match at any count — rule doesn't apply."""
+        client = _mock_client(
+            {
+                "https://boards-api.greenhouse.io/v1/boards/stripe/jobs": (
+                    200,
+                    {"jobs": [{"id": 1}]},
+                ),
+            }
+        )
+        result = await _probe_company("Stripe", client)
+        assert result is not None
+        assert result["handle"] == "stripe"
+        assert result["job_count"] == 1
+
+    async def test_multiword_full_name_match_not_gated(self) -> None:
+        """A multi-word match via the full hyphenated handle bypasses the threshold."""
+        # 'charles-schwab' is the hyphenated full-name candidate — not a first-word
+        # fallback — so even 1 posting should be accepted.
+        client = _mock_client(
+            {
+                "https://boards-api.greenhouse.io/v1/boards/charles-schwab/jobs": (
+                    200,
+                    {"jobs": [{"id": 1}]},
+                ),
+            }
+        )
+        result = await _probe_company("Charles Schwab", client)
+        assert result is not None
+        assert result["handle"] == "charles-schwab"
+        assert result["job_count"] == 1
