@@ -1,0 +1,66 @@
+[
+  {
+    "id": "abc12345-6789-4def-9012-3456789abcde",
+    "text": "Senior Product Manager, Payments",
+    "categories": {
+      "location": "New York, NY",
+      "allLocations": ["New York, NY"],
+      "commitment": "Full-time",
+      "department": "Product",
+      "team": "Payments"
+    },
+    "hostedUrl": "https://jobs.lever.co/ramp/abc12345-6789-4def-9012-3456789abcde",
+    "applyUrl": "https://jobs.lever.co/ramp/abc12345-6789-4def-9012-3456789abcde/apply",
+    "descriptionPlain": "Senior Product Manager, Payments\n\nAs a Senior PM on Payments at Ramp, you'll own the roadmap for our core payments rails. You'll partner with engineering, design, and risk to ship products used by thousands of finance teams.\n\nResponsibilities:\n- Own the payments product roadmap\n- Partner cross-functionally with eng and design\n- Drive measurable business outcomes",
+    "description": "<p>HTML fallback — should not be used when descriptionPlain is present.</p>",
+    "createdAt": 1715000000000,
+    "workplaceType": "hybrid"
+  },
+  {
+    "id": "def67890-1234-4abc-def0-123456789abc",
+    "text": "Lead Product Manager, Risk",
+    "categories": {
+      "location": "Remote — Americas",
+      "allLocations": ["Remote — Americas", "New York, NY"],
+      "commitment": "Full-time",
+      "department": "Product",
+      "team": "Risk"
+    },
+    "hostedUrl": "https://jobs.lever.co/ramp/def67890-1234-4abc-def0-123456789abc",
+    "applyUrl": "https://jobs.lever.co/ramp/def67890-1234-4abc-def0-123456789abc/apply",
+    "descriptionPlain": "",
+    "description": "<h2>Lead Product Manager, Risk</h2><p>Lead Ramp's risk product line. <strong>Own</strong> end-to-end strategy.</p><ul><li>Roadmap</li><li>Hiring</li><li>Cross-functional partnership</li></ul>",
+    "createdAt": 1716000000000,
+    "workplaceType": "remote"
+  },
+  {
+    "id": "fed98765-4321-4cba-9876-543210fedcba",
+    "text": "Associate Product Manager",
+    "categories": {
+      "location": "San Francisco, CA",
+      "commitment": "Full-time",
+      "department": "Product",
+      "team": "Growth"
+    },
+    "hostedUrl": "https://jobs.lever.co/ramp/fed98765-4321-4cba-9876-543210fedcba",
+    "applyUrl": "https://jobs.lever.co/ramp/fed98765-4321-4cba-9876-543210fedcba/apply",
+    "descriptionPlain": "Join Ramp's APM program. Two-year rotational program across product surfaces.",
+    "createdAt": 1717000000000,
+    "workplaceType": "on-site"
+  },
+  {
+    "id": "999aaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee",
+    "text": "Software Engineer, Infrastructure",
+    "categories": {
+      "location": "Remote",
+      "commitment": "Full-time",
+      "department": "Design",
+      "team": "Brand"
+    },
+    "hostedUrl": "https://jobs.lever.co/ramp/999aaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee",
+    "applyUrl": "https://jobs.lever.co/ramp/999aaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee/apply",
+    "descriptionPlain": "Design at Ramp.",
+    "createdAt": 1718000000000,
+    "workplaceType": "unspecified"
+  }
+]
