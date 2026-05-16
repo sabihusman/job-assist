@@ -115,12 +115,51 @@ def candidate_handles(name: str) -> list[str]:
 
 # ── ATS probing ───────────────────────────────────────────────────────────────
 
+# Minimum postings required for a first-word-fallback handle match to count
+# as a real hit. The first-word fallback (e.g. "charles" from "Charles
+# Schwab") is intentionally aggressive and collides with any unrelated
+# small board that owns that single word — we saw "Charles Schwab" pick up
+# Berlin SaaS hello-charles.com (3 postings) and "Orion Advisor Solutions"
+# pick up an unidentified 0-posting Ashby board. Requiring a substantive
+# posting count gates against those false positives while still accepting
+# legit matches like "Capital One" (Greenhouse "capital" with hundreds).
+_FIRST_WORD_FALLBACK_MIN_POSTINGS = 5
+
+
+def _is_first_word_fallback(name: str, handle: str) -> bool:
+    """True when *handle* is only the first whitespace token of a multi-word
+    *name* (and would never have been generated for a single-word name)."""
+    tokens = name.split()
+    if len(tokens) <= 1:
+        return False
+    return handle.lower() == tokens[0].lower()
+
+
+def _extract_job_count(ats: str, data: object) -> int | None:
+    """Pull a job count out of a per-ATS response. None means shape mismatch."""
+    if ats == "greenhouse" and isinstance(data, dict):
+        jobs = data.get("jobs", [])
+        if isinstance(jobs, list):
+            return len(jobs)
+    elif ats == "lever" and isinstance(data, list):
+        return len(data)
+    elif ats == "ashby" and isinstance(data, dict):
+        # Ashby boards return either jobPostings or jobs key.
+        jobs = data.get("jobPostings") or data.get("jobs") or []
+        if isinstance(jobs, list):
+            return len(jobs)
+    return None
+
 
 async def _probe_company(
     name: str,
     client: httpx.AsyncClient,
 ) -> dict[str, object] | None:
-    """Try each ATS for *name*. Return match dict or None on no match."""
+    """Try each ATS for *name*. Return match dict or None on no match.
+
+    Multi-word names probed via the first-word-only fallback must clear
+    ``_FIRST_WORD_FALLBACK_MIN_POSTINGS`` to avoid generic-word collisions.
+    """
     for handle in candidate_handles(name):
         for ats, url_template in _PROBE_URLS.items():
             url = url_template.format(handle=handle)
@@ -135,19 +174,19 @@ async def _probe_company(
             except Exception:
                 continue
 
-            # Validate the response looks like a real board
-            if ats == "greenhouse":
-                jobs = data.get("jobs", [])
-                if isinstance(jobs, list):
-                    return {"ats": ats, "handle": handle, "job_count": len(jobs)}
-            elif ats == "lever":
-                if isinstance(data, list):
-                    return {"ats": ats, "handle": handle, "job_count": len(data)}
-            elif ats == "ashby":
-                # Ashby boards return either jobPostings or jobs key
-                jobs = data.get("jobPostings") or data.get("jobs") or []
-                if isinstance(jobs, list):
-                    return {"ats": ats, "handle": handle, "job_count": len(jobs)}
+            job_count = _extract_job_count(ats, data)
+            if job_count is None:
+                # Response shape didn't validate — keep trying.
+                continue
+
+            # Gate low-confidence first-word fallback matches.
+            if (
+                _is_first_word_fallback(name, handle)
+                and job_count < _FIRST_WORD_FALLBACK_MIN_POSTINGS
+            ):
+                continue
+
+            return {"ats": ats, "handle": handle, "job_count": job_count}
     return None
 
 
