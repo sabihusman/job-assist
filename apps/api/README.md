@@ -70,6 +70,39 @@ some changes (e.g. check constraints, index options).
 Ruff runs automatically on new migration files via the `post_write_hooks`
 in `alembic.ini`.
 
+### Seeding `target_company`
+
+Target-company seed data is **not** in migrations — it lives in
+`apps/api/seeds/target_companies.json`, which is gitignored. The
+`seeds/target_companies.example.json` file is the public template
+documenting the schema; copy and edit it locally to drive a real seed.
+
+**Local first-time setup:**
+
+```bash
+cp seeds/target_companies.example.json seeds/target_companies.json
+# Edit seeds/target_companies.json — add the real target list
+uv run python -m job_assist.seed
+```
+
+The seed script is idempotent — it skips rows whose `name` already exists,
+so re-running is safe.
+
+**Seeding production** (no file lives on the Railway container):
+
+```bash
+curl -X POST -H 'Content-Type: application/json' \
+     -d @apps/api/seeds/target_companies.json \
+     https://api-production-ca5ad.up.railway.app/admin/seed/target-companies
+```
+
+The endpoint accepts the seed array as its JSON body, so the private
+JSON never leaves the operator's machine or Railway's encrypted runtime.
+Response shape: `{"inserted": N, "skipped": M, "total": N+M}`.
+
+See `docs/RUNBOOK.md` → "Data discipline" for the full set of rules on
+what goes in the public repo vs. what stays private.
+
 ## Commands
 
 ```bash

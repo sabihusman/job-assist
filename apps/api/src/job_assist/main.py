@@ -142,6 +142,41 @@ async def discover_ats_run(
     }
 
 
+# ── Admin — seed target_company ───────────────────────────────────────────────
+
+
+@app.post("/admin/seed/target-companies")
+async def seed_target_companies(
+    rows: list[dict[str, Any]],
+    db: DbSession,
+) -> dict[str, int]:
+    """Seed target_company rows from a JSON body.
+
+    Idempotent: each row's ``name`` is checked first; existing rows are
+    skipped rather than updated. The body is the seed JSON itself, so the
+    private seed file (``apps/api/seeds/target_companies.json``) never
+    needs to be uploaded to the Railway container — the operator runs::
+
+        curl -X POST -H 'Content-Type: application/json' \\
+             -d @apps/api/seeds/target_companies.json \\
+             https://<host>/admin/seed/target-companies
+
+    Returns the insert / skip counts so the operator can verify the
+    expected number of rows landed.
+
+    TODO: add authentication before exposing this endpoint publicly.
+          Currently dev-mode only — single-user deployment.
+    """
+    from job_assist.seed import seed_from_rows
+
+    try:
+        inserted, skipped = await seed_from_rows(db, rows)
+    except ValueError as exc:  # malformed row (missing name/tier)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"inserted": inserted, "skipped": skipped, "total": inserted + skipped}
+
+
 # ── Admin — cron status ────────────────────────────────────────────────────────
 
 

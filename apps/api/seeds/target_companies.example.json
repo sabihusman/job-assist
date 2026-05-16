@@ -1,0 +1,38 @@
+[
+  {
+    "name": "ExampleCo",
+    "tier": 1,
+    "ats": "greenhouse",
+    "ats_handle": "exampleco",
+    "role_filter": null,
+    "domain": "exampleco.com",
+    "notes": "Example top-tier target. Tier 1 = active pursuit."
+  },
+  {
+    "name": "DemoTech",
+    "tier": 2,
+    "ats": "lever",
+    "ats_handle": "demotech",
+    "role_filter": null,
+    "domain": null,
+    "notes": null
+  },
+  {
+    "name": "SampleFinancial Holdings",
+    "tier": 3,
+    "ats": "unknown",
+    "ats_handle": null,
+    "role_filter": "non_pm_only",
+    "domain": null,
+    "notes": "Example of role_filter: only ingest non-PM postings."
+  },
+  {
+    "name": "PlaceholderCorp",
+    "tier": 4,
+    "ats": "ashby",
+    "ats_handle": "placeholdercorp",
+    "role_filter": null,
+    "domain": null,
+    "notes": null
+  }
+]

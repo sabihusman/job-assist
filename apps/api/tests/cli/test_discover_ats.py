@@ -25,7 +25,9 @@ class TestCandidateHandles:
                 "Morgan Stanley Wealth Management",
                 ["morganstanleywealthmanagement", "morganstanley"],
             ),
-            ("Wellmark Blue Cross Blue Shield", ["wellmarkbluecrossblues"[:16]]),  # prefix check
+            # Synthetic five-word name with the same shape as real long FS-incumbent
+            # names — exercises the "all words joined" branch for long handles.
+            ("Acme Insurance Cross Shield Group", ["acmeinsurancecro"]),  # prefix check
         ],
     )
     def test_contains_expected_handles(self, name: str, must_contain: list[str]) -> None:
