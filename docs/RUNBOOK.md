@@ -154,56 +154,83 @@ Verify Google Cloud Console → Credentials → OAuth client → Authorized redi
 
 ## Public repo data discipline
 
-This repo is public. The following rules prevent personal job-search data from
-leaking into the commit history.
+This repo is public. The rules below prevent personal job-search data from
+leaking into the commit history. The principle is simple: **schema goes in
+the repo, data goes in private files or the runtime database, and the
+public test fixtures use synthetic values only**.
 
-### What must never be committed
+### Never commit
 
-| Data | Why |
-|---|---|
-| Real company names tied to rejection state | Personally identifying; reputationally sensitive |
-| Gmail credential JSON or OAuth token files | Full account access |
-| Migration files that embed rejection patterns (e.g. seeded `outcome_event` rows) | Contains application history |
-| `apps/api/seeds/seeds.json` | Contains real target companies and rejection flags |
+- Real company names tied to rejection state or outcome events.
+- Real email addresses (yours or anyone else's) outside synthetic test fixtures.
+- Real Gmail message IDs or thread IDs.
+- Real outcome classifications (e.g., `outcome_event` rows pointing to real companies).
+- OAuth tokens, credentials JSON files, API keys.
+- Database passwords or connection strings with real passwords.
 
-`.gitignore` covers `apps/api/seeds/seeds.json`, `*.gmail-token`, and
-`credentials.json`. If you accidentally stage one of these, run
-`git rm --cached <file>` before committing.
+### Always commit
 
-### Seed data
+- Architectural concepts and patterns.
+- Synthetic test fixtures (`test@example.com`, `ExampleCo`, `Acmecorp`, ...).
+- Migration schema (DDL only — no seed data).
+- `.example.json` files showing schema shape.
 
-Real seed data (target companies, triage rules, rejection patterns) lives in
-`apps/api/seeds/seeds.json` and is **gitignored**.
+### Tables that must never appear with real data
 
-A committed `apps/api/seeds/seeds.example.json` contains synthetic placeholder
-data so contributors can understand the schema without seeing real data:
+- `outcome_event`
+- `application_state`
+- `closed_channel`
+- `triage_result` (once populated with LLM verdicts)
 
-```json
-{
-  "target_companies": [
-    { "name": "Acme Wealthtech", "ats": "greenhouse", "tier": 1 },
-    { "name": "Example Fintech", "ats": "lever",      "tier": 2 }
-  ],
-  "hard_rule_overrides": [
-    { "company": "Example Corp", "rule": "non-pm-only", "active": true }
-  ]
-}
-```
+### Tables that may only ever appear in migrations as schema
 
-To load your real seeds locally:
+- `target_company` — real data lives in `apps/api/seeds/target_companies.json`
+  (gitignored) and is loaded via `python -m job_assist.seed` (locally) or
+  `POST /admin/seed/target-companies` (production).
+
+### Gitignored paths
+
+- `apps/api/seeds/*.json` (except `*.example.json`)
+- `apps/api/.env`
+- `apps/api/credentials.json`, `apps/api/token.json`, any `*credentials*.json`, any `*token*.json`
+- `.vercel/`
+- `.claude/`
+
+If you accidentally stage one of these, run `git rm --cached <file>` before
+committing.
+
+### Seeding `target_company`
+
+Real target-company data lives in `apps/api/seeds/target_companies.json`
+(gitignored). The committed `apps/api/seeds/target_companies.example.json`
+is the public schema template.
+
+**Local first-time setup:**
 
 ```bash
 cd apps/api
-cp seeds/seeds.example.json seeds/seeds.json
-# Edit seeds/seeds.json with real data — this file is gitignored
-uv run python -m job_assist.cli seed
+cp seeds/target_companies.example.json seeds/target_companies.json
+# Edit seeds/target_companies.json with the real target list
+uv run python -m job_assist.seed
 ```
+
+**Production:** the JSON travels as the POST body so the file never lands
+on the Railway container:
+
+```bash
+curl -X POST -H 'Content-Type: application/json' \
+     -d @apps/api/seeds/target_companies.json \
+     https://api-production-ca5ad.up.railway.app/admin/seed/target-companies
+```
+
+Both paths are idempotent — rows are matched by `name` and existing rows
+are left alone (skipped), so re-running is safe.
 
 ### Application state and outcome data
 
 `application_state` and `outcome_event` rows live in Supabase only. They are
 never exported to fixtures, factory files, or any file tracked by git. If a
-test needs application-state data, generate it synthetically in the test itself:
+test needs application-state data, generate it synthetically in the test:
 
 ```python
 # Good — synthetic, never touches real rejection history
@@ -216,7 +243,9 @@ app = ApplicationStateFactory(company="Fake Corp", state="rejected")
 
 Gmail classifier tests use synthetic email bodies, not real rejection emails.
 No fixture file in `apps/api/tests/` may contain a real company name paired
-with a rejection or non-response signal.
+with a rejection or non-response signal. Handle-generation tests use
+synthetic names (`Acmecorp`, `Acme Insurance Cross Shield Group`) that
+preserve the input shape without identifying real targets.
 
 ---
 

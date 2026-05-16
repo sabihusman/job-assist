@@ -57,8 +57,9 @@ apps/api/credentials.json
 apps/api/token.json
 apps/api/.gmail-cache/
 
-# Sensitive seed data (real company names, rejection patterns)
-# Commit seeds.example.json with fake data instead — see RUNBOOK.md
-apps/api/seeds/seeds.json
+# Private seed data — never committed (see docs/RUNBOOK.md "Data discipline")
+# The *.example.json files are the public templates documenting the schema.
+apps/api/seeds/*.json
+!apps/api/seeds/*.example.json
 *.gmail-token
 credentials.json
