@@ -116,6 +116,39 @@ uv run python -m job_assist.cli ingest --source greenhouse
 uv run python -m job_assist.cli ingest --all
 ```
 
+### Daily ingest cron
+
+The `Daily ingest` GitHub Actions workflow (`.github/workflows/ingest-daily.yml`)
+runs once a day and exercises every `(ats, handle)` pair the API advertises
+via `GET /admin/ingest/plan`.
+
+| | |
+|---|---|
+| **Schedule** | `0 6 * * *` UTC (06:00 UTC = midnight US Central) |
+| **Per-call throttle** | 5 s gap between ATS hits (override via `THROTTLE_SECONDS` env var on the workflow if ever needed) |
+| **Per-call timeout** | 120 s (Anthropic's 411-posting Greenhouse board is the long tail) |
+| **Job timeout** | 30 minutes |
+| **Failure mode** | Workflow exits non-zero on any failed ingest; GitHub's stock "workflow failed" email fires to repo admins |
+| **Concurrency** | `concurrency: daily-ingest` — a second cron firing while one is still running is queued, not cancelled |
+
+**Manual trigger:** Actions tab → **Daily ingest** → "Run workflow" (uses
+`workflow_dispatch`). Safe to fire ad-hoc; the ingestion service is
+idempotent at the `(source_job_id)` level.
+
+**Pause the cron:** Actions tab → **Daily ingest** → "···" menu → "Disable
+workflow". Re-enable when ready; no code change needed.
+
+**Add a new company to the cron:** insert it into `target_company` with a
+supported `ats` (greenhouse / lever / ashby) and `ats_handle` populated.
+The next scheduled run picks it up without any workflow edit. The seed
+file at `apps/api/seeds/target_companies.json` is the canonical source
+of truth for the operator's target list — edit it and re-POST to
+`/admin/seed/target-companies` to push to prod.
+
+**Why 06:00 UTC?** Most ATS boards refresh during US business hours. A
+midnight-Central run lands the prior day's net-new postings before the
+operator's morning triage pass.
+
 ### Inspecting state
 
 Supabase dashboard → SQL editor:

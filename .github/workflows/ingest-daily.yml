@@ -1,0 +1,57 @@
+name: Daily ingest
+
+# Runs once a day to pull fresh postings from every (ats, handle) the API
+# advertises via GET /admin/ingest/plan. Sequential, throttled, fails loud.
+#
+# Secrets required (already configured in repo settings):
+#   API_URL  — Railway production base URL (no trailing slash needed;
+#              the runner strips it anyway). Same secret used by deploy.yml.
+#
+# To pause ingestion temporarily: disable this workflow in the Actions UI.
+# To add a new company to the cron: insert it into target_company with a
+# supported ats + ats_handle populated; the next scheduled run picks it up
+# without any workflow edit.
+
+on:
+  schedule:
+    # 06:00 UTC = 00:00 US Central (midnight, off-hours).
+    # Most ATS boards refresh during US business hours, so a midnight-Central
+    # run catches the prior day's net-new postings.
+    - cron: '0 6 * * *'
+  workflow_dispatch: {}  # manual "Run workflow" button in the Actions tab
+
+permissions:
+  contents: read
+
+# Don't queue parallel cron firings if a previous run is still going.
+concurrency:
+  group: daily-ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest-all:
+    name: Run daily ingest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      API_URL: ${{ secrets.API_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Fetch ingest plan
+        id: plan
+        run: |
+          plan=$(curl -fsS --max-time 30 "$API_URL/admin/ingest/plan")
+          # Pretty-print to the job log so the operator can see what will run.
+          echo "$plan" | python3 -m json.tool
+          # Stash to a file (avoids shell-quoting headaches downstream).
+          echo "$plan" > /tmp/ingest_plan.json
+          echo "count=$(echo "$plan" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')" >> "$GITHUB_OUTPUT"
+
+      - name: Run ingestion sequentially
+        run: |
+          echo "Plan size: ${{ steps.plan.outputs.count }} companies"
+          python3 .github/workflows/scripts/run_daily_ingest.py < /tmp/ingest_plan.json
