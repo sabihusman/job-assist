@@ -163,3 +163,29 @@ Defaults (the values that seed `HardRuleConfig`):
 **Schema deviation from the PR #23 spec:** the spec sketched `apply_hard_rules` reading `target_company.is_closed_channel` directly. Closed-channel state already lives in its own table (`closed_channel`) with a `unsealed_at IS NULL` semantic for "currently sealed", so denormalising it onto `target_company` would create two sources of truth that inevitably drift. Instead, `apply_hard_rules` takes the already-fetched `ClosedChannel | None` as a parameter — the future triage cron does the query.
 
 **Migration path:** thresholds will move to an `operator_profile` table in PR #29 so the operator can tune them from the web UI without redeploying. The current dataclass becomes the seed values for that row.
+
+---
+
+## ADR-009 · Gmail poll watermark derives from data, not a state row
+
+**Status:** Accepted (PR #25)
+
+**Context:** Continuous Gmail polling needs a watermark — "what's the most recent email I've already classified?" — to scope each 15-minute query. Two ways to store that watermark:
+
+| | Option A — derived from data | Option B — explicit state row |
+|---|---|---|
+| Source of truth | `MAX(outcome_event.received_at)` | new `poll_watermark` row updated on each successful poll |
+| New schema | none | one new column or table |
+| Drift risk | none (data IS the watermark) | the state row and the actual data can diverge if a run crashes between insert and update |
+| Recovery after crash | automatic | requires manual reconciliation |
+
+**Decision:** Option A. The poll endpoint runs `SELECT MAX(received_at) FROM outcome_event` on every call; if the table is empty (fresh deploy, no backfill yet), it falls back to `now() - 24h`.
+
+**Rationale:**
+1. **Drift-resistant.** The watermark IS the data. A partial commit followed by a crash leaves the watermark exactly at the last-actually-inserted row's `received_at`. The next poll naturally retries everything from there forward without manual intervention.
+2. **No new migration.** One less schema artefact to maintain across environments.
+3. **Easy to reason about.** "What's the most recent email I know about?" is a self-explaining query that matches the operator's mental model.
+
+**Trade-off:** the `MAX` query runs on every poll. Cheap — the `idx_outcome_event_received_at` index makes it O(log n), and at 96 polls/day × < 1 ms each, it's lost in the noise.
+
+**Bootstrap fallback (24 hours):** the orchestrator decides this. The default isn't load-bearing — a fresh deploy that immediately gets the production backfill (PR #22) will have weeks of `outcome_event` rows by the time the first 15-min poll fires.

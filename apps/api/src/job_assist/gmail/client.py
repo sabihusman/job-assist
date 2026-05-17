@@ -164,19 +164,16 @@ class GmailClient:
 
     async def list_message_ids(
         self,
-        after: datetime,
-        before: datetime | None = None,
+        query: str,
         max_results_per_page: int = 500,
     ) -> list[str]:
-        """Return every message ID in ``[after, before)`` (before defaults to now)."""
+        """Return every message ID matching the Gmail search *query*.
 
-        def _build_query() -> str:
-            parts = [f"after:{after.strftime('%Y/%m/%d')}"]
-            if before is not None:
-                parts.append(f"before:{before.strftime('%Y/%m/%d')}")
-            return " ".join(parts)
-
-        query = _build_query()
+        Callers build the query (day-granular for backfill, unix-second
+        granular for poll) so the client itself stays generic — see
+        :func:`job_assist.gmail.backfill.build_date_range_query` and
+        :func:`job_assist.gmail.backfill.build_after_query`.
+        """
         out: list[str] = []
         page_token: str | None = None
 

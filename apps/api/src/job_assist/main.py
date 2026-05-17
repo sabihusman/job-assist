@@ -227,7 +227,42 @@ async def seed_target_companies(
     return {"inserted": inserted, "skipped": skipped, "total": inserted + skipped}
 
 
-# ── Admin — Gmail backfill ────────────────────────────────────────────────────
+# ── Admin — Gmail backfill + poll ─────────────────────────────────────────────
+
+
+def _missing_gmail_env() -> list[str]:
+    """Names of required Gmail env vars that are currently unset.
+
+    Shared by ``/admin/gmail/backfill`` and ``/admin/gmail/poll`` so both
+    endpoints return the same 503 message when the operator hasn't set
+    one of the three required Railway variables.
+    """
+    return [
+        name
+        for name, value in (
+            ("GMAIL_CREDENTIALS_JSON", settings.gmail_credentials_json),
+            ("GMAIL_REFRESH_TOKEN", settings.gmail_refresh_token),
+            ("GEMINI_API_KEY", settings.gemini_api_key),
+        )
+        if not value
+    ]
+
+
+def _build_gmail_runtime() -> tuple[Any, Any]:
+    """Construct GmailClient + EmailClassifier from settings.
+
+    Lazy-imports the SDK-touching modules so test setups that monkeypatch
+    ``google.genai`` don't have to fight import order.
+    """
+    from job_assist.gmail.classifier import EmailClassifier
+    from job_assist.gmail.client import GmailClient
+
+    gmail = GmailClient(
+        credentials_json=settings.gmail_credentials_json,
+        refresh_token=settings.gmail_refresh_token,
+    )
+    classifier = EmailClassifier(api_key=settings.gemini_api_key)
+    return gmail, classifier
 
 
 @app.post("/admin/gmail/backfill")
@@ -248,15 +283,7 @@ async def gmail_backfill(
     TODO: add authentication before exposing this endpoint publicly.
           Currently dev-mode only — single-user deployment.
     """
-    missing = [
-        name
-        for name, value in (
-            ("GMAIL_CREDENTIALS_JSON", settings.gmail_credentials_json),
-            ("GMAIL_REFRESH_TOKEN", settings.gmail_refresh_token),
-            ("GEMINI_API_KEY", settings.gemini_api_key),
-        )
-        if not value
-    ]
+    missing = _missing_gmail_env()
     if missing:
         raise HTTPException(
             status_code=503,
@@ -267,16 +294,42 @@ async def gmail_backfill(
         )
 
     from job_assist.gmail.backfill import run_backfill
-    from job_assist.gmail.classifier import EmailClassifier
-    from job_assist.gmail.client import GmailClient
 
-    gmail = GmailClient(
-        credentials_json=settings.gmail_credentials_json,
-        refresh_token=settings.gmail_refresh_token,
-    )
-    classifier = EmailClassifier(api_key=settings.gemini_api_key)
-
+    gmail, classifier = _build_gmail_runtime()
     report = await run_backfill(db, gmail, classifier, days_back=days)
+    return report.model_dump(mode="json")
+
+
+@app.post("/admin/gmail/poll")
+async def gmail_poll(db: DbSession) -> dict[str, Any]:
+    """Poll Gmail for messages received since the most recent outcome_event.
+
+    Designed to be called every 15 minutes by the ``gmail-poll`` workflow.
+    Idempotent at the message level (same ``email_message_id`` pre-check
+    as the backfill). The watermark is derived from
+    ``MAX(outcome_event.received_at)`` on every call — no separate state
+    table to drift out of sync.
+
+    Returns 503 with a clear hint when any required env var is missing
+    (same contract as ``/admin/gmail/backfill``).
+
+    TODO: add authentication before exposing this endpoint publicly.
+          Currently dev-mode only — single-user deployment.
+    """
+    missing = _missing_gmail_env()
+    if missing:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Gmail poll unavailable: missing env var(s) {missing}. "
+                "Set these on Railway (or .env locally) and retry."
+            ),
+        )
+
+    from job_assist.gmail.backfill import run_poll
+
+    gmail, classifier = _build_gmail_runtime()
+    report = await run_poll(db, gmail, classifier)
     return report.model_dump(mode="json")
 
 
