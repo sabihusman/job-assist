@@ -405,6 +405,60 @@ async def cron_status() -> dict[str, str]:
     return {"status": "ok"}
 
 
+# ── Company enrichment (PR #27) ───────────────────────────────────────────────
+
+
+@app.post("/enrichment/companies/sweep", tags=["enrichment"])
+async def sweep_companies_endpoint(db: DbSession) -> dict[str, Any]:
+    """Run ``sweep_companies`` over every ``target_company`` row.
+
+    Called by the daily ``enrich-companies`` GitHub Actions cron at
+    07:00 UTC (one hour after the daily ingest at 06:00 UTC, so newly
+    discovered target_companies have time to land first).
+
+    No auth — same trust model as the rest of ``/admin/*`` and
+    ``/operator/*`` (single-user dev mode). Add a shared-secret guard
+    across the whole admin surface in a future PR.
+    """
+    from job_assist.services.company_enrichment import sweep_companies
+
+    summary = await sweep_companies(db)
+    return {
+        "total": summary.total,
+        "enriched": summary.enriched,
+        "skipped": summary.skipped,
+        "no_domain": summary.no_domain,
+        "errors": summary.errors,
+        "exhausted": summary.exhausted,
+        "error_details": summary.error_details,
+    }
+
+
+@app.post("/enrichment/companies/{company_id}/retry", tags=["enrichment"])
+async def retry_company_enrichment_endpoint(
+    company_id: uuid.UUID,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Reset ``enrichment_attempt_count`` for one company and re-run enrichment.
+
+    For manual recovery from the ``exhausted`` state. Also clears any
+    cached description / enriched_at so the next call is a fresh attempt.
+    """
+    from job_assist.services.company_enrichment import reset_attempts_and_retry
+
+    result = await reset_attempts_and_retry(db, company_id)
+    if result.status == "not_found":
+        raise HTTPException(
+            status_code=404,
+            detail=f"target_company id={company_id} not found",
+        )
+    return {
+        "status": result.status,
+        "company_id": result.company_id,
+        "error": result.error,
+    }
+
+
 # ── Logging setup ─────────────────────────────────────────────────────────────
 
 

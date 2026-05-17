@@ -36,6 +36,20 @@ class TargetCompany(Base):
     role_filter: Mapped[str | None] = mapped_column(String(50), nullable=True)
     domain: Mapped[str | None] = mapped_column(String, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ── Enrichment (PR #27) ─────────────────────────────────────────────────
+    # One-sentence description from Gemini Flash Lite. Set once and treated
+    # as cached forever; the sweep skips rows where this is NOT NULL.
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Last enrichment error string (NULL on success). Capped at ~500 chars
+    # in the service layer so a long stack trace doesn't blow up the row.
+    enrichment_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Failed attempts since last success. The sweep refuses to retry after
+    # ``settings.company_enrich_max_attempts`` until a manual /retry call
+    # resets it to 0.
+    enrichment_attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

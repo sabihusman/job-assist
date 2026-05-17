@@ -1,0 +1,81 @@
+name: Enrich companies
+
+# Fires once a day at 07:00 UTC against POST /enrichment/companies/sweep.
+# Runs an hour after the daily ingest (06:00 UTC) so any new
+# target_company rows added overnight have already landed and can be
+# enriched in the same pass. Sequential, idempotent (description is
+# cached forever; the sweep skips rows with description IS NOT NULL).
+#
+# Secrets required (already configured in repo settings):
+#   API_URL — Railway production base URL. Same secret used by every
+#             other workflow that hits the API.
+#
+# Pause: Actions tab → Enrich companies → "···" → Disable workflow.
+# Manual trigger: Actions tab → Enrich companies → Run workflow.
+
+on:
+  schedule:
+    # 07:00 UTC = 01:00 US Central — one hour after the daily ingest.
+    - cron: '0 7 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# A second cron firing while one is still going gets queued, not cancelled.
+# The sweep is idempotent so an overlap would be safe anyway, but queueing
+# keeps the logs cleaner.
+concurrency:
+  group: enrich-companies
+  cancel-in-progress: false
+
+jobs:
+  enrich:
+    name: Run enrichment sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_URL: ${{ secrets.API_URL }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Trigger enrichment sweep
+        id: sweep
+        run: |
+          # Body and status captured separately so non-200 still gets logged
+          # before the step exits 1.
+          status=$(curl -sS --max-time 540 \
+            -o /tmp/enrich.json -w "%{http_code}" \
+            -X POST "$API_URL/enrichment/companies/sweep")
+
+          if [ "$status" != "200" ]; then
+            echo "Sweep failed with HTTP $status"
+            cat /tmp/enrich.json
+            exit 1
+          fi
+
+          echo "Sweep succeeded:"
+          python3 -m json.tool < /tmp/enrich.json
+
+      - name: Surface counters in the workflow summary
+        if: always() && hashFiles('/tmp/enrich.json') != ''
+        run: |
+          python3 <<'PYEOF' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          try:
+              d = json.loads(pathlib.Path("/tmp/enrich.json").read_text())
+          except Exception as exc:
+              print(f"## Enrichment sweep\n\nCould not parse response: {exc}")
+              raise SystemExit(0)
+          print("## Enrichment sweep")
+          print()
+          print(f"- Total: **{d.get('total', 0)}**")
+          print(f"- Enriched (new): **{d.get('enriched', 0)}**")
+          print(f"- Skipped (already enriched): {d.get('skipped', 0)}")
+          print(f"- No domain: {d.get('no_domain', 0)}")
+          print(f"- Errors: {d.get('errors', 0)}")
+          print(f"- Exhausted (need /retry): {d.get('exhausted', 0)}")
+          for err in d.get("error_details", []):
+              print(f"  - `{err.get('company_id','?')}` → `{err.get('error','?')}`")
+          PYEOF
