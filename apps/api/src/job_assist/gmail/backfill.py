@@ -57,8 +57,7 @@ class _GmailClientLike(Protocol):
 
     async def list_message_ids(
         self,
-        after: datetime,
-        before: datetime | None = ...,
+        query: str,
         max_results_per_page: int = ...,
     ) -> list[str]: ...
 
@@ -133,33 +132,60 @@ def _is_job_related(outcome_type: str) -> bool:
     return outcome_type not in ("unrelated", "unclassified")
 
 
-# ── Orchestrator ─────────────────────────────────────────────────────────────
+# ── Query builders ────────────────────────────────────────────────────────────
 
 
-async def run_backfill(
+def build_date_range_query(after: datetime, before: datetime | None = None) -> str:
+    """Day-granular Gmail search query (used by backfill).
+
+    Returns e.g. ``"after:2026/05/15 before:2026/05/17"``. Day granularity
+    is enough for a multi-month historical sweep; the orchestrator's
+    per-message idempotency check filters out anything already classified.
+    """
+    parts = [f"after:{after.strftime('%Y/%m/%d')}"]
+    if before is not None:
+        parts.append(f"before:{before.strftime('%Y/%m/%d')}")
+    return " ".join(parts)
+
+
+def build_after_query(after: datetime) -> str:
+    """Second-granular Gmail search query (used by poll).
+
+    Gmail's ``after:`` operator accepts a Unix timestamp directly. The
+    poll uses this so the 15-minute cron doesn't drag in a full day's
+    worth of messages on every run.
+    """
+    return f"after:{int(after.timestamp())}"
+
+
+# ── Orchestrator core ────────────────────────────────────────────────────────
+
+
+async def _run_email_ingest(
     session: AsyncSession,
     gmail: _GmailClientLike,
     classifier: _ClassifierLike,
     *,
-    days_back: int = 60,
+    query: str,
     on_progress: Callable[[int, int], Awaitable[None]] | None = None,
 ) -> BackfillReport:
-    """Run a Gmail backfill ending at ``now()``, ``days_back`` wide."""
-    window_end = datetime.now(tz=UTC)
-    window_start = window_end - timedelta(days=days_back)
+    """Shared orchestrator. Lists IDs via *query*, classifies, inserts.
 
-    report = BackfillReport(
-        days_back=days_back,
-        window_start=window_start,
-        window_end=window_end,
-    )
+    Both ``run_backfill`` and ``run_poll`` delegate here so the
+    fetch / pre-filter / classify / link / insert / flush body is
+    single-sourced.
+    """
+    report = BackfillReport()
 
-    message_ids = await gmail.list_message_ids(after=window_start, before=window_end)
+    message_ids = await gmail.list_message_ids(query=query)
     report.message_ids_listed = len(message_ids)
     logger.info(
-        "gmail.backfill.listed",
-        extra={"days_back": days_back, "count": report.message_ids_listed},
+        "gmail.ingest.listed",
+        extra={"query": query, "count": report.message_ids_listed},
     )
+
+    if not message_ids:
+        return report
 
     # ── Pre-load already-classified message IDs in this window ───────────────
     existing_rows = (
@@ -186,7 +212,7 @@ async def run_backfill(
         try:
             email = await gmail.get_message(msg_id)
         except Exception:
-            logger.exception("gmail.backfill.fetch_failed", extra={"message_id": msg_id})
+            logger.exception("gmail.ingest.fetch_failed", extra={"message_id": msg_id})
             report.fetch_errors += 1
             if on_progress is not None:
                 await on_progress(idx, report.message_ids_listed)
@@ -205,7 +231,7 @@ async def run_backfill(
         try:
             verdict = await classifier.classify(email)
         except Exception:
-            logger.exception("gmail.backfill.classify_failed", extra={"message_id": msg_id})
+            logger.exception("gmail.ingest.classify_failed", extra={"message_id": msg_id})
             report.classifier_errors += 1
             if on_progress is not None:
                 await on_progress(idx, report.message_ids_listed)
@@ -253,4 +279,75 @@ async def run_backfill(
             await on_progress(idx, report.message_ids_listed)
 
     await session.commit()
+    return report
+
+
+# ── Public wrappers ──────────────────────────────────────────────────────────
+
+
+async def run_backfill(
+    session: AsyncSession,
+    gmail: _GmailClientLike,
+    classifier: _ClassifierLike,
+    *,
+    days_back: int = 60,
+    on_progress: Callable[[int, int], Awaitable[None]] | None = None,
+) -> BackfillReport:
+    """Run a Gmail backfill ending at ``now()``, ``days_back`` wide."""
+    window_end = datetime.now(tz=UTC)
+    window_start = window_end - timedelta(days=days_back)
+    query = build_date_range_query(window_start, window_end)
+
+    report = await _run_email_ingest(
+        session, gmail, classifier, query=query, on_progress=on_progress
+    )
+    # Stamp the window descriptors on the way out so the existing endpoint
+    # response shape stays unchanged for the backfill caller.
+    report.days_back = days_back
+    report.window_start = window_start
+    report.window_end = window_end
+    return report
+
+
+# Default lookback when ``outcome_event`` is empty (e.g. fresh deploy before
+# the operator has run a backfill). Gmail's ``after:`` operator handles
+# arbitrary lookback so this can grow without changing the protocol.
+POLL_BOOTSTRAP_LOOKBACK = timedelta(hours=24)
+
+
+async def run_poll(
+    session: AsyncSession,
+    gmail: _GmailClientLike,
+    classifier: _ClassifierLike,
+) -> BackfillReport:
+    """Poll Gmail for new messages since the most recent classified outcome.
+
+    Watermark = ``MAX(outcome_event.received_at)``, falling back to
+    ``now() - POLL_BOOTSTRAP_LOOKBACK`` (24 h) when the table is empty.
+    The watermark is *derived* from data every run — no separate state
+    table to drift out of sync.
+    """
+    from sqlalchemy import func
+
+    watermark_row = await session.execute(select(func.max(OutcomeEvent.received_at)))
+    watermark: datetime | None = watermark_row.scalar_one_or_none()
+    if watermark is None:
+        watermark = datetime.now(tz=UTC) - POLL_BOOTSTRAP_LOOKBACK
+    elif watermark.tzinfo is None:
+        # Defensive: timestamps in DB are TIMESTAMP WITH TIME ZONE, but if a
+        # naive value ever lands here, treat it as UTC rather than crash.
+        watermark = watermark.replace(tzinfo=UTC)
+
+    query = build_after_query(watermark)
+    report = await _run_email_ingest(session, gmail, classifier, query=query)
+    report.watermark_used = watermark
+
+    # Re-query MAX(received_at) after the run so the operator can see how
+    # far the watermark advanced (or didn't).
+    new_watermark = (
+        await session.execute(select(func.max(OutcomeEvent.received_at)))
+    ).scalar_one_or_none()
+    if new_watermark is not None and new_watermark.tzinfo is None:
+        new_watermark = new_watermark.replace(tzinfo=UTC)
+    report.watermark_advanced_to = new_watermark
     return report

@@ -1,0 +1,85 @@
+name: Gmail poll
+
+# Fires every 15 minutes against POST /admin/gmail/poll. The endpoint
+# queries Gmail for messages received since MAX(outcome_event.received_at),
+# classifies each with Gemini Flash Lite, inserts one outcome_event per
+# message. Idempotent — re-running over the same window adds zero rows.
+#
+# Secrets required (already configured in repo settings):
+#   API_URL — Railway production base URL. Same secret used by
+#             deploy.yml and ingest-daily.yml.
+#
+# Pause: Actions tab → Gmail poll → "···" → Disable workflow.
+# Manual trigger: Actions tab → Gmail poll → Run workflow.
+
+on:
+  schedule:
+    # Every 15 minutes. ~96 runs / day. Most polls find 0 new mail and
+    # never hit Gemini; on a busy day the per-poll Gemini count tops out
+    # at ~15 calls (free-tier RPM cap).
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Don't queue parallel firings. A late poll waits for the in-flight one;
+# if it's still running at the next 15-min tick, that one is skipped.
+# The watermark on the next successful poll catches up automatically.
+concurrency:
+  group: gmail-poll
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    name: Run Gmail poll
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_URL: ${{ secrets.API_URL }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Trigger Gmail poll
+        id: poll
+        run: |
+          # Capture body and status code separately so a non-200 response
+          # still gets logged before the step exits 1.
+          status=$(curl -sS --max-time 540 \
+            -o /tmp/gmail_poll.json -w "%{http_code}" \
+            -X POST "$API_URL/admin/gmail/poll")
+
+          if [ "$status" != "200" ]; then
+            echo "Poll failed with HTTP $status"
+            cat /tmp/gmail_poll.json
+            exit 1
+          fi
+
+          echo "Poll succeeded:"
+          python3 -m json.tool < /tmp/gmail_poll.json
+
+      - name: Surface counters in the workflow summary
+        if: always() && hashFiles('/tmp/gmail_poll.json') != ''
+        run: |
+          python3 <<'PYEOF' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          try:
+              d = json.loads(pathlib.Path("/tmp/gmail_poll.json").read_text())
+          except Exception as exc:
+              print(f"## Gmail poll\n\nCould not parse response: {exc}")
+              raise SystemExit(0)
+          listed   = d.get("message_ids_listed", 0)
+          inserted = d.get("outcome_events_inserted", 0)
+          job_rel  = d.get("classified_job_related", 0)
+          unrel    = d.get("classified_unrelated", 0)
+          wm_used  = d.get("watermark_used") or "(none — bootstrap 24h)"
+          wm_to    = d.get("watermark_advanced_to") or "(unchanged)"
+          print("## Gmail poll")
+          print()
+          print(f"- Message IDs listed: **{listed}**")
+          print(f"- New outcome_event rows: **{inserted}**")
+          print(f"- Classified job-related: {job_rel}  unrelated: {unrel}")
+          print(f"- Watermark used: `{wm_used}`")
+          print(f"- Watermark advanced to: `{wm_to}`")
+          PYEOF

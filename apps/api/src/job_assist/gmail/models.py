@@ -47,11 +47,23 @@ class ClassificationResult(BaseModel):
 
 
 class BackfillReport(BaseModel):
-    """Counters returned by ``run_backfill`` for the admin endpoint."""
+    """Counters returned by ``run_backfill`` / ``run_poll`` for the admin endpoints.
 
-    days_back: int
-    window_start: datetime
-    window_end: datetime
+    Window descriptors (``days_back``, ``window_start``, ``window_end``) are
+    populated by ``run_backfill``; watermark descriptors
+    (``watermark_used``, ``watermark_advanced_to``) are populated by
+    ``run_poll``. Both shapes share the same counter set so the orchestrator
+    body is single-sourced.
+    """
+
+    # Backfill window — None on poll runs.
+    days_back: int | None = None
+    window_start: datetime | None = None
+    window_end: datetime | None = None
+    # Poll watermark — None on backfill runs.
+    watermark_used: datetime | None = None
+    watermark_advanced_to: datetime | None = None
+    # Counters (always populated).
     message_ids_listed: int = 0
     fetched: int = 0
     skipped_prefilter: int = 0

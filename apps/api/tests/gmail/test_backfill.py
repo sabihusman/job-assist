@@ -36,7 +36,12 @@ _NEEDS_DB = pytest.mark.skipif(
 
 
 class _FakeGmail:
-    """Stand-in for GmailClient. Holds a list of RawEmails to serve."""
+    """Stand-in for GmailClient. Holds a list of RawEmails to serve.
+
+    Records every Gmail search query passed to ``list_message_ids`` so
+    poll tests can assert the watermark turned into the right ``after:``
+    parameter.
+    """
 
     def __init__(
         self,
@@ -48,13 +53,14 @@ class _FakeGmail:
         self._order = [e.message_id for e in emails]
         self._fail_ids = fail_ids or set()
         self.get_calls: list[str] = []
+        self.list_queries: list[str] = []
 
     async def list_message_ids(
         self,
-        after: datetime,
-        before: datetime | None = None,
+        query: str,
         max_results_per_page: int = 500,
     ) -> list[str]:
+        self.list_queries.append(query)
         return list(self._order)
 
     async def get_message(self, message_id: str) -> RawEmail:

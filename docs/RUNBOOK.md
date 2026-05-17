@@ -149,6 +149,41 @@ of truth for the operator's target list — edit it and re-POST to
 midnight-Central run lands the prior day's net-new postings before the
 operator's morning triage pass.
 
+### Continuous Gmail polling
+
+The `Gmail poll` GitHub Actions workflow (`.github/workflows/gmail-poll.yml`)
+fires `POST /admin/gmail/poll` every 15 minutes. The endpoint queries
+Gmail for messages received since `MAX(outcome_event.received_at)`,
+classifies new ones with Gemini Flash Lite, and inserts one
+`outcome_event` per message. Idempotent at the message level — the
+`email_message_id` pre-check prevents duplicate inserts even if two
+polls overlap.
+
+| | |
+|---|---|
+| **Schedule** | `*/15 * * * *` UTC (≈ 96 runs/day) |
+| **Watermark** | `MAX(outcome_event.received_at)`; falls back to `now() - 24h` when the table is empty (fresh deploy before any backfill has run) |
+| **Job timeout** | 10 minutes |
+| **Concurrency** | `gmail-poll` — back-to-back firings queue rather than overlap; a long-running poll skips the next 15-min tick and the watermark catches up on the run after |
+| **Failure mode** | Workflow exits non-zero on any 4xx/5xx from the endpoint; GitHub fires the standard "workflow failed" email |
+| **Cost** | Free-tier Gemini: 15 RPM / 1,500 RPD. Most polls find 0 new mail and never hit Gemini. Even at the daily ceiling (~15 messages × 96 polls = ~1,440 calls), well inside the free quota → effectively $0/day |
+
+**Manual trigger:** Actions tab → **Gmail poll** → "Run workflow"
+(`workflow_dispatch`). Safe to fire ad-hoc; the watermark + idempotency
+contract handle re-runs cleanly.
+
+**Pause the cron:** Actions tab → **Gmail poll** → "···" menu →
+"Disable workflow". Watermark stays put while paused; when re-enabled,
+the next poll picks up wherever it left off — Gmail's `after:` operator
+accepts arbitrary lookback.
+
+**Why a data-derived watermark, not a state row?** The most recent
+classified email's `received_at` IS the natural watermark. Reading it
+on every poll keeps the system drift-resistant: even if a run partially
+commits and crashes, the next poll's watermark reflects exactly what
+made it into the DB. One less table, one less migration, one fewer
+thing to keep in sync.
+
 ### Inspecting state
 
 Supabase dashboard → SQL editor:
