@@ -38,7 +38,7 @@ Owns all unattended work. Hosted on Railway or Fly.io.
 
 - **Adapters** — One per ATS (Greenhouse, Lever, Ashby, JSearch). Normalize to `JobPosting`.
 - **Dedupe** — Hash-based pre-filter + pgvector similarity for fuzzy matches.
-- **Triage** — Hard rules first (geo, banned verbs, ≥3-rejection flag). Embedding similarity against profile. LLM verdict on top-N only.
+- **Triage** — Three layers: (1) hard rules — closed channel, role filter, staffing firm, geo, salary floor, applicant cap (PR #23, see [ADR-008](DECISIONS.md#adr-008--hard-rule-filter--rules-priority-and-defaults)); (2) embedding similarity against profile (Week 3); (3) LLM verdict on top-N only (Week 3-4).
 - **Digest** — Daily Resend email with top 8 ranked postings.
 - **Gmail** — OAuth, backfill of historical applications, continuous polling for outcomes.
 - **RAG** — Self-hosted Q&A over JDs, emails, notes. Replaces NotebookLM.

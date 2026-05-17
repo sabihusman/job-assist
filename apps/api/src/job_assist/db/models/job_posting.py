@@ -83,6 +83,10 @@ class JobPosting(Base):
     should_embed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
+    # Public-applicant count from ATS where exposed (LinkedIn-style). NULL is
+    # the dominant state today — no Greenhouse/Lever/Ashby endpoint surfaces
+    # it. The hard-rule filter tolerates NULL by skipping the cap check.
+    applicant_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("content_hash", name="idx_job_posting_content_hash"),
