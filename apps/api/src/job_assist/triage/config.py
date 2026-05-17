@@ -1,0 +1,65 @@
+"""Default thresholds for the hard-rule filter.
+
+These live here for now so the rule code stays free of magic numbers. They
+will migrate to an ``operator_profile`` table in PR #29 — at which point
+``apply_hard_rules`` will receive an ``OperatorProfile`` row in place of
+this dataclass and the defaults below become the seed values for that row.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class HardRuleConfig:
+    """Operator-tunable thresholds applied by ``apply_hard_rules``.
+
+    Frozen so each instance is hashable and safe to reuse across requests.
+    """
+
+    # Salary floor in USD/year. Postings whose ``salary_max`` is below this
+    # value (when both currency=USD and period=annual) are dropped. ``None``
+    # values on the posting are tolerated.
+    salary_floor_usd: int = 85_000
+
+    # Geographic whitelist matched case-insensitively against the posting's
+    # ``location_raw`` and the ``locations_normalized`` entries. Any single
+    # hit anywhere in the location string passes the rule.
+    geo_whitelist: tuple[str, ...] = field(
+        default=(
+            "Remote",
+            "Des Moines",
+            "NYC",
+            "New York",
+            "Austin",
+            "San Francisco",
+            "Bay Area",
+            "Seattle",
+            "Minneapolis",
+            "Chicago",
+        )
+    )
+
+    # Postings with more than this many declared applicants are dropped.
+    # No ATS adapter populates ``applicant_count`` today; the rule is a
+    # no-op for those rows.
+    applicant_cap: int = 150
+
+    # Substring blocklist for staffing-firm / agency canonical company
+    # names. Match is case-insensitive substring against
+    # ``target_company.name`` and the posting's ``canonical_company_name``.
+    staffing_firm_blocklist: tuple[str, ...] = field(
+        default=(
+            "Robert Half",
+            "Aerotek",
+            "Insight Global",
+            "Apex Systems",
+            "Beacon Hill",
+            "TEKsystems",
+            "Modis",
+            "Randstad",
+            "Kforce",
+            "Adecco",
+        )
+    )

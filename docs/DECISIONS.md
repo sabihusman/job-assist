@@ -127,3 +127,39 @@ Each ADR captures a decision, its context, and the alternatives considered. Deci
 1. Portfolio cleanliness — can be shared / demoed without exposing Juno.
 2. Resource isolation — schema migrations don't risk Juno data.
 3. Free tier covers both projects; no cost penalty.
+
+---
+
+## ADR-008 · Hard-rule filter — rules, priority, and defaults
+
+**Status:** Accepted (PR #23)
+
+**Context:** ADR-004 established that hard rules run before any LLM or embedding scoring. This ADR fixes the *specific* rules, their priority order, and the default thresholds that ship in PR #23.
+
+**Decision:** Six rules, evaluated in this priority order. The first to fail short-circuits the chain:
+
+1. **closed_channel** — operator has flagged this company as off-limits.
+2. **role_filter** — company has `role_filter='non_pm_only'` and posting `role_family ∈ {product_management, product_owner}`.
+3. **staffing_firm** — canonical company name (or target_company name) matches the case-insensitive substring blocklist.
+4. **geo_whitelist** — the posting's `location_raw` plus every `locations_normalized[*]` city/region fails to intersect the whitelist.
+5. **salary_floor** — `salary_max` is known *and* `salary_period=annual` *and* currency is USD (or unset) *and* below the floor.
+6. **applicant_cap** — `applicant_count` is known and exceeds the cap.
+
+Defaults (the values that seed `HardRuleConfig`):
+
+| Threshold | Default |
+|---|---|
+| `salary_floor_usd` | `85_000` |
+| `applicant_cap` | `150` |
+| `geo_whitelist` | `Remote`, `Des Moines`, `NYC`, `New York`, `Austin`, `San Francisco`, `Bay Area`, `Seattle`, `Minneapolis`, `Chicago` |
+| `staffing_firm_blocklist` | Robert Half, Aerotek, Insight Global, Apex Systems, Beacon Hill, TEKsystems, Modis, Randstad, Kforce, Adecco |
+
+**Rationale (priority order):**
+- `closed_channel` and `role_filter` are operator-set company-level signals; cheapest checks, run first.
+- `staffing_firm` is a substring test that doesn't require any posting-content parsing.
+- `geo_whitelist` runs before `salary_floor` because most postings have a location but only some have parseable comp.
+- `salary_floor` and `applicant_cap` both **tolerate unknown values** — they only fire when the data is present and unambiguous, so a missing field never becomes a false negative.
+
+**Schema deviation from the PR #23 spec:** the spec sketched `apply_hard_rules` reading `target_company.is_closed_channel` directly. Closed-channel state already lives in its own table (`closed_channel`) with a `unsealed_at IS NULL` semantic for "currently sealed", so denormalising it onto `target_company` would create two sources of truth that inevitably drift. Instead, `apply_hard_rules` takes the already-fetched `ClosedChannel | None` as a parameter — the future triage cron does the query.
+
+**Migration path:** thresholds will move to an `operator_profile` table in PR #29 so the operator can tune them from the web UI without redeploying. The current dataclass becomes the seed values for that row.
