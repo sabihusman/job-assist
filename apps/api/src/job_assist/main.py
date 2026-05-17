@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from job_assist.config import settings
 from job_assist.db.session import get_db
+from job_assist.schemas.operator_profile import OperatorProfileUpdate
 
 logger = structlog.get_logger(__name__)
 
@@ -331,6 +332,68 @@ async def gmail_poll(db: DbSession) -> dict[str, Any]:
     gmail, classifier = _build_gmail_runtime()
     report = await run_poll(db, gmail, classifier)
     return report.model_dump(mode="json")
+
+
+# ── Operator profile ──────────────────────────────────────────────────────────
+
+
+@app.get("/operator/profile", tags=["operator"])
+async def get_operator_profile(db: DbSession) -> dict[str, Any]:
+    """Return the singleton operator profile (id=1).
+
+    500 if the row is missing — that would mean the seeding migration
+    didn't run, which is a deployment bug rather than a runtime case.
+    """
+    from sqlalchemy import select
+
+    from job_assist.db.models import OperatorProfile
+    from job_assist.schemas.operator_profile import OperatorProfileRead
+
+    row = (
+        await db.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=500,
+            detail="operator_profile id=1 is missing — seeding migration did not run",
+        )
+    return OperatorProfileRead.model_validate(row).model_dump(mode="json")
+
+
+@app.put("/operator/profile", tags=["operator"])
+async def update_operator_profile(
+    payload: OperatorProfileUpdate,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Partial update of the singleton operator profile (id=1).
+
+    Only fields present in the request body are touched. Validators on
+    ``OperatorProfileUpdate`` strip / dedupe list fields and reject
+    negative thresholds before the SQL UPDATE fires.
+
+    FastAPI does the body validation itself — a 422 with a clean JSON
+    error array fires automatically when a field validator raises.
+    """
+    from sqlalchemy import select
+
+    from job_assist.db.models import OperatorProfile
+    from job_assist.schemas.operator_profile import OperatorProfileRead
+
+    row = (
+        await db.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=500,
+            detail="operator_profile id=1 is missing — seeding migration did not run",
+        )
+
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        setattr(row, key, value)
+
+    await db.commit()
+    await db.refresh(row)
+    return OperatorProfileRead.model_validate(row).model_dump(mode="json")
 
 
 # ── Admin — cron status ────────────────────────────────────────────────────────
