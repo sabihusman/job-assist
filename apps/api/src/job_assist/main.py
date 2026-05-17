@@ -62,6 +62,56 @@ async def root() -> dict[str, str]:
 # ── Admin — ingestion ─────────────────────────────────────────────────────────
 
 
+# ATS sources the daily cron knows how to ingest. Workday rows are filtered
+# out — that adapter doesn't exist yet (Week 2+ roadmap).
+_INGESTABLE_ATS = ("greenhouse", "lever", "ashby")
+
+
+@app.get("/admin/ingest/plan")
+async def get_ingest_plan(db: DbSession) -> list[dict[str, str]]:
+    """List ``(ats, handle)`` pairs the daily cron should ingest.
+
+    Filters to rows where:
+      * ``ats`` is one of the three currently-supported adapters
+      * ``ats_handle IS NOT NULL`` (we can't ingest without a handle)
+      * No active ``closed_channel`` row exists for the target_company
+        (``unsealed_at IS NULL`` denotes "currently sealed")
+
+    Ordered by ``tier ASC, name ASC`` so Tier-1 companies ingest first
+    and the most-important data lands even if later runs in the same
+    cron invocation fail.
+
+    Schema note: spec sketched ``target_company.is_closed_channel`` as a
+    boolean column. Closed-channel state already lives in its own table
+    (single source of truth, with an ``unsealed_at`` audit field) —
+    denormalising it onto ``target_company`` would create drift between
+    two stores. Same pattern as PR #23's hard-rule filter.
+    """
+    from sqlalchemy import select
+
+    from job_assist.db.models.closed_channel import ClosedChannel
+    from job_assist.db.models.target_company import TargetCompany
+
+    active_closed = (
+        select(ClosedChannel.id)
+        .where(ClosedChannel.target_company_id == TargetCompany.id)
+        .where(ClosedChannel.unsealed_at.is_(None))
+        .exists()
+    )
+
+    rows = (
+        await db.execute(
+            select(TargetCompany.ats, TargetCompany.ats_handle)
+            .where(TargetCompany.ats.in_(_INGESTABLE_ATS))
+            .where(TargetCompany.ats_handle.isnot(None))
+            .where(~active_closed)
+            .order_by(TargetCompany.tier.asc(), TargetCompany.name.asc())
+        )
+    ).all()
+
+    return [{"ats": str(ats), "handle": str(handle)} for ats, handle in rows]
+
+
 @app.post("/admin/ingest/{ats}/{handle}")
 async def trigger_ingest(
     ats: str,
