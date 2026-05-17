@@ -36,6 +36,16 @@ class Settings(BaseSettings):
     gemini_api_key: str = Field(default="")
     anthropic_api_key: str = Field(default="")
 
+    # Company enrichment (PR #27) — logo.dev publishable token + Gemini
+    # model id for the one-sentence description. The token is a public
+    # client-side identifier; storing it in the DB-fronting service is OK.
+    logo_dev_token: str = Field(default="")
+    company_desc_model: str = Field(default="gemini-2.5-flash-lite")
+    # After this many failures the sweep skips the row until /retry is
+    # called explicitly. Keeps a flaky upstream from burning the whole
+    # quota on the same dead handle every day.
+    company_enrich_max_attempts: int = Field(default=3)
+
     # Gmail
     gmail_credentials_path: str = Field(default="./credentials.json")
     gmail_token_path: str = Field(default="./token.json")
