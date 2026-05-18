@@ -528,9 +528,7 @@ async def list_postings(
         # lower() needs an explicit CAST to text before it can run against it.
         # NB: must use sqlalchemy.cast(...) — func.cast(...) renders nothing.
         lowered = [v.lower() for v in role_family]
-        where_clauses.append(
-            func.lower(cast(JobPosting.role_family, Text)).in_(lowered)
-        )
+        where_clauses.append(func.lower(cast(JobPosting.role_family, Text)).in_(lowered))
     if target_company_id is not None:
         where_clauses.append(JobPosting.target_company_id == target_company_id)
     if ats:
