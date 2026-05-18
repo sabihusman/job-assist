@@ -45,6 +45,7 @@ from job_assist.adapters.normalization import (
     compute_content_hash,
     detect_role_family,
     detect_seniority,
+    normalize_org_field,
     normalize_title,
     parse_location,
     strip_html,
@@ -159,6 +160,11 @@ class LeverAdapter:
         seniority = detect_seniority(norm_title)
         role_fam = detect_role_family(norm_title)
 
+        # Lever exposes department + team as siblings of location under
+        # `categories`. Both are string-or-null per Lever's docs.
+        department = normalize_org_field(categories.get("department"))
+        team = normalize_org_field(categories.get("team"))
+
         # ── Timestamps ──────────────────────────────────────────────────────
         posted_at: datetime | None = None
         raw_created = job.get("createdAt")
@@ -187,6 +193,8 @@ class LeverAdapter:
             last_seen_at=now,
             seniority_level=seniority,
             role_family=role_fam,
+            department=department,
+            team=team,
             ats="lever",
             source_job_id=raw.source_job_id,
             source_url=source_url,

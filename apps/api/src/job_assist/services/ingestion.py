@@ -96,6 +96,8 @@ class IngestionService:
                         salary_period=norm.salary_period,
                         seniority_level=norm.seniority_level,
                         role_family=norm.role_family,
+                        department=norm.department,
+                        team=norm.team,
                         jd_text=norm.jd_text,
                         jd_text_hash=norm.jd_text_hash,
                         content_hash=norm.content_hash,
@@ -115,6 +117,13 @@ class IngestionService:
                         job_posting.jd_text_hash = norm.jd_text_hash
                     if target_company is not None and job_posting.target_company_id is None:
                         job_posting.target_company_id = target_company.id
+                    # Self-heal the new department / team columns on re-ingest:
+                    # only fill when the column is currently NULL so we don't
+                    # overwrite a value the operator may have edited by hand.
+                    if job_posting.department is None and norm.department is not None:
+                        job_posting.department = norm.department
+                    if job_posting.team is None and norm.team is not None:
+                        job_posting.team = norm.team
                     postings_updated += 1
 
                 # ── Upsert PostingSource by (ats, source_job_id) ──────────────

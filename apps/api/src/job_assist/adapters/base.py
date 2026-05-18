@@ -36,6 +36,10 @@ class NormalizedPosting(BaseModel):
     salary_period: str = "unknown"  # SalaryPeriod enum value
     seniority_level: str = "unknown"  # SeniorityLevel enum value
     role_family: str = "other"  # RoleFamily enum value
+    # Org-chart strings extracted from the ATS payload. Both nullable —
+    # adapters set None when the source doesn't surface them. PR #28a.
+    department: str | None = None
+    team: str | None = None
     jd_text: str = ""
     jd_text_hash: str = ""  # sha256(jd_text)
     content_hash: str = ""  # sha256(company+title+locations)

@@ -396,6 +396,32 @@ async def update_operator_profile(
     return OperatorProfileRead.model_validate(row).model_dump(mode="json")
 
 
+# ── Admin — backfills ─────────────────────────────────────────────────────────
+
+
+@app.post("/admin/backfill/department-team", tags=["admin"])
+async def backfill_department_team_endpoint(db: DbSession) -> dict[str, int]:
+    """Promote ``department`` / ``team`` from raw_payload to typed columns.
+
+    Idempotent — only rows where both columns are NULL get touched. Safe
+    to call repeatedly; the daily-ingest self-heal in IngestionService
+    also fills these columns naturally on each re-ingest, so the one-shot
+    backfill is mostly useful right after PR #28a's migration lands.
+
+    TODO: add authentication before exposing this endpoint publicly.
+          Currently dev-mode only — single-user deployment.
+    """
+    from job_assist.services.posting_backfill import backfill_department_team
+
+    report = await backfill_department_team(db)
+    return {
+        "candidates": report.candidates,
+        "updated": report.updated,
+        "skipped_no_source": report.skipped_no_source,
+        "skipped_no_data": report.skipped_no_data,
+    }
+
+
 # ── Admin — cron status ────────────────────────────────────────────────────────
 
 

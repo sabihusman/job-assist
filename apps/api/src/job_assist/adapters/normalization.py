@@ -33,6 +33,27 @@ def _expand_abbrevs(title: str) -> str:
     return title
 
 
+def normalize_org_field(raw: str | None) -> str | None:
+    """Cleanup for department / team strings before they hit ``job_posting``.
+
+    Rules (PR #28a):
+      * strip surrounding whitespace
+      * collapse empty-after-strip to ``None``
+      * truncate to 200 chars (defensive; real ATS data is rarely > 50)
+      * preserve case — these are authored values, not classifications
+
+    ``None`` passes through untouched.
+    """
+    if raw is None:
+        return None
+    cleaned = raw.strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > 200:
+        cleaned = cleaned[:200]
+    return cleaned
+
+
 def normalize_title(raw_title: str) -> str:
     """Lowercase + expand abbreviations + collapse whitespace."""
     title = _expand_abbrevs(raw_title)
