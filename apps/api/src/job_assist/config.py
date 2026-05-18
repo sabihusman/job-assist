@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     # quota on the same dead handle every day.
     company_enrich_max_attempts: int = Field(default=3)
 
+    # Division enrichment (PR #28b) — same model + cap defaults as the
+    # company enrichment path. Kept as distinct settings so the operator
+    # can tune them independently (e.g. raise the cap for divisions if a
+    # particular Gemini quirk hits one but not the other).
+    division_desc_model: str = Field(default="gemini-2.5-flash-lite")
+    division_enrich_max_attempts: int = Field(default=3)
+
     # Gmail
     gmail_credentials_path: str = Field(default="./credentials.json")
     gmail_token_path: str = Field(default="./token.json")
