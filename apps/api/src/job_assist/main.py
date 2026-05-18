@@ -485,6 +485,56 @@ async def retry_company_enrichment_endpoint(
     }
 
 
+@app.post("/enrichment/divisions/sweep", tags=["enrichment"])
+async def sweep_divisions_endpoint(db: DbSession) -> dict[str, Any]:
+    """Discover (company, dept, team) tuples + enrich each division.
+
+    Called by the daily ``enrich-divisions`` GitHub Actions cron at
+    08:00 UTC (one hour after enrich-companies). Discovery is idempotent
+    via the ``uq_division_company_dept_team`` UNIQUE NULLS NOT DISTINCT
+    constraint; enrichment is idempotent via the per-row ``description
+    IS NOT NULL`` skip.
+
+    No auth — same trust model as the rest of /admin and /enrichment.
+    TODO: tighten before public exposure.
+    """
+    from job_assist.services.division_enrichment import sweep_divisions
+
+    summary = await sweep_divisions(db)
+    return {
+        "discovered": summary.discovered,
+        "already_existed": summary.already_existed,
+        "total": summary.total,
+        "enriched": summary.enriched,
+        "skipped": summary.skipped,
+        "exhausted": summary.exhausted,
+        "missing_context": summary.missing_context,
+        "errors": summary.errors,
+        "error_details": summary.error_details,
+    }
+
+
+@app.post("/enrichment/divisions/{division_id}/retry", tags=["enrichment"])
+async def retry_division_enrichment_endpoint(
+    division_id: uuid.UUID,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Reset ``enrichment_attempt_count`` for one division and re-run."""
+    from job_assist.services.division_enrichment import reset_attempts_and_retry
+
+    result = await reset_attempts_and_retry(db, division_id)
+    if result.status == "not_found":
+        raise HTTPException(
+            status_code=404,
+            detail=f"division id={division_id} not found",
+        )
+    return {
+        "status": result.status,
+        "division_id": result.division_id,
+        "error": result.error,
+    }
+
+
 # ── Logging setup ─────────────────────────────────────────────────────────────
 
 

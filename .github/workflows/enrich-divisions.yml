@@ -1,0 +1,82 @@
+name: Enrich divisions
+
+# Fires once a day at 08:00 UTC against POST /enrichment/divisions/sweep.
+# Runs one hour after enrich-companies (07:00 UTC) so the parent
+# target_company.description has had a chance to land before the
+# division prompt grounds on it. Discovery is idempotent via the
+# uq_division_company_dept_team unique constraint (NULLS NOT DISTINCT);
+# enrichment is idempotent via the per-row description-already-set skip.
+#
+# Secrets required (already configured in repo settings):
+#   API_URL — Railway production base URL. Same secret used by every
+#             other workflow that hits the API.
+#
+# Pause: Actions tab → Enrich divisions → "···" → Disable workflow.
+# Manual trigger: Actions tab → Enrich divisions → Run workflow.
+
+on:
+  schedule:
+    # 08:00 UTC = 02:00 US Central — one hour after the company sweep.
+    - cron: '0 8 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: enrich-divisions
+  cancel-in-progress: false
+
+jobs:
+  enrich:
+    name: Run division enrichment sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      API_URL: ${{ secrets.API_URL }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Trigger division enrichment sweep
+        id: sweep
+        run: |
+          status=$(curl -sS --max-time 900 \
+            -o /tmp/divisions.json -w "%{http_code}" \
+            -X POST "$API_URL/enrichment/divisions/sweep")
+
+          if [ "$status" != "200" ]; then
+            echo "Sweep failed with HTTP $status"
+            cat /tmp/divisions.json
+            exit 1
+          fi
+
+          echo "Sweep succeeded:"
+          python3 -m json.tool < /tmp/divisions.json
+
+      - name: Surface counters in the workflow summary
+        if: always() && hashFiles('/tmp/divisions.json') != ''
+        run: |
+          python3 <<'PYEOF' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          try:
+              d = json.loads(pathlib.Path("/tmp/divisions.json").read_text())
+          except Exception as exc:
+              print(f"## Division enrichment\n\nCould not parse response: {exc}")
+              raise SystemExit(0)
+          print("## Division enrichment")
+          print()
+          print("### Discovery")
+          print(f"- Newly discovered: **{d.get('discovered', 0)}**")
+          print(f"- Already existed: {d.get('already_existed', 0)}")
+          print()
+          print("### Enrichment")
+          print(f"- Total divisions: **{d.get('total', 0)}**")
+          print(f"- Enriched (new): **{d.get('enriched', 0)}**")
+          print(f"- Skipped (already enriched): {d.get('skipped', 0)}")
+          print(f"- Missing parent context: {d.get('missing_context', 0)}")
+          print(f"- Exhausted (need /retry): {d.get('exhausted', 0)}")
+          print(f"- Errors: {d.get('errors', 0)}")
+          for err in d.get("error_details", []):
+              print(f"  - `{err.get('division_id','?')}` → `{err.get('error','?')}`")
+          PYEOF
