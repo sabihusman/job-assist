@@ -50,6 +50,7 @@ from job_assist.adapters.normalization import (
     compute_content_hash,
     detect_role_family,
     detect_seniority,
+    normalize_org_field,
     normalize_title,
     parse_compensation,
     parse_location,
@@ -187,6 +188,11 @@ class AshbyAdapter:
         seniority = detect_seniority(norm_title)
         role_fam = detect_role_family(norm_title)
 
+        # Ashby surfaces ``department`` and ``team`` as siblings of ``title``
+        # on the job object. Both are plain string-or-null.
+        department = normalize_org_field(job.get("department"))
+        team = normalize_org_field(job.get("team"))
+
         # ── Timestamps ──────────────────────────────────────────────────────
         posted_at: datetime | None = None
         if raw_ts := job.get("publishedAt"):
@@ -218,6 +224,8 @@ class AshbyAdapter:
             last_seen_at=now,
             seniority_level=seniority,
             role_family=role_fam,
+            department=department,
+            team=team,
             ats="ashby",
             source_job_id=raw.source_job_id,
             source_url=source_url,

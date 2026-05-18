@@ -87,6 +87,13 @@ class JobPosting(Base):
     # the dominant state today — no Greenhouse/Lever/Ashby endpoint surfaces
     # it. The hard-rule filter tolerates NULL by skipping the cap check.
     applicant_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Department / team strings extracted by each adapter from its native
+    # payload shape (Greenhouse: departments[0].name; Lever / Ashby:
+    # categories.department + categories.team). Both nullable — most
+    # postings have one, the other, or neither. Indexed (partial) for the
+    # division-discovery query in PR #28b.
+    department: Mapped[str | None] = mapped_column(Text, nullable=True)
+    team: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("content_hash", name="idx_job_posting_content_hash"),
@@ -97,5 +104,17 @@ class JobPosting(Base):
             "idx_job_posting_should_embed",
             "first_seen_at",
             postgresql_where=text("should_embed = true"),
+        ),
+        Index(
+            "ix_job_posting_target_company_department",
+            "target_company_id",
+            "department",
+            postgresql_where=text("department IS NOT NULL"),
+        ),
+        Index(
+            "ix_job_posting_target_company_team",
+            "target_company_id",
+            "team",
+            postgresql_where=text("team IS NOT NULL"),
         ),
     )

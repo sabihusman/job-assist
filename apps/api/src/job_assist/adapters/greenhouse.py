@@ -35,6 +35,7 @@ from job_assist.adapters.normalization import (
     compute_content_hash,
     detect_role_family,
     detect_seniority,
+    normalize_org_field,
     normalize_title,
     parse_location,
     strip_html,
@@ -47,6 +48,7 @@ __all__ = [
     "compute_content_hash",
     "detect_role_family",
     "detect_seniority",
+    "normalize_org_field",
     "normalize_title",
     "parse_location",
     "strip_html",
@@ -122,6 +124,20 @@ class GreenhouseAdapter:
         seniority = detect_seniority(norm_title)
         role_fam = detect_role_family(norm_title)
 
+        # Greenhouse's ``departments`` is a list of {id, name, ...} entries.
+        # Multiple departments per posting is technically allowed by the API
+        # but vanishingly rare in practice — take the first and surface that
+        # as the typed column. The full array stays in raw_payload for any
+        # caller that wants it. Team is not a separate concept on Greenhouse.
+        departments = job.get("departments") or []
+        dept_name: str | None = None
+        if isinstance(departments, list) and departments:
+            first = departments[0]
+            if isinstance(first, dict):
+                dept_name = first.get("name")
+        department = normalize_org_field(dept_name)
+        team = None  # not exposed by Greenhouse
+
         # Timestamps
         posted_at: datetime | None = None
         if raw_ts := job.get("first_published"):
@@ -148,6 +164,8 @@ class GreenhouseAdapter:
             last_seen_at=now,
             seniority_level=seniority,
             role_family=role_fam,
+            department=department,
+            team=team,
             ats="greenhouse",
             source_job_id=raw.source_job_id,
             source_url=source_url,
