@@ -496,6 +496,8 @@ async def test_postings_response_shape(db_session: Any) -> None:
         "source",
         "first_seen_at",
         "score",
+        # Added in PR #31 — always present, nested fields null for untouched postings.
+        "state",
     }
     assert item["company"]["name"] == "ShapeCo"
     assert item["company"]["domain"] == "shape.example"

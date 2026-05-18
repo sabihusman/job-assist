@@ -7,6 +7,7 @@ from job_assist.db.models.ingest_run import IngestRun
 from job_assist.db.models.job_posting import JobPosting
 from job_assist.db.models.operator_profile import OperatorProfile
 from job_assist.db.models.outcome_event import OutcomeEvent
+from job_assist.db.models.posting_action import PostingAction
 from job_assist.db.models.posting_source import PostingSource
 from job_assist.db.models.target_company import TargetCompany
 from job_assist.db.models.triage_result import TriageResult
@@ -19,6 +20,7 @@ __all__ = [
     "JobPosting",
     "OperatorProfile",
     "OutcomeEvent",
+    "PostingAction",
     "PostingSource",
     "TargetCompany",
     "TriageResult",
