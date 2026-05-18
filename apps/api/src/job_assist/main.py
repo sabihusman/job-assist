@@ -524,9 +524,14 @@ async def list_postings(
     if remote_type:
         where_clauses.append(JobPosting.remote_type.in_(remote_type))
     if role_family:
-        # Case-insensitive match per spec.
+        # Case-insensitive match per spec. role_family is a PG enum type;
+        # lower() needs a cast to text before it can run against it.
+        from sqlalchemy import Text as _SAText
+
         lowered = [v.lower() for v in role_family]
-        where_clauses.append(func.lower(JobPosting.role_family).in_(lowered))
+        where_clauses.append(
+            func.lower(func.cast(JobPosting.role_family, _SAText())).in_(lowered)
+        )
     if target_company_id is not None:
         where_clauses.append(JobPosting.target_company_id == target_company_id)
     if ats:
