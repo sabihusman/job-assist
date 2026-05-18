@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
 import structlog
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import and_, true
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -434,6 +434,19 @@ _ALLOWED_ATS_VALUES = {"greenhouse", "lever", "ashby"}
 _ALLOWED_REMOTE_TYPES = {"remote", "hybrid", "onsite"}
 
 
+def _enum_value(v: Any) -> str | None:
+    """Coerce ``RemoteType.remote`` / plain ``"remote"`` / ``None`` to str|None.
+
+    Freshly-built-but-unrefreshed ORM rows still hold the raw string the
+    caller assigned; refreshed rows hold the StrEnum. The serialisation
+    has to tolerate both.
+    """
+    if v is None:
+        return None
+    inner = getattr(v, "value", v)
+    return str(inner) if inner is not None else None
+
+
 def _validate_ats_filter(values: list[str] | None) -> list[str] | None:
     if values is None:
         return None
@@ -476,10 +489,10 @@ def _extract_location_strings(locations_normalized: Any) -> list[str]:
 @app.get("/postings", tags=["public"])
 async def list_postings(
     db: DbSession,
-    tier: list[int] | None = None,
-    ats: list[str] | None = None,
-    remote_type: list[str] | None = None,
-    role_family: list[str] | None = None,
+    tier: Annotated[list[int] | None, Query()] = None,
+    ats: Annotated[list[str] | None, Query()] = None,
+    remote_type: Annotated[list[str] | None, Query()] = None,
+    role_family: Annotated[list[str] | None, Query()] = None,
     target_company_id: uuid.UUID | None = None,
     limit: int = 20,
     offset: int = 0,
@@ -571,7 +584,7 @@ async def list_postings(
                 "min": jp.salary_min,
                 "max": jp.salary_max,
                 "currency": jp.salary_currency,
-                "period": jp.salary_period.value if jp.salary_period else None,
+                "period": _enum_value(jp.salary_period),
             }
 
         items.append(
@@ -586,14 +599,14 @@ async def list_postings(
                 },
                 "role": {
                     "title": jp.normalized_title,
-                    "family": jp.role_family.value if jp.role_family else None,
+                    "family": _enum_value(jp.role_family),
                     "department": jp.department,
                     "team": jp.team,
-                    "seniority": jp.seniority_level.value if jp.seniority_level else None,
+                    "seniority": _enum_value(jp.seniority_level),
                 },
                 "location_raw": jp.location_raw,
                 "locations_normalized": _extract_location_strings(jp.locations_normalized),
-                "remote_type": jp.remote_type.value if jp.remote_type else None,
+                "remote_type": _enum_value(jp.remote_type),
                 "salary": salary_block,
                 "source": {
                     "ats": str(ps_ats) if ps_ats else "unknown",
@@ -668,7 +681,7 @@ async def get_posting(
             "min": jp.salary_min,
             "max": jp.salary_max,
             "currency": jp.salary_currency,
-            "period": jp.salary_period.value if jp.salary_period else None,
+            "period": _enum_value(jp.salary_period),
         }
 
     division_block: dict[str, Any] | None = None
@@ -691,14 +704,14 @@ async def get_posting(
         },
         "role": {
             "title": jp.normalized_title,
-            "family": jp.role_family.value if jp.role_family else None,
+            "family": _enum_value(jp.role_family),
             "department": jp.department,
             "team": jp.team,
-            "seniority": jp.seniority_level.value if jp.seniority_level else None,
+            "seniority": _enum_value(jp.seniority_level),
         },
         "location_raw": jp.location_raw,
         "locations_normalized": _extract_location_strings(jp.locations_normalized),
-        "remote_type": jp.remote_type.value if jp.remote_type else None,
+        "remote_type": _enum_value(jp.remote_type),
         "salary": salary_block,
         "source": {
             "ats": str(ps_ats) if ps_ats else "unknown",
@@ -717,7 +730,7 @@ async def get_posting(
 @app.get("/companies", tags=["public"])
 async def list_companies(
     db: DbSession,
-    tier: list[int] | None = None,
+    tier: Annotated[list[int] | None, Query()] = None,
     limit: int = 50,
     offset: int = 0,
 ) -> dict[str, Any]:
@@ -848,7 +861,7 @@ async def list_outcomes(
             "id": str(o.id),
             "posting_id": str(o.job_posting_id) if o.job_posting_id else None,
             "received_at": o.received_at.isoformat(),
-            "stage": o.outcome_type.value if o.outcome_type else None,
+            "stage": _enum_value(o.outcome_type),
             "confidence": o.classifier_confidence,
         }
         for o in rows

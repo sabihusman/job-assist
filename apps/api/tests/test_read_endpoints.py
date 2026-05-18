@@ -56,6 +56,11 @@ async def _drop_override() -> None:
 class _ExecuteCounter:
     """Wraps ``session.execute`` to count how many SQL statements the
     endpoint emits. The tests assert ≤ N for the no-N+1 contract.
+
+    Implements both sync and async context-manager protocols so it can be
+    used with ``with counter:`` OR ``async with counter:`` — convenient
+    when nesting alongside other ``async with`` blocks (like httpx's
+    ``AsyncClient``).
     """
 
     def __init__(self, session: Any) -> None:
@@ -73,6 +78,12 @@ class _ExecuteCounter:
 
     def __exit__(self, *_exc: Any) -> None:
         self._session.execute = self._original  # type: ignore[method-assign]
+
+    async def __aenter__(self) -> _ExecuteCounter:
+        return self.__enter__()
+
+    async def __aexit__(self, *_exc: Any) -> None:
+        self.__exit__(*_exc)
 
 
 # ── Factories ────────────────────────────────────────────────────────────────
