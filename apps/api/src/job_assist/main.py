@@ -11,6 +11,7 @@ from typing import Annotated, Any
 import structlog
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import and_, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from job_assist.config import settings
@@ -420,6 +421,440 @@ async def backfill_department_team_endpoint(db: DbSession) -> dict[str, int]:
         "skipped_no_source": report.skipped_no_source,
         "skipped_no_data": report.skipped_no_data,
     }
+
+
+# ── Public read endpoints (PR #30a) ───────────────────────────────────────────
+#
+# Pure SELECTs against the existing schema for the frontend's list and detail
+# pages. No auth on these yet (matches the rest of the API today); same TODO
+# about tightening before public exposure.
+
+
+_ALLOWED_ATS_VALUES = {"greenhouse", "lever", "ashby"}
+_ALLOWED_REMOTE_TYPES = {"remote", "hybrid", "onsite"}
+
+
+def _validate_ats_filter(values: list[str] | None) -> list[str] | None:
+    if values is None:
+        return None
+    for v in values:
+        if v not in _ALLOWED_ATS_VALUES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"ats={v!r} not in {sorted(_ALLOWED_ATS_VALUES)}",
+            )
+    return values
+
+
+def _validate_remote_type_filter(values: list[str] | None) -> list[str] | None:
+    if values is None:
+        return None
+    for v in values:
+        if v not in _ALLOWED_REMOTE_TYPES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"remote_type={v!r} not in {sorted(_ALLOWED_REMOTE_TYPES)}",
+            )
+    return values
+
+
+def _extract_location_strings(locations_normalized: Any) -> list[str]:
+    """Flatten the JSONB locations_normalized field into a list of city strings."""
+    if not isinstance(locations_normalized, list):
+        return []
+    out: list[str] = []
+    for entry in locations_normalized:
+        if isinstance(entry, dict):
+            for key in ("city", "region", "country", "raw"):
+                val = entry.get(key)
+                if isinstance(val, str) and val:
+                    out.append(val)
+                    break
+    return out
+
+
+@app.get("/postings", tags=["public"])
+async def list_postings(
+    db: DbSession,
+    tier: list[int] | None = None,
+    ats: list[str] | None = None,
+    remote_type: list[str] | None = None,
+    role_family: list[str] | None = None,
+    target_company_id: uuid.UUID | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Paginated list of postings with the company/role/source nested.
+
+    Default sort: ``first_seen_at DESC``. Total + paginated rows fetched
+    in two queries (one COUNT(*), one SELECT with LATERAL JOIN onto the
+    most-recent posting_source for the ats + url fields).
+
+    TODO: add authentication before exposing publicly.
+    """
+    from sqlalchemy import func, select
+    from sqlalchemy.orm import aliased
+
+    from job_assist.db.models import JobPosting, PostingSource, TargetCompany
+
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=422, detail="limit must be 1..100")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset must be >= 0")
+    ats = _validate_ats_filter(ats)
+    remote_type = _validate_remote_type_filter(remote_type)
+
+    # Build the WHERE clause shared by COUNT and SELECT.
+    where_clauses: list[Any] = []
+    if tier:
+        where_clauses.append(TargetCompany.tier.in_(tier))
+    if remote_type:
+        where_clauses.append(JobPosting.remote_type.in_(remote_type))
+    if role_family:
+        # Case-insensitive match per spec.
+        lowered = [v.lower() for v in role_family]
+        where_clauses.append(func.lower(JobPosting.role_family).in_(lowered))
+    if target_company_id is not None:
+        where_clauses.append(JobPosting.target_company_id == target_company_id)
+    if ats:
+        # The ats filter looks at posting_source.ats; reach it through EXISTS
+        # so we don't multiply rows in the COUNT.
+        ats_exists = (
+            select(PostingSource.id)
+            .where(PostingSource.job_posting_id == JobPosting.id)
+            .where(PostingSource.ats.in_(ats))
+            .exists()
+        )
+        where_clauses.append(ats_exists)
+
+    base_join = JobPosting.__table__.outerjoin(
+        TargetCompany.__table__,
+        JobPosting.target_company_id == TargetCompany.id,
+    )
+
+    # COUNT query — no LATERAL needed.
+    count_stmt = select(func.count()).select_from(base_join)
+    for clause in where_clauses:
+        count_stmt = count_stmt.where(clause)
+    total: int = (await db.execute(count_stmt)).scalar_one() or 0
+
+    # LATERAL subquery picks the most-recent posting_source per posting in
+    # the same execute call as the main SELECT. Keeps the query count at 1
+    # for the page even when there are multiple sources per posting.
+    ps_alias = aliased(PostingSource)
+    recent_ps = (
+        select(ps_alias.ats.label("ps_ats"), ps_alias.source_url.label("ps_url"))
+        .where(ps_alias.job_posting_id == JobPosting.id)
+        .order_by(ps_alias.fetched_at.desc())
+        .limit(1)
+        .lateral("recent_ps")
+    )
+
+    rows_stmt = (
+        select(JobPosting, TargetCompany, recent_ps.c.ps_ats, recent_ps.c.ps_url)
+        .select_from(base_join)
+        .outerjoin(recent_ps, true())
+        .order_by(JobPosting.first_seen_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    for clause in where_clauses:
+        rows_stmt = rows_stmt.where(clause)
+
+    rows = (await db.execute(rows_stmt)).all()
+
+    items: list[dict[str, Any]] = []
+    for jp, tc, ps_ats, ps_url in rows:
+        salary_block: dict[str, Any] | None = None
+        if any(x is not None for x in (jp.salary_min, jp.salary_max, jp.salary_currency)):
+            salary_block = {
+                "min": jp.salary_min,
+                "max": jp.salary_max,
+                "currency": jp.salary_currency,
+                "period": jp.salary_period.value if jp.salary_period else None,
+            }
+
+        items.append(
+            {
+                "id": str(jp.id),
+                "company": {
+                    "id": str(tc.id) if tc is not None else None,
+                    "name": tc.name if tc is not None else jp.canonical_company_name,
+                    "domain": tc.domain if tc is not None else None,
+                    "description": tc.description if tc is not None else None,
+                    "tier": tc.tier if tc is not None else None,
+                },
+                "role": {
+                    "title": jp.normalized_title,
+                    "family": jp.role_family.value if jp.role_family else None,
+                    "department": jp.department,
+                    "team": jp.team,
+                    "seniority": jp.seniority_level.value if jp.seniority_level else None,
+                },
+                "location_raw": jp.location_raw,
+                "locations_normalized": _extract_location_strings(jp.locations_normalized),
+                "remote_type": jp.remote_type.value if jp.remote_type else None,
+                "salary": salary_block,
+                "source": {
+                    "ats": str(ps_ats) if ps_ats else "unknown",
+                    "url": ps_url,
+                },
+                "first_seen_at": jp.first_seen_at.isoformat() if jp.first_seen_at else None,
+                "score": None,
+            }
+        )
+
+    return {"total": total, "offset": offset, "limit": limit, "items": items}
+
+
+@app.get("/postings/{posting_id}", tags=["public"])
+async def get_posting(
+    posting_id: uuid.UUID,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Full detail for one posting, including matched division if any.
+
+    Division match uses ``IS NOT DISTINCT FROM`` so a posting and a
+    division with ``team IS NULL`` both join correctly — matches the
+    semantics of the ``UNIQUE NULLS NOT DISTINCT`` constraint that
+    populates the table in PR #28b.
+
+    404 when the posting id doesn't exist.
+
+    TODO: add authentication before exposing publicly.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import aliased
+
+    from job_assist.db.models import Division, JobPosting, PostingSource, TargetCompany
+
+    ps_alias = aliased(PostingSource)
+    recent_ps = (
+        select(ps_alias.ats.label("ps_ats"), ps_alias.source_url.label("ps_url"))
+        .where(ps_alias.job_posting_id == JobPosting.id)
+        .order_by(ps_alias.fetched_at.desc())
+        .limit(1)
+        .lateral("recent_ps")
+    )
+
+    stmt = (
+        select(JobPosting, TargetCompany, Division, recent_ps.c.ps_ats, recent_ps.c.ps_url)
+        .select_from(JobPosting.__table__)
+        .outerjoin(
+            TargetCompany.__table__,
+            JobPosting.target_company_id == TargetCompany.id,
+        )
+        .outerjoin(
+            Division.__table__,
+            and_(
+                Division.target_company_id == JobPosting.target_company_id,
+                Division.department.is_not_distinct_from(JobPosting.department),
+                Division.team.is_not_distinct_from(JobPosting.team),
+            ),
+        )
+        .outerjoin(recent_ps, true())
+        .where(JobPosting.id == posting_id)
+    )
+
+    row = (await db.execute(stmt)).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"posting {posting_id} not found")
+
+    jp, tc, div, ps_ats, ps_url = row
+
+    salary_block: dict[str, Any] | None = None
+    if any(x is not None for x in (jp.salary_min, jp.salary_max, jp.salary_currency)):
+        salary_block = {
+            "min": jp.salary_min,
+            "max": jp.salary_max,
+            "currency": jp.salary_currency,
+            "period": jp.salary_period.value if jp.salary_period else None,
+        }
+
+    division_block: dict[str, Any] | None = None
+    if div is not None:
+        division_block = {
+            "id": str(div.id),
+            "department": div.department,
+            "team": div.team,
+            "description": div.description,
+        }
+
+    return {
+        "id": str(jp.id),
+        "company": {
+            "id": str(tc.id) if tc is not None else None,
+            "name": tc.name if tc is not None else jp.canonical_company_name,
+            "domain": tc.domain if tc is not None else None,
+            "description": tc.description if tc is not None else None,
+            "tier": tc.tier if tc is not None else None,
+        },
+        "role": {
+            "title": jp.normalized_title,
+            "family": jp.role_family.value if jp.role_family else None,
+            "department": jp.department,
+            "team": jp.team,
+            "seniority": jp.seniority_level.value if jp.seniority_level else None,
+        },
+        "location_raw": jp.location_raw,
+        "locations_normalized": _extract_location_strings(jp.locations_normalized),
+        "remote_type": jp.remote_type.value if jp.remote_type else None,
+        "salary": salary_block,
+        "source": {
+            "ats": str(ps_ats) if ps_ats else "unknown",
+            "url": ps_url,
+        },
+        "first_seen_at": jp.first_seen_at.isoformat() if jp.first_seen_at else None,
+        "score": None,
+        "description_markdown": jp.jd_text or None,
+        "division": division_block,
+        "posted_at": jp.posted_at.isoformat() if jp.posted_at else None,
+        "last_seen_at": jp.last_seen_at.isoformat() if jp.last_seen_at else None,
+        "closed_at": jp.closed_at.isoformat() if jp.closed_at else None,
+    }
+
+
+@app.get("/companies", tags=["public"])
+async def list_companies(
+    db: DbSession,
+    tier: list[int] | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Paginated list of target_company rows with per-row posting counts.
+
+    Single SELECT with three correlated scalar subqueries
+    (total_postings, active_postings, ats_set) so we don't N+1 the
+    counts. Plus one COUNT(*) for the pagination total = 2 queries.
+
+    Default sort: ``tier ASC NULLS LAST, name ASC``.
+
+    TODO: add authentication before exposing publicly.
+    """
+    from sqlalchemy import distinct, func, select
+
+    from job_assist.db.models import JobPosting, PostingSource, TargetCompany
+
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=422, detail="limit must be 1..100")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset must be >= 0")
+
+    where_clauses: list[Any] = []
+    if tier:
+        where_clauses.append(TargetCompany.tier.in_(tier))
+
+    count_stmt = select(func.count()).select_from(TargetCompany)
+    for clause in where_clauses:
+        count_stmt = count_stmt.where(clause)
+    total: int = (await db.execute(count_stmt)).scalar_one() or 0
+
+    total_postings = (
+        select(func.count(JobPosting.id))
+        .where(JobPosting.target_company_id == TargetCompany.id)
+        .correlate(TargetCompany)
+        .scalar_subquery()
+        .label("total_postings")
+    )
+    active_postings = (
+        select(func.count(JobPosting.id))
+        .where(JobPosting.target_company_id == TargetCompany.id)
+        .where(JobPosting.closed_at.is_(None))
+        .correlate(TargetCompany)
+        .scalar_subquery()
+        .label("active_postings")
+    )
+    # array_agg returns NULL for empty input — handled in Python below.
+    ats_set = (
+        select(func.array_agg(distinct(PostingSource.ats)))
+        .select_from(PostingSource.__table__)
+        .join(JobPosting.__table__, JobPosting.id == PostingSource.job_posting_id)
+        .where(JobPosting.target_company_id == TargetCompany.id)
+        .correlate(TargetCompany)
+        .scalar_subquery()
+        .label("ats_set")
+    )
+
+    rows_stmt = (
+        select(TargetCompany, total_postings, active_postings, ats_set)
+        .order_by(TargetCompany.tier.asc().nulls_last(), TargetCompany.name.asc())
+        .limit(limit)
+        .offset(offset)
+    )
+    for clause in where_clauses:
+        rows_stmt = rows_stmt.where(clause)
+
+    rows = (await db.execute(rows_stmt)).all()
+
+    items: list[dict[str, Any]] = []
+    for tc, total_count, active_count, ats_arr in rows:
+        items.append(
+            {
+                "id": str(tc.id),
+                "name": tc.name,
+                "domain": tc.domain,
+                "description": tc.description,
+                "tier": tc.tier,
+                "ats_set": sorted(str(x) for x in (ats_arr or []) if x),
+                "active_postings": int(active_count or 0),
+                "total_postings": int(total_count or 0),
+            }
+        )
+
+    return {"total": total, "offset": offset, "limit": limit, "items": items}
+
+
+@app.get("/outcomes", tags=["public"])
+async def list_outcomes(
+    db: DbSession,
+    posting_id: uuid.UUID | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Paginated list of outcome events, sorted chronologically (ASC).
+
+    Optionally narrows to one posting via ``?posting_id=...``. Feeds the
+    Applied-page timeline UI.
+
+    TODO: add authentication before exposing publicly.
+    """
+    from sqlalchemy import func, select
+
+    from job_assist.db.models import OutcomeEvent
+
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=422, detail="limit must be 1..200")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset must be >= 0")
+
+    where_clauses: list[Any] = []
+    if posting_id is not None:
+        where_clauses.append(OutcomeEvent.job_posting_id == posting_id)
+
+    count_stmt = select(func.count()).select_from(OutcomeEvent)
+    for clause in where_clauses:
+        count_stmt = count_stmt.where(clause)
+    total: int = (await db.execute(count_stmt)).scalar_one() or 0
+
+    rows_stmt = (
+        select(OutcomeEvent).order_by(OutcomeEvent.received_at.asc()).limit(limit).offset(offset)
+    )
+    for clause in where_clauses:
+        rows_stmt = rows_stmt.where(clause)
+    rows = (await db.execute(rows_stmt)).scalars().all()
+
+    items = [
+        {
+            "id": str(o.id),
+            "posting_id": str(o.job_posting_id) if o.job_posting_id else None,
+            "received_at": o.received_at.isoformat(),
+            "stage": o.outcome_type.value if o.outcome_type else None,
+            "confidence": o.classifier_confidence,
+        }
+        for o in rows
+    ]
+
+    return {"total": total, "offset": offset, "limit": limit, "items": items}
 
 
 # ── Admin — cron status ────────────────────────────────────────────────────────
