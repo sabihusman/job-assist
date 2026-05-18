@@ -18,6 +18,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from job_assist.db.enums import ActionReason, ActionType
+
 # ── Embedded sub-shapes ───────────────────────────────────────────────────────
 
 
@@ -79,6 +81,38 @@ class DivisionEmbedded(BaseModel):
     description: str | None
 
 
+class StateEmbedded(BaseModel):
+    """Operator's current decision state on a posting (PR #31).
+
+    ``current is None`` means the posting has no action rows yet — it's
+    still in triage. A ``current == ActionType.reset`` means the operator
+    explicitly returned it to triage; the frontend treats it the same as
+    ``None`` for filtering but the audit trail in ``state_history``
+    preserves the distinction.
+    """
+
+    current: ActionType | None
+    reason: ActionReason | None
+    snooze_until: datetime | None
+    current_at: datetime | None
+
+
+class PostingActionItem(BaseModel):
+    """One row in PostingDetail.state_history (PR #31).
+
+    Chronological ASC ordering is the contract; the UI doesn't have to
+    sort. Includes notes even though no current endpoint sets them —
+    keeps the contract stable when the notes endpoint lands.
+    """
+
+    id: uuid.UUID
+    action_type: ActionType
+    reason: ActionReason | None
+    snooze_until: datetime | None
+    notes: str | None
+    created_at: datetime
+
+
 # ── List items ────────────────────────────────────────────────────────────────
 
 
@@ -97,6 +131,9 @@ class PostingListItem(BaseModel):
     # Placeholder for the future scoring feature. Always null today; kept
     # in the contract so the frontend can render the slot from day one.
     score: float | None = None
+    # Operator's current triage state. Always present; the nested fields
+    # are null for postings the operator hasn't touched yet (PR #31).
+    state: StateEmbedded
 
 
 class PostingDetail(PostingListItem):
@@ -111,6 +148,8 @@ class PostingDetail(PostingListItem):
     posted_at: datetime | None
     last_seen_at: datetime | None
     closed_at: datetime | None
+    # Full append-only action log, oldest → newest (PR #31).
+    state_history: list[PostingActionItem]
 
 
 class CompanyListItem(BaseModel):
@@ -158,3 +197,21 @@ class CompaniesListResponse(PaginatedResponse[CompanyListItem]):
 
 class OutcomesListResponse(PaginatedResponse[OutcomeListItem]):
     pass
+
+
+# ── PR #31 — request bodies ──────────────────────────────────────────────────
+
+
+class PostingStateRequest(BaseModel):
+    """Body for ``POST /postings/{id}/state``.
+
+    The full cross-field rule set (reason required iff not_interested,
+    snooze_until only with snoozed, no past timestamps) lives in the
+    service layer so the validation errors include posting context and
+    so the DB CHECK constraints catch any drift.
+    """
+
+    action_type: ActionType
+    reason: ActionReason | None = None
+    snooze_until: datetime | None = None
+    notes: str | None = None

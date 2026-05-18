@@ -89,6 +89,35 @@ class OutcomeType(enum.StrEnum):
     unclassified = "unclassified"
 
 
+class ActionType(enum.StrEnum):
+    """Operator's action on a job posting (PR #31).
+
+    Stored as plain TEXT in posting_action.action_type (CHECK-constrained),
+    not a PG enum — keeps the vocabulary evolvable without schema migrations.
+    """
+
+    interested = "interested"
+    not_interested = "not_interested"
+    applied = "applied"
+    snoozed = "snoozed"
+    reset = "reset"
+
+
+class ActionReason(enum.StrEnum):
+    """Operator's reason for ``not_interested`` (PR #31).
+
+    Required when ``action_type = not_interested``; forbidden otherwise.
+    """
+
+    wrong_role = "wrong_role"
+    wrong_location = "wrong_location"
+    comp_too_low = "comp_too_low"
+    wrong_industry = "wrong_industry"
+    wrong_stage = "wrong_stage"
+    already_rejected_here = "already_rejected_here"
+    just_not_feeling_it = "just_not_feeling_it"
+
+
 class ClosedChannelReason(enum.StrEnum):
     multiple_rejections = "multiple_rejections"
     culture_concern = "culture_concern"

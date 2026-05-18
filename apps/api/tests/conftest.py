@@ -69,8 +69,8 @@ async def db_session(_apply_migrations: None) -> AsyncGenerator[AsyncSession, No
         # Clean up after each test so state doesn't bleed across tests.
         await session.execute(
             sa.text(
-                "TRUNCATE posting_source, triage_result, outcome_event, "
-                "application_state, job_posting, ingest_run, "
+                "TRUNCATE posting_action, posting_source, triage_result, "
+                "outcome_event, application_state, job_posting, ingest_run, "
                 "closed_channel, target_company CASCADE"
             )
         )

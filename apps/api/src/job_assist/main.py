@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from job_assist.config import settings
 from job_assist.db.session import get_db
 from job_assist.schemas.operator_profile import OperatorProfileUpdate
+from job_assist.schemas.public import PostingStateRequest
 
 logger = structlog.get_logger(__name__)
 
@@ -432,6 +433,13 @@ async def backfill_department_team_endpoint(db: DbSession) -> dict[str, int]:
 
 _ALLOWED_ATS_VALUES = {"greenhouse", "lever", "ashby"}
 _ALLOWED_REMOTE_TYPES = {"remote", "hybrid", "onsite"}
+_ALLOWED_STATE_FILTER_VALUES = {
+    "triage",
+    "interested",
+    "not_interested",
+    "applied",
+    "snoozed",
+}
 
 
 def _enum_value(v: Any) -> str | None:
@@ -471,6 +479,39 @@ def _validate_remote_type_filter(values: list[str] | None) -> list[str] | None:
     return values
 
 
+def _validate_state_filter(values: list[str] | None) -> list[str] | None:
+    if values is None:
+        return None
+    for v in values:
+        if v not in _ALLOWED_STATE_FILTER_VALUES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"state={v!r} not in {sorted(_ALLOWED_STATE_FILTER_VALUES)}",
+            )
+    return values
+
+
+def _state_block(
+    action_type: Any,
+    reason: Any,
+    snooze_until: Any,
+    created_at: Any,
+) -> dict[str, Any]:
+    """Serialise the LATERAL state row (or NULLs) into a StateEmbedded dict.
+
+    All four columns are NULL together when no posting_action row exists
+    for the posting. We surface that as ``current=None`` (still in
+    triage) rather than omitting the field, so the frontend can rely on
+    the key always being present.
+    """
+    return {
+        "current": _enum_value(action_type),
+        "reason": _enum_value(reason),
+        "snooze_until": snooze_until.isoformat() if snooze_until else None,
+        "current_at": created_at.isoformat() if created_at else None,
+    }
+
+
 def _extract_location_strings(locations_normalized: Any) -> list[str]:
     """Flatten the JSONB locations_normalized field into a list of city strings."""
     if not isinstance(locations_normalized, list):
@@ -493,22 +534,32 @@ async def list_postings(
     ats: Annotated[list[str] | None, Query()] = None,
     remote_type: Annotated[list[str] | None, Query()] = None,
     role_family: Annotated[list[str] | None, Query()] = None,
+    state: Annotated[list[str] | None, Query()] = None,
+    include_snoozed_past_only: bool = False,
     target_company_id: uuid.UUID | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> dict[str, Any]:
-    """Paginated list of postings with the company/role/source nested.
+    """Paginated list of postings with the company/role/source/state nested.
 
-    Default sort: ``first_seen_at DESC``. Total + paginated rows fetched
-    in two queries (one COUNT(*), one SELECT with LATERAL JOIN onto the
-    most-recent posting_source for the ats + url fields).
+    Default sort: ``first_seen_at DESC``. Two queries total:
+      1. COUNT(*) over the same WHERE (joined onto the state LATERAL too,
+         so state filters narrow the total the same way they narrow rows).
+      2. SELECT with TWO LATERALs — most-recent posting_source and
+         most-recent posting_action — folded into the main page query.
+
+    State filter values: ``triage`` (no action OR latest = reset),
+    ``interested``, ``not_interested``, ``applied``, ``snoozed``. Repeating
+    ``?state=...&state=...`` ORs them. ``include_snoozed_past_only=true``
+    further restricts the snoozed bucket to past-due / open >7d entries.
 
     TODO: add authentication before exposing publicly.
     """
-    from sqlalchemy import func, select
+    from sqlalchemy import func, or_, select
     from sqlalchemy.orm import aliased
 
-    from job_assist.db.models import JobPosting, PostingSource, TargetCompany
+    from job_assist.db.models import JobPosting, PostingAction, PostingSource, TargetCompany
+    from job_assist.services.posting_actions import latest_action_lateral
 
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="limit must be 1..100")
@@ -516,6 +567,11 @@ async def list_postings(
         raise HTTPException(status_code=422, detail="offset must be >= 0")
     ats = _validate_ats_filter(ats)
     remote_type = _validate_remote_type_filter(remote_type)
+    state = _validate_state_filter(state)
+    # include_snoozed_past_only is only meaningful with state=snoozed in
+    # the filter set — silently ignore it otherwise rather than 422'ing,
+    # since the UI may flip the checkbox before the user picks snoozed.
+    _ = PostingAction  # imported for the lateral builder; mypy-only ref
 
     # Build the WHERE clause shared by COUNT and SELECT.
     where_clauses: list[Any] = []
@@ -542,20 +598,67 @@ async def list_postings(
         )
         where_clauses.append(ats_exists)
 
+    # State LATERAL — folded into both COUNT and SELECT so the state
+    # filter can narrow them both consistently without a 3rd query.
+    recent_pa = latest_action_lateral()
+
+    # Build the state-filter predicate. Each requested bucket becomes one
+    # OR'd clause against the LATERAL columns:
+    #   triage          → action_type IS NULL OR action_type = 'reset'
+    #   <other>         → action_type = <other>
+    #   snoozed + flag  → snoozed AND (snooze_until < now()
+    #                                  OR (snooze_until IS NULL
+    #                                      AND pa.created_at < now() - 7d))
+    state_clauses: list[Any] = []
+    if state:
+        from datetime import timedelta
+
+        from sqlalchemy import false as sa_false
+
+        for s in state:
+            if s == "triage":
+                state_clauses.append(
+                    or_(
+                        recent_pa.c.pa_action_type.is_(None),
+                        recent_pa.c.pa_action_type == "reset",
+                    )
+                )
+            elif s == "snoozed" and include_snoozed_past_only:
+                seven_days_ago = func.now() - timedelta(days=7)
+                state_clauses.append(
+                    and_(
+                        recent_pa.c.pa_action_type == "snoozed",
+                        or_(
+                            recent_pa.c.pa_snooze_until < func.now(),
+                            and_(
+                                recent_pa.c.pa_snooze_until.is_(None),
+                                recent_pa.c.pa_created_at < seven_days_ago,
+                            ),
+                        ),
+                    )
+                )
+            else:
+                state_clauses.append(recent_pa.c.pa_action_type == s)
+        # Empty list after validation is impossible, but stay safe.
+        where_clauses.append(or_(*state_clauses) if state_clauses else sa_false())
+
     base_join = JobPosting.__table__.outerjoin(
         TargetCompany.__table__,
         JobPosting.target_company_id == TargetCompany.id,
     )
 
-    # COUNT query — no LATERAL needed.
-    count_stmt = select(func.count()).select_from(base_join)
+    # COUNT query — joins the state LATERAL only when a state filter is
+    # active. Skipping the join in the no-filter case keeps the COUNT
+    # plan trivial.
+    count_select = select(func.count()).select_from(base_join)
+    if state:
+        count_select = count_select.select_from(base_join.outerjoin(recent_pa, true()))
     for clause in where_clauses:
-        count_stmt = count_stmt.where(clause)
-    total: int = (await db.execute(count_stmt)).scalar_one() or 0
+        count_select = count_select.where(clause)
+    total: int = (await db.execute(count_select)).scalar_one() or 0
 
     # LATERAL subquery picks the most-recent posting_source per posting in
-    # the same execute call as the main SELECT. Keeps the query count at 1
-    # for the page even when there are multiple sources per posting.
+    # the same execute call as the main SELECT.
     ps_alias = aliased(PostingSource)
     recent_ps = (
         select(ps_alias.ats.label("ps_ats"), ps_alias.source_url.label("ps_url"))
@@ -566,9 +669,19 @@ async def list_postings(
     )
 
     rows_stmt = (
-        select(JobPosting, TargetCompany, recent_ps.c.ps_ats, recent_ps.c.ps_url)
+        select(
+            JobPosting,
+            TargetCompany,
+            recent_ps.c.ps_ats,
+            recent_ps.c.ps_url,
+            recent_pa.c.pa_action_type,
+            recent_pa.c.pa_reason,
+            recent_pa.c.pa_snooze_until,
+            recent_pa.c.pa_created_at,
+        )
         .select_from(base_join)
         .outerjoin(recent_ps, true())
+        .outerjoin(recent_pa, true())
         .order_by(JobPosting.first_seen_at.desc())
         .limit(limit)
         .offset(offset)
@@ -579,7 +692,16 @@ async def list_postings(
     rows = (await db.execute(rows_stmt)).all()
 
     items: list[dict[str, Any]] = []
-    for jp, tc, ps_ats, ps_url in rows:
+    for (
+        jp,
+        tc,
+        ps_ats,
+        ps_url,
+        pa_action_type,
+        pa_reason,
+        pa_snooze_until,
+        pa_created_at,
+    ) in rows:
         salary_block: dict[str, Any] | None = None
         if any(x is not None for x in (jp.salary_min, jp.salary_max, jp.salary_currency)):
             salary_block = {
@@ -616,6 +738,7 @@ async def list_postings(
                 },
                 "first_seen_at": jp.first_seen_at.isoformat() if jp.first_seen_at else None,
                 "score": None,
+                "state": _state_block(pa_action_type, pa_reason, pa_snooze_until, pa_created_at),
             }
         )
 
@@ -641,7 +764,14 @@ async def get_posting(
     from sqlalchemy import select
     from sqlalchemy.orm import aliased
 
-    from job_assist.db.models import Division, JobPosting, PostingSource, TargetCompany
+    from job_assist.db.models import (
+        Division,
+        JobPosting,
+        PostingAction,
+        PostingSource,
+        TargetCompany,
+    )
+    from job_assist.services.posting_actions import latest_action_lateral
 
     ps_alias = aliased(PostingSource)
     recent_ps = (
@@ -651,9 +781,20 @@ async def get_posting(
         .limit(1)
         .lateral("recent_ps")
     )
+    recent_pa = latest_action_lateral()
 
     stmt = (
-        select(JobPosting, TargetCompany, Division, recent_ps.c.ps_ats, recent_ps.c.ps_url)
+        select(
+            JobPosting,
+            TargetCompany,
+            Division,
+            recent_ps.c.ps_ats,
+            recent_ps.c.ps_url,
+            recent_pa.c.pa_action_type,
+            recent_pa.c.pa_reason,
+            recent_pa.c.pa_snooze_until,
+            recent_pa.c.pa_created_at,
+        )
         .select_from(JobPosting.__table__)
         .outerjoin(
             TargetCompany.__table__,
@@ -668,6 +809,7 @@ async def get_posting(
             ),
         )
         .outerjoin(recent_ps, true())
+        .outerjoin(recent_pa, true())
         .where(JobPosting.id == posting_id)
     )
 
@@ -675,7 +817,42 @@ async def get_posting(
     if row is None:
         raise HTTPException(status_code=404, detail=f"posting {posting_id} not found")
 
-    jp, tc, div, ps_ats, ps_url = row
+    (
+        jp,
+        tc,
+        div,
+        ps_ats,
+        ps_url,
+        pa_action_type,
+        pa_reason,
+        pa_snooze_until,
+        pa_created_at,
+    ) = row
+
+    # Full append-only audit trail, chronological ASC. Separate query so
+    # the join cardinality on the detail SELECT stays one row.
+    history_rows = (
+        (
+            await db.execute(
+                select(PostingAction)
+                .where(PostingAction.job_posting_id == posting_id)
+                .order_by(PostingAction.created_at.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    state_history = [
+        {
+            "id": str(pa.id),
+            "action_type": _enum_value(pa.action_type),
+            "reason": _enum_value(pa.reason),
+            "snooze_until": pa.snooze_until.isoformat() if pa.snooze_until else None,
+            "notes": pa.notes,
+            "created_at": pa.created_at.isoformat(),
+        }
+        for pa in history_rows
+    ]
 
     salary_block: dict[str, Any] | None = None
     if any(x is not None for x in (jp.salary_min, jp.salary_max, jp.salary_currency)):
@@ -721,12 +898,53 @@ async def get_posting(
         },
         "first_seen_at": jp.first_seen_at.isoformat() if jp.first_seen_at else None,
         "score": None,
+        "state": _state_block(pa_action_type, pa_reason, pa_snooze_until, pa_created_at),
         "description_markdown": jp.jd_text or None,
         "division": division_block,
         "posted_at": jp.posted_at.isoformat() if jp.posted_at else None,
         "last_seen_at": jp.last_seen_at.isoformat() if jp.last_seen_at else None,
         "closed_at": jp.closed_at.isoformat() if jp.closed_at else None,
+        "state_history": state_history,
     }
+
+
+@app.post("/postings/{posting_id}/state", tags=["public"])
+async def post_posting_state(
+    posting_id: uuid.UUID,
+    payload: PostingStateRequest,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Record one operator action against a posting (PR #31).
+
+    Returns the resulting :class:`StateEmbedded` so the frontend can
+    update its row without re-fetching the list.
+
+    Error mapping:
+      - Unknown ``action_type`` / ``reason``  → 422 (Pydantic enum coercion)
+      - Cross-field rule violation             → 422 (ValueError from service)
+      - Unknown ``posting_id``                 → 404 (LookupError from service)
+
+    Lives under ``tags=["public"]`` because it's the same trust model as
+    the rest of the public surface — single-user dev mode, TODO to lock
+    down before any wider deployment.
+    """
+    from job_assist.services.posting_actions import record_action
+
+    try:
+        row = await record_action(
+            db,
+            posting_id,
+            payload.action_type,
+            payload.reason,
+            payload.snooze_until,
+            payload.notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return _state_block(row.action_type, row.reason, row.snooze_until, row.created_at)
 
 
 @app.get("/companies", tags=["public"])
