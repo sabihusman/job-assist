@@ -30,7 +30,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import Text, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from job_assist.db.models import JobPosting, PostingAction
@@ -108,9 +108,16 @@ async def get_calibration(
     # Top rejected role families, ordered (count DESC, name ASC) to
     # break ties deterministically. NULL role_family is filtered out at
     # the WHERE level so it neither competes for nor wastes a top-5 slot.
+    #
+    # `role_family` is a PG enum type; ORDER BY on enum columns sorts by
+    # declaration order, not alphabetically. CAST to TEXT for an
+    # alphabetical tie-break (same lesson as PR #30a's role_family
+    # lower() fix). Must use sqlalchemy.cast(...) — func.cast renders nothing.
+    #
     # NB: label the count "n" — Row.count is a tuple method, and naming
     # the label "count" makes mypy think attribute access returns the
     # bound method rather than the SQL scalar.
+    role_family_text = cast(JobPosting.role_family, Text)
     top_stmt = (
         select(
             JobPosting.role_family.label("role_family"),
@@ -126,7 +133,7 @@ async def get_calibration(
         .where(PostingAction.action_type == "not_interested")
         .where(JobPosting.role_family.is_not(None))
         .group_by(JobPosting.role_family)
-        .order_by(func.count(func.distinct(JobPosting.id)).desc(), JobPosting.role_family.asc())
+        .order_by(func.count(func.distinct(JobPosting.id)).desc(), role_family_text.asc())
         .limit(5)
     )
     top_rows = (await session.execute(top_stmt)).all()
