@@ -148,7 +148,14 @@ test('Applied row expand reveals TIMELINE label', async ({ page }) => {
 test('Applied sort=tier reorders the URL', async ({ page }) => {
   await page.goto('/applied');
   await waitForDataReady(page);
-  await mainContent(page).getByRole('button', { name: 'tier' }).click();
+  // The AppliedRow chevron buttons have accessible names like
+  // "Tier 1 Alpha Co Senior PM, …" (the Tier badge's aria-label
+  // contributes a "Tier 1" substring). `name: 'tier'` would match
+  // those rows too. Use `exact: true` against the sort strip's
+  // visible lowercase "tier" button instead.
+  await mainContent(page)
+    .getByRole('button', { name: 'tier', exact: true })
+    .click();
   await expect(page).toHaveURL(/sort=tier/);
 });
 
@@ -173,15 +180,18 @@ test('Pipeline buckets the alpha posting into RECRUITER (latest outcome)', async
 // ── Companies ───────────────────────────────────────────────────────────
 
 test('Companies table shows column headers and company rows', async ({ page }) => {
+  // Wait explicitly for the /companies fetch — the prior approach of
+  // waiting for skeletons to clear is flaky when react-query resolves
+  // synchronously from the mocked route, never producing a skeleton.
+  const responsePromise = page.waitForResponse((res) =>
+    /\/companies(\?|$)/.test(new URL(res.url()).pathname + res.url().search),
+  );
   await page.goto('/companies');
-  await waitForDataReady(page);
+  await responsePromise;
   const content = mainContent(page);
-  // Wait for the row first so the table is fully rendered.
-  await expect(content.getByText('Alpha Co')).toBeVisible();
-  // Match column headers by their visible text via text= locator —
-  // accessible-name lookup for `<th>` proved brittle in CI for reasons
-  // unrelated to our wiring; reaching for the text content directly is
-  // simpler and matches what a user reads.
+  // Match column headers via the th's visible text. Accessible-name
+  // resolution for plain `<th>Name</th>` proved brittle in CI for
+  // reasons unrelated to our wiring.
   for (const header of ['Name', 'Tier', 'ATS', 'Open', 'Applied', 'Outcomes']) {
     await expect(content.locator('th').getByText(header, { exact: true })).toBeVisible();
   }
@@ -190,8 +200,11 @@ test('Companies table shows column headers and company rows', async ({ page }) =
 });
 
 test('Companies subtitle reports target count', async ({ page }) => {
+  const responsePromise = page.waitForResponse((res) =>
+    /\/companies(\?|$)/.test(new URL(res.url()).pathname + res.url().search),
+  );
   await page.goto('/companies');
-  await waitForDataReady(page);
+  await responsePromise;
   // Subtitle lives in the chrome banner, not the main content region.
   await expect(page.getByText(/2 target companies/)).toBeVisible();
 });
