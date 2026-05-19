@@ -179,42 +179,38 @@ test('Pipeline buckets the alpha posting into RECRUITER (latest outcome)', async
 
 // ── Companies ───────────────────────────────────────────────────────────
 
-test('Companies table shows column headers and company rows', async ({ page }) => {
-  // Wait explicitly for the /companies fetch — the prior approach of
-  // waiting for skeletons to clear is flaky when react-query resolves
-  // synchronously from the mocked route, never producing a skeleton.
-  const responsePromise = page.waitForResponse((res) => {
-    // NB: `res.url()` returns a string — earlier attempt to read
-    // `.search` directly on the string returned undefined and broke
-    // the match. Parse with the URL constructor and read the pathname.
-    const url = new URL(res.url());
-    return url.pathname.endsWith('/companies') && res.request().method() === 'GET';
+// Override the helper's glob with a regex route. The helper's
+// `**/companies*` pattern appears to work for /postings, /outcomes,
+// /stats — but for /companies the response either doesn't reach the
+// page or fails to populate. A regex pattern bypasses any glob
+// ambiguity and pins the mock unambiguously.
+async function mockCompaniesDirect(page: import('@playwright/test').Page) {
+  await page.route(/\/companies(\?|$)/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(COMPANIES),
+    });
   });
+}
+
+test('Companies table shows column headers and company rows', async ({ page }) => {
+  await mockCompaniesDirect(page);
   await page.goto('/companies');
-  await responsePromise;
   const content = mainContent(page);
-  // Match column headers via the th's visible text. Accessible-name
-  // resolution for plain `<th>Name</th>` proved brittle in CI for
-  // reasons unrelated to our wiring.
+  // Once data is in, "Alpha Co" appears in the first NAME cell.
+  await expect(content.getByText('Alpha Co')).toBeVisible({ timeout: 10_000 });
   for (const header of ['Name', 'Tier', 'ATS', 'Open', 'Applied', 'Outcomes']) {
     await expect(content.locator('th').getByText(header, { exact: true })).toBeVisible();
   }
-  // Notes column is stripped — must NOT be present.
   expect(await content.locator('th').getByText(/^Notes$/, { exact: true }).count()).toBe(0);
 });
 
 test('Companies subtitle reports target count', async ({ page }) => {
-  const responsePromise = page.waitForResponse((res) => {
-    // NB: `res.url()` returns a string — earlier attempt to read
-    // `.search` directly on the string returned undefined and broke
-    // the match. Parse with the URL constructor and read the pathname.
-    const url = new URL(res.url());
-    return url.pathname.endsWith('/companies') && res.request().method() === 'GET';
-  });
+  await mockCompaniesDirect(page);
   await page.goto('/companies');
-  await responsePromise;
   // Subtitle lives in the chrome banner, not the main content region.
-  await expect(page.getByText(/2 target companies/)).toBeVisible();
+  await expect(page.getByText(/2 target companies/)).toBeVisible({ timeout: 10_000 });
 });
 
 // ── Stats ───────────────────────────────────────────────────────────────
