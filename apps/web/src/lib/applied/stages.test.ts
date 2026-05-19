@@ -1,0 +1,70 @@
+import { describe, expect, test } from 'vitest';
+
+import {
+  type PipelineStage,
+  STAGE_LABELS,
+  STAGE_SORT_ORDER,
+  stageBadgeTone,
+  stageOf,
+} from '@/lib/applied/stages';
+
+describe('stageOf', () => {
+  test('null / unknown values return null', () => {
+    expect(stageOf(null)).toBeNull();
+    expect(stageOf(undefined)).toBeNull();
+    expect(stageOf('')).toBeNull();
+    expect(stageOf('unclassified')).toBeNull();
+    expect(stageOf('unrelated')).toBeNull();
+  });
+
+  test('buckets each known outcome_type into the right stage', () => {
+    expect(stageOf('application_confirmation')).toBe('applied');
+    expect(stageOf('applied')).toBe('applied');
+    expect(stageOf('recruiter_screen_invite')).toBe('recruiter');
+    expect(stageOf('phone_interview_invite')).toBe('phone');
+    expect(stageOf('video_interview_invite')).toBe('video');
+    expect(stageOf('onsite_interview_invite')).toBe('onsite');
+    expect(stageOf('panel_interview_invite')).toBe('onsite');
+    expect(stageOf('offer')).toBe('offer');
+    expect(stageOf('rejection_pre_screen')).toBe('rejected');
+    expect(stageOf('rejection_post_interview')).toBe('rejected');
+    expect(stageOf('withdrawn')).toBe('rejected');
+  });
+});
+
+describe('stageBadgeTone', () => {
+  test('positive for applied and offer', () => {
+    expect(stageBadgeTone('applied')).toBe('positive');
+    expect(stageBadgeTone('offer')).toBe('positive');
+  });
+  test('negative for rejected, muted for ghosted', () => {
+    expect(stageBadgeTone('rejected')).toBe('negative');
+    expect(stageBadgeTone('ghosted')).toBe('muted');
+  });
+  test('pending for interview stages', () => {
+    for (const stage of ['recruiter', 'phone', 'video', 'onsite'] as PipelineStage[]) {
+      expect(stageBadgeTone(stage)).toBe('pending');
+    }
+  });
+});
+
+describe('STAGE_SORT_ORDER + STAGE_LABELS', () => {
+  test('offer ranks before rejected before ghosted', () => {
+    expect(STAGE_SORT_ORDER.offer).toBeLessThan(STAGE_SORT_ORDER.rejected);
+    expect(STAGE_SORT_ORDER.rejected).toBeLessThan(STAGE_SORT_ORDER.ghosted);
+  });
+  test('every stage has a label', () => {
+    for (const stage of [
+      'applied',
+      'recruiter',
+      'phone',
+      'video',
+      'onsite',
+      'offer',
+      'rejected',
+      'ghosted',
+    ] as const) {
+      expect(STAGE_LABELS[stage]).toBeTruthy();
+    }
+  });
+});

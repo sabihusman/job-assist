@@ -3,9 +3,9 @@
 import { Clock, MapPin } from 'lucide-react';
 import { useState } from 'react';
 
-import { ActionButton } from '@/components/triage/ActionButton';
+import { ActionButton } from '@/components/shared/ActionButton';
+import { CompanyAvatar } from '@/components/shared/CompanyAvatar';
 import { ReasonPicker } from '@/components/triage/ReasonPicker';
-import { avatarBg, avatarInitial } from '@/lib/colors/avatar-hue';
 import type { ActionReason, ActionType, PostingListItem } from '@/lib/triage/types';
 import { cn } from '@/lib/utils';
 
@@ -79,14 +79,7 @@ export function TriageCard({
         className="flex min-w-0 flex-1 items-start gap-3 text-left"
         aria-label={`Open detail for ${company.name} — ${role.title}`}
       >
-        {/* Avatar */}
-        <span
-          aria-hidden="true"
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[13px] font-semibold text-white"
-          style={{ background: avatarBg(company.name) }}
-        >
-          {avatarInitial(company.name)}
-        </span>
+        <CompanyAvatar name={company.name} size={32} />
 
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           {/* Line 1 */}

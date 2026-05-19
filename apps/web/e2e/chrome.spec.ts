@@ -41,13 +41,13 @@ test("command palette navigates via keyboard", async ({ page }) => {
   await expect(page).toHaveURL("/applied");
 });
 
-test("placeholder card renders on every route except /", async ({ page }) => {
-  // `/` got a real Triage page in PR #32b — its own E2E suite covers it.
-  for (const { href } of ROUTES) {
-    if (href === "/") continue;
-    await page.goto(href);
-    await expect(page.getByTestId("placeholder-card")).toBeVisible();
-  }
+test("placeholder card still renders on /settings", async ({ page }) => {
+  // PR #32b shipped real Triage at /. PR #32c shipped real /applied,
+  // /pipeline, /companies, /stats. Only /settings remains a placeholder
+  // (PR #32d will replace it). Each real page is covered by its own
+  // E2E suite — pages.spec.ts.
+  await page.goto("/settings");
+  await expect(page.getByTestId("placeholder-card")).toBeVisible();
 });
 
 test("theme toggle persists across navigation", async ({ page }) => {
