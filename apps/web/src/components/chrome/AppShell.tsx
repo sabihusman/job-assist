@@ -34,7 +34,9 @@ export function AppShell({
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col">
         <Banner title={title} subtitle={subtitle} adornments={adornments} />
-        <main className="flex-1">{children}</main>
+        <main aria-label="Page content" className="flex-1">
+          {children}
+        </main>
       </div>
       <CommandPalette />
     </div>
