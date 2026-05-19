@@ -6,6 +6,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Annotated, Any
 
 import structlog
@@ -1088,6 +1089,55 @@ async def list_outcomes(
     ]
 
     return {"total": total, "offset": offset, "limit": limit, "items": items}
+
+
+# ── Public stats endpoints (PR #30b) ──────────────────────────────────────────
+#
+# Read-only aggregations over `posting_action` history (and
+# `job_posting.first_seen_at` for the SURFACED stage). Both endpoints
+# share the same time-window contract; see
+# `services/stats_windows.py` for the default / validation rules.
+#
+# TODO: add authentication before exposing publicly (same trust model
+# as the rest of /postings, /companies, /outcomes).
+
+
+@app.get("/stats/calibration", tags=["public"])
+async def get_stats_calibration(
+    db: DbSession,
+    since: Annotated[datetime | None, Query()] = None,
+    until: Annotated[datetime | None, Query()] = None,
+) -> dict[str, Any]:
+    """KPIs + top rejected role families over a time window.
+
+    See ``services/stats.py`` for the stage-counting rules. Issues 2
+    SQL queries: one multi-FILTER aggregation row, one GROUP BY for
+    the top role families.
+    """
+    from job_assist.services.stats import get_calibration
+    from job_assist.services.stats_windows import validate_window
+
+    s, u = validate_window(since, until)
+    return await get_calibration(db, s, u)
+
+
+@app.get("/stats/funnel", tags=["public"])
+async def get_stats_funnel(
+    db: DbSession,
+    since: Annotated[datetime | None, Query()] = None,
+    until: Annotated[datetime | None, Query()] = None,
+) -> dict[str, Any]:
+    """Funnel stages + conversion rates over a time window.
+
+    Stages always returned in the order ``[surfaced, interested,
+    applied]``; rates are pairwise across adjacent stages with ``null``
+    when the upstream count is 0. Issues 1 SQL query.
+    """
+    from job_assist.services.stats import get_funnel
+    from job_assist.services.stats_windows import validate_window
+
+    s, u = validate_window(since, until)
+    return await get_funnel(db, s, u)
 
 
 # ── Admin — cron status ────────────────────────────────────────────────────────
