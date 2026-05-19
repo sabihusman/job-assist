@@ -1,0 +1,56 @@
+'use client';
+
+import { useEffect, useRef } from 'react';
+
+import { TriageCard, type TriageCardAction } from '@/components/triage/TriageCard';
+import type { PostingListItem } from '@/lib/triage/types';
+
+/**
+ * Container for the card list. Receives the lifted `selectedIndex`
+ * from TriagePage (so the keyboard hook lives at page level, not
+ * here) and scrolls the active card into view whenever the index
+ * changes.
+ *
+ * J/K logic lives in `useTriageKeyboard` rather than here so the
+ * Escape-clears-selection behavior can share state with the detail
+ * panel.
+ */
+export function TriageList({
+  postings,
+  selectedIndex,
+  onSelect,
+  onAction,
+}: {
+  postings: readonly PostingListItem[];
+  selectedIndex: number | null;
+  onSelect: (index: number) => void;
+  onAction: (postingId: string, action: TriageCardAction) => void;
+}) {
+  const containerRef = useRef<HTMLUListElement>(null);
+
+  // Scroll the active card into view when the index changes. `nearest`
+  // avoids the page-jump feel of `center` while still keeping the card
+  // visible during J/K nav.
+  useEffect(() => {
+    if (selectedIndex === null) return;
+    const card = containerRef.current?.querySelector<HTMLElement>(
+      `[data-card-index="${selectedIndex}"]`,
+    );
+    card?.scrollIntoView({ block: 'nearest' });
+  }, [selectedIndex]);
+
+  return (
+    <ul ref={containerRef} className="flex list-none flex-col gap-3 p-0">
+      {postings.map((posting, index) => (
+        <li key={posting.id} data-card-index={index}>
+          <TriageCard
+            posting={posting}
+            isSelected={selectedIndex === index}
+            onSelect={() => onSelect(index)}
+            onAction={(action) => onAction(posting.id, action)}
+          />
+        </li>
+      ))}
+    </ul>
+  );
+}

@@ -1,34 +1,282 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { toast } from 'sonner';
 
 import { AppShell } from '@/components/chrome/AppShell';
-import { PlaceholderPage } from '@/components/chrome/PlaceholderPage';
-import { usePostings } from '@/lib/api/hooks';
+import { CalibrationCard } from '@/components/triage/CalibrationCard';
+import { DetailPanel } from '@/components/triage/DetailPanel';
+import { FilterRow } from '@/components/triage/FilterRow';
+import type { TriageCardAction } from '@/components/triage/TriageCard';
+import { TriageList } from '@/components/triage/TriageList';
+import { useRecordAction, useTriagePostings } from '@/lib/api/hooks';
+import { useTriageKeyboard } from '@/lib/keyboard/useTriageKeyboard';
+import { parseFilters } from '@/lib/triage/filters';
+import type { TriageFilters } from '@/lib/triage/types';
 
 /**
- * Triage page placeholder (PR #32a).
+ * Triage page (PR #32b).
  *
- * Wires the API smoke test from the spec — fires `GET /postings`,
- * discards the result. Used to verify the openapi-fetch + react-query
- * wiring round-trips end-to-end against the live backend. PR #32b
- * replaces this with the real card list + detail panel.
+ * Composition (top → bottom in the main column):
+ *   FilterRow → CalibrationCard → TriageList (or empty / error / loading)
+ *
+ * The DetailPanel hangs off the right of the AppShell main slot
+ * (visible at lg+ only).
+ *
+ * URL is the source of truth for filter state — the inner component
+ * is wrapped in Suspense so static prerendering doesn't bail on
+ * useSearchParams. The fallback must not itself touch useSearchParams.
  */
 export default function TriagePage() {
-  const { isError, error } = usePostings();
+  return (
+    <AppShell title="Triage" subtitle="Pending review" adornments={<KeyboardLegend />}>
+      {/* Fallback must NOT touch useSearchParams — that'd recreate the
+          same prerender bailout it's meant to bridge. Render a bare
+          loading skeleton instead. */}
+      <Suspense fallback={<PageFallback />}>
+        <TriagePageInner />
+      </Suspense>
+    </AppShell>
+  );
+}
 
+function TriagePageInner() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+
+  // Memoize so equality-based effects don't re-fire on every render.
+  const filters: TriageFilters = useMemo(() => parseFilters(searchParams), [searchParams]);
+
+  const { data, isLoading, isError, error, refetch } = useTriagePostings(filters);
+  const recordAction = useRecordAction();
+
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const selectedId = selectedIndex !== null ? (items[selectedIndex]?.id ?? null) : null;
+
+  // Clear selection when the result set shrinks past the cursor — e.g.
+  // after an optimistic remove of the last card on the page.
   useEffect(() => {
-    if (isError) {
-      console.warn('[smoke] GET /postings failed — is NEXT_PUBLIC_API_BASE_URL set?', error);
+    if (selectedIndex !== null && selectedIndex >= items.length) {
+      setSelectedIndex(items.length > 0 ? items.length - 1 : null);
     }
-  }, [isError, error]);
+  }, [items.length, selectedIndex]);
+
+  // Re-select index 0 when a fresh filter set loads the first time. We
+  // don't always auto-select on data change to avoid yanking focus away
+  // from a card the user is mid-action on.
+  const hasData = items.length > 0;
+  useEffect(() => {
+    if (hasData && selectedIndex === null) setSelectedIndex(0);
+  }, [hasData, selectedIndex]);
+
+  // Keyboard
+  const handleAction = useCallback(
+    (postingId: string, action: TriageCardAction) => {
+      recordAction.mutate(
+        {
+          postingId,
+          action_type: action.kind,
+          reason: action.reason ?? null,
+        },
+        {
+          onSuccess: () => {
+            const verb =
+              action.kind === 'interested'
+                ? 'Interested'
+                : action.kind === 'applied'
+                  ? 'Applied'
+                  : action.kind === 'not_interested'
+                    ? 'Passed'
+                    : action.kind === 'snoozed'
+                      ? 'Snoozed'
+                      : 'Reset';
+            toast.success(`✓ ${verb}`);
+          },
+          onError: () => {
+            toast.error('Action failed — try again');
+          },
+        },
+      );
+    },
+    [recordAction],
+  );
+
+  useTriageKeyboard(
+    {
+      onNext: () =>
+        setSelectedIndex((i) => {
+          if (i === null) return items.length > 0 ? 0 : null;
+          return Math.min(items.length - 1, i + 1);
+        }),
+      onPrev: () =>
+        setSelectedIndex((i) => {
+          if (i === null) return items.length > 0 ? 0 : null;
+          return Math.max(0, i - 1);
+        }),
+      onAction1: () => {
+        if (selectedId) handleAction(selectedId, { kind: 'interested' });
+      },
+      onAction2: () => {
+        // Just-in-time stub — the per-card ReasonPicker handles the
+        // expand+commit flow when triggered via mouse/touch. For keyboard
+        // we toast a hint until #32c wires a page-level picker; tests
+        // don't assert this path either way.
+        toast.message('Press 2 again on the focused card to pass with reason');
+      },
+      onAction3: () => {
+        if (selectedId) handleAction(selectedId, { kind: 'applied' });
+      },
+      onAction4: () => {
+        if (selectedId) handleAction(selectedId, { kind: 'snoozed' });
+      },
+      onEscape: () => setSelectedIndex(null),
+    },
+    /* enabled */ !recordAction.isPending,
+  );
 
   return (
-    <AppShell title="Triage" subtitle="Pending review · 24">
-      <PlaceholderPage
-        heading="Triage page — coming in #32b"
-        body="Filter rail · card list · keyboard-driven detail panel · J/K nav · reason picker. The chrome (sidebar, banner, ⌘K palette, theme) is wired here in #32a; the page body lands in #32b."
+    <div className="flex">
+      <MainColumn
+        loading={isLoading}
+        error={isError ? ((error as Error)?.message ?? 'Unknown error') : null}
+        empty={!isLoading && !isError && items.length === 0}
+        showing={items.length}
+        total={total}
+        onResetFilters={() => router.replace('/?state=triage', { scroll: false })}
+        onRetry={() => refetch()}
+      >
+        <TriageList
+          postings={items}
+          selectedIndex={selectedIndex}
+          onSelect={setSelectedIndex}
+          onAction={handleAction}
+        />
+      </MainColumn>
+
+      <DetailPanel
+        selectedId={selectedId}
+        onClose={() => setSelectedIndex(null)}
+        onAction={handleAction}
       />
-    </AppShell>
+    </div>
+  );
+}
+
+function PageFallback() {
+  return (
+    <div className="flex min-w-0 flex-1 flex-col gap-4 px-6 py-4">
+      <div className="h-6 w-64 animate-pulse rounded bg-surface-2" />
+      <div className="h-20 animate-pulse rounded-md border border-border bg-surface-2" />
+      <LoadingSkeleton />
+    </div>
+  );
+}
+
+function KeyboardLegend() {
+  return (
+    <div className="hidden items-center gap-2 font-mono text-[11px] text-muted-foreground md:flex">
+      <KeyHint>J</KeyHint>
+      <KeyHint>K</KeyHint>
+      nav
+      <span aria-hidden="true">·</span>
+      <KeyHint>1</KeyHint>
+      <span>–</span>
+      <KeyHint>4</KeyHint>
+      act
+      <span aria-hidden="true">·</span>
+      <KeyHint>2</KeyHint>→<KeyHint>1</KeyHint>–<KeyHint>7</KeyHint>
+      reason
+    </div>
+  );
+}
+
+function KeyHint({ children }: { children: React.ReactNode }) {
+  return <kbd className="rounded border border-border bg-surface-2 px-1 py-0.5">{children}</kbd>;
+}
+
+function MainColumn({
+  loading,
+  error,
+  empty,
+  showing = 0,
+  total = 0,
+  onResetFilters,
+  onRetry,
+  children,
+}: {
+  loading?: boolean;
+  error?: string | null;
+  empty?: boolean;
+  showing?: number;
+  total?: number;
+  onResetFilters?: () => void;
+  onRetry?: () => void;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="flex min-w-0 flex-1 flex-col gap-4 px-6 py-4">
+      <FilterRow showing={showing} total={total} />
+      <CalibrationCard />
+
+      {error ? (
+        <section className="rounded-md border border-negative/40 bg-negative/5 p-4">
+          <h2 className="text-sm font-semibold text-negative">Couldn&apos;t load postings.</h2>
+          <p className="mt-1 text-[13px] text-muted-foreground">{error}</p>
+          <button
+            type="button"
+            onClick={onRetry}
+            className="mt-3 inline-flex h-8 items-center rounded-md border border-border bg-surface px-3 text-sm hover:bg-accent"
+          >
+            Retry
+          </button>
+        </section>
+      ) : loading ? (
+        <LoadingSkeleton />
+      ) : empty ? (
+        <EmptyState onReset={onResetFilters} />
+      ) : (
+        children
+      )}
+    </div>
+  );
+}
+
+function LoadingSkeleton() {
+  return (
+    <div className="flex flex-col gap-3">
+      {[0, 1, 2, 3, 4].map((i) => (
+        <div
+          key={i}
+          className="h-[88px] animate-pulse rounded-md border border-border bg-surface-2"
+        />
+      ))}
+    </div>
+  );
+}
+
+function EmptyState({ onReset }: { onReset?: () => void }) {
+  return (
+    <section
+      data-testid="empty-state"
+      className="flex flex-col items-center gap-3 rounded-md border border-border bg-card px-6 py-12 text-center"
+    >
+      <h2 className="text-sm font-semibold">No postings match your filters.</h2>
+      <p className="text-[13px] text-muted-foreground">
+        Try removing some filters or come back tomorrow.
+      </p>
+      {onReset && (
+        <button
+          type="button"
+          onClick={onReset}
+          className="inline-flex h-8 items-center rounded-md border border-border bg-surface px-3 text-sm hover:bg-accent"
+        >
+          Reset filters
+        </button>
+      )}
+    </section>
   );
 }
