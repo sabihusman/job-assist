@@ -52,6 +52,10 @@ supabase/.branches/
 job-assist-bootstrap/
 job-assist-bootstrap.zip
 
+# Generated TypeScript types from FastAPI OpenAPI schema (PR #32a).
+# Regenerated at build time from apps/api/openapi.json.
+apps/web/src/lib/types/openapi.ts
+
 # OAuth tokens (Gmail)
 apps/api/credentials.json
 apps/api/token.json
