@@ -41,8 +41,10 @@ test("command palette navigates via keyboard", async ({ page }) => {
   await expect(page).toHaveURL("/applied");
 });
 
-test("placeholder card renders on every route", async ({ page }) => {
+test("placeholder card renders on every route except /", async ({ page }) => {
+  // `/` got a real Triage page in PR #32b — its own E2E suite covers it.
   for (const { href } of ROUTES) {
+    if (href === "/") continue;
     await page.goto(href);
     await expect(page.getByTestId("placeholder-card")).toBeVisible();
   }

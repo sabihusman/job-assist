@@ -1,0 +1,31 @@
+import type { RoleFamilyWire } from '@/lib/triage/types';
+
+/**
+ * Display labels for role_family values.
+ *
+ * The API returns the snake_case wire form (`product_management`); the
+ * UI displays the abbreviated friendly form (`Product Mgmt`). Both
+ * directions of the map live here so chip rendering and chip-click
+ * handlers share the same dictionary.
+ */
+export const FAMILY_LABELS: Record<RoleFamilyWire, string> = {
+  product_management: 'Product Mgmt',
+  product_owner: 'Product Owner',
+  product_marketing: 'Product Marketing',
+  program_management: 'Program Mgmt',
+  other: 'Other',
+};
+
+/** Ordered list for chip rendering — matches the row order in UI_SPEC.md. */
+export const FAMILY_CHIPS: readonly RoleFamilyWire[] = [
+  'product_management',
+  'product_owner',
+  'product_marketing',
+  'program_management',
+] as const;
+
+/** Look up a friendly label for a wire value; falls back to the wire form. */
+export function familyLabel(wire: string | null | undefined): string {
+  if (!wire) return '—';
+  return FAMILY_LABELS[wire as RoleFamilyWire] ?? wire;
+}

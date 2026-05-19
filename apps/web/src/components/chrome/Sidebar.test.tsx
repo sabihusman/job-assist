@@ -1,11 +1,14 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { act } from 'react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { Sidebar } from '@/components/chrome/Sidebar';
 import { useUiStore } from '@/lib/stores/ui';
+import { renderWithProviders } from '@/test-utils/render-with-providers';
 
-// Stub next/navigation — Sidebar uses usePathname.
+// Stub next/navigation — Sidebar uses usePathname; SavedFilters reads
+// useSearchParams. Returning an empty URLSearchParams is enough for the
+// tests below.
 vi.mock('next/navigation', () => ({
   usePathname: () => '/pipeline',
   useSearchParams: () => new URLSearchParams(),
@@ -18,7 +21,7 @@ afterEach(() => {
 
 describe('Sidebar', () => {
   test('renders all six primary nav items and no Outreach', () => {
-    render(<Sidebar />);
+    renderWithProviders(<Sidebar />);
     const nav = screen.getByRole('navigation', { name: /^primary$/i });
     const links = within(nav).getAllByRole('link');
     const labels = links.map((l) => l.textContent ?? '');
@@ -33,7 +36,7 @@ describe('Sidebar', () => {
   });
 
   test('active route is marked aria-current=page', () => {
-    render(<Sidebar />);
+    renderWithProviders(<Sidebar />);
     const pipeline = screen.getByRole('link', { name: /pipeline/i });
     expect(pipeline.getAttribute('aria-current')).toBe('page');
     const triage = screen.getByRole('link', { name: /triage/i });
@@ -41,22 +44,21 @@ describe('Sidebar', () => {
   });
 
   test('renders the three hardcoded saved filters', () => {
-    render(<Sidebar />);
+    renderWithProviders(<Sidebar />);
     const filtersNav = screen.getByRole('navigation', { name: /saved filters/i });
     expect(within(filtersNav).getAllByRole('link')).toHaveLength(3);
     expect(filtersNav.textContent).toContain('T1 · Remote · Not reviewed');
-    expect(filtersNav.textContent).toContain('Staff PM · $200k+');
+    // Row #2 was renamed from "Staff PM · $200k+" to "T1+T2 · PM" in PR
+    // #32b — the API has no salary_min/seniority filter so the original
+    // label couldn't be wired to real URL params.
+    expect(filtersNav.textContent).toContain('T1+T2 · PM');
     expect(filtersNav.textContent).toContain('Snoozed > 7d');
   });
 
   test('collapse toggle hides labels and saved filters', async () => {
-    render(<Sidebar />);
-    // First-paint default = expanded, including after the `mounted` effect.
+    renderWithProviders(<Sidebar />);
     await waitFor(() => expect(screen.getByText('Job Assist')).toBeInTheDocument());
 
-    // Mutate the store directly (the trigger button lives in the banner,
-    // not the sidebar). `act` flushes the React update so the next assertion
-    // sees the collapsed DOM.
     act(() => {
       useUiStore.getState().toggleSidebar();
     });

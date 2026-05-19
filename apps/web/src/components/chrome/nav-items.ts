@@ -10,8 +10,9 @@ import {
 
 /**
  * Primary nav inventory. Outreach is intentionally absent — stripped
- * for v1 per the spec. The Triage badge count is hardcoded to 24 in
- * PR #32a and will read from `GET /postings?state=triage` in PR #32b.
+ * for v1 per the spec. The Triage badge count was a placeholder in
+ * PR #32a; #32b removes it and the Triage page renders its own count
+ * via the filter rail.
  */
 export type NavItem = {
   href: '/' | '/applied' | '/pipeline' | '/companies' | '/stats' | '/settings';
@@ -21,7 +22,7 @@ export type NavItem = {
 };
 
 export const NAV_ITEMS: readonly NavItem[] = [
-  { href: '/', label: 'Triage', icon: Inbox, badge: 24 },
+  { href: '/', label: 'Triage', icon: Inbox },
   { href: '/applied', label: 'Applied', icon: Activity },
   { href: '/pipeline', label: 'Pipeline', icon: KanbanSquare },
   { href: '/companies', label: 'Companies', icon: Building2 },
@@ -30,19 +31,49 @@ export const NAV_ITEMS: readonly NavItem[] = [
 ] as const;
 
 /**
- * Hardcoded SAVED FILTERS rows for #32a. Each row's `href` is a
- * deep-link onto Triage with a filter slug; #32b will translate the
- * slug into actual `?state=...&tier=...` etc. query params and
- * highlight the active row.
+ * Hardcoded SAVED FILTERS rows. Each row's `href` is the resolved
+ * Triage URL with `?state=...&tier=...` etc. `filterParams` is the
+ * same param set as a plain object so the count badge query (in
+ * SavedFilters.tsx) can hit `/postings?…&limit=1` and read `.total`.
+ *
+ * Row #2 was "Staff PM · $200k+" in #32a — but `GET /postings` has no
+ * seniority or salary_min filter. Substituted for "T1+T2 · PM" which
+ * we can actually express today; revisit when the API gains those
+ * filter capabilities.
  */
 export type SavedFilter = {
   slug: string;
   label: string;
-  count: number;
+  /** Resolved query string for the Triage URL. */
+  href: `/?${string}`;
+  /** Params object suitable for `useSavedFilterCount`. */
+  filterParams: Record<string, unknown>;
 };
 
 export const SAVED_FILTERS: readonly SavedFilter[] = [
-  { slug: 't1-remote-not-reviewed', label: 'T1 · Remote · Not reviewed', count: 8 },
-  { slug: 'staff-pm-200k', label: 'Staff PM · $200k+', count: 12 },
-  { slug: 'snoozed-7d', label: 'Snoozed > 7d', count: 4 },
+  {
+    slug: 't1-remote-not-reviewed',
+    label: 'T1 · Remote · Not reviewed',
+    href: '/?tier=1&remote_type=remote&state=triage',
+    filterParams: { tier: [1], remote_type: ['remote'], state: ['triage'] },
+  },
+  {
+    slug: 't1-t2-pm',
+    label: 'T1+T2 · PM',
+    href: '/?tier=1&tier=2&role_family=product_management&state=triage',
+    filterParams: {
+      tier: [1, 2],
+      role_family: ['product_management'],
+      state: ['triage'],
+    },
+  },
+  {
+    slug: 'snoozed-7d',
+    label: 'Snoozed > 7d',
+    href: '/?state=snoozed&include_snoozed_past_only=true',
+    filterParams: {
+      state: ['snoozed'],
+      include_snoozed_past_only: true,
+    },
+  },
 ] as const;
