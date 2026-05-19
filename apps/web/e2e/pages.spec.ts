@@ -154,7 +154,13 @@ test('Applied row expand reveals TIMELINE label', async ({ page }) => {
 
 test('Applied sort=tier reorders the URL', async ({ page }) => {
   await page.goto('/applied');
-  await page.getByRole('button', { name: 'tier' }).click();
+  // Wait for the row(s) to settle so the sort strip is unambiguously
+  // present and not racing the data fetch.
+  await expect(page.getByText('Alpha Co')).toBeVisible();
+  // Scope to the "sort:" group — multiple buttons may exist on the
+  // page (e.g. row toggles) and exact-name selection could be flaky.
+  const sortGroup = page.locator('text=sort:').locator('xpath=..');
+  await sortGroup.getByRole('button', { name: 'tier' }).click();
   await expect(page).toHaveURL(/sort=tier/);
 });
 
@@ -178,15 +184,20 @@ test('Pipeline buckets the alpha posting into RECRUITER (latest outcome)', async
 
 test('Companies table shows 6 column headers and company rows', async ({ page }) => {
   await page.goto('/companies');
-  await expect(page.getByRole('columnheader', { name: 'Name' })).toBeVisible();
-  await expect(page.getByRole('columnheader', { name: 'Outcomes' })).toBeVisible();
-  // Notes column is stripped — must NOT be present.
-  expect(await page.getByRole('columnheader', { name: 'Notes' }).count()).toBe(0);
+  // Wait for data to land before asserting on the table — otherwise the
+  // <table> element doesn't exist yet (the page renders a skeleton).
   await expect(page.getByText('Alpha Co')).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: /^Name$/i })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: /^Outcomes$/i })).toBeVisible();
+  // Notes column is stripped — must NOT be present.
+  expect(await page.getByRole('columnheader', { name: /^Notes$/i }).count()).toBe(0);
 });
 
 test('Companies subtitle reports target count', async ({ page }) => {
   await page.goto('/companies');
+  // The subtitle updates from "Target list" → "2 target companies"
+  // once the /companies fetch settles, so wait for the data first.
+  await expect(page.getByText('Alpha Co')).toBeVisible();
   await expect(page.getByText(/2 target companies/)).toBeVisible();
 });
 
@@ -200,6 +211,13 @@ test('Stats page renders the KPI grid and funnel section', async ({ page }) => {
 
 test('Stats funnel shows all 6 stage labels', async ({ page }) => {
   await page.goto('/stats');
+  // The Sidebar nav has an "Applied" link and "Onsite" appears
+  // nowhere else, but `Applied` would resolve to 2 elements. Scope
+  // queries to the funnel section's <ol>.
+  const funnel = page
+    .locator('section')
+    .filter({ has: page.getByText(/outcome funnel/i) })
+    .getByRole('list');
   for (const label of [
     'Applied',
     'Recruiter screen',
@@ -208,6 +226,6 @@ test('Stats funnel shows all 6 stage labels', async ({ page }) => {
     'Onsite',
     'Offer',
   ]) {
-    await expect(page.getByText(label, { exact: true })).toBeVisible();
+    await expect(funnel.getByText(label, { exact: true })).toBeVisible();
   }
 });
