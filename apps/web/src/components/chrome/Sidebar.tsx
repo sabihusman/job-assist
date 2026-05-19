@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 
 import { SavedFilters } from '@/components/chrome/SavedFilters';
 import { SidebarItem } from '@/components/chrome/SidebarItem';
@@ -68,7 +68,14 @@ export function Sidebar() {
 
       {/* SAVED FILTERS */}
       <div className="px-2">
-        <SavedFilters collapsed={collapsed} />
+        {/* SavedFilters reads `useSearchParams()` to highlight the active
+            filter row. That bails Next.js out of static prerendering
+            unless wrapped in Suspense, so we wrap here — the chrome
+            still ships static; the search-param read just becomes a
+            client-side hydration step. */}
+        <Suspense fallback={null}>
+          <SavedFilters collapsed={collapsed} />
+        </Suspense>
       </div>
 
       {/* Sync footer */}
