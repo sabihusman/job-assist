@@ -2,14 +2,13 @@
 
 import { ArrowLeft, ExternalLink, X } from 'lucide-react';
 import { useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 
-import { ActionButton } from '@/components/triage/ActionButton';
+import { ActionButton } from '@/components/shared/ActionButton';
+import { CompanyAvatar } from '@/components/shared/CompanyAvatar';
+import { MarkdownRenderer } from '@/components/shared/MarkdownRenderer';
 import { ReasonPicker } from '@/components/triage/ReasonPicker';
 import type { TriageCardAction } from '@/components/triage/TriageCard';
 import { usePosting } from '@/lib/api/hooks';
-import { avatarBg, avatarInitial } from '@/lib/colors/avatar-hue';
 import { familyLabel } from '@/lib/triage/family-labels';
 import type { PostingDetail } from '@/lib/triage/types';
 import { cn } from '@/lib/utils';
@@ -115,13 +114,7 @@ function DetailContent({
       <div className="flex-1 overflow-y-auto px-6 py-6">
         {/* Hero */}
         <div className="flex items-start gap-4">
-          <span
-            aria-hidden="true"
-            className="flex h-14 w-14 shrink-0 items-center justify-center rounded-md text-[20px] font-semibold text-white"
-            style={{ background: avatarBg(company.name) }}
-          >
-            {avatarInitial(company.name)}
-          </span>
+          <CompanyAvatar name={company.name} size={56} />
           <div className="flex flex-col gap-1">
             <h3 className="text-[16px] font-semibold">{company.name}</h3>
             <span className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
@@ -188,11 +181,7 @@ function DetailContent({
             Job description
           </h4>
           {posting.description_markdown ? (
-            <div className="prose-jd mt-3 text-[13.5px] leading-[1.55] text-foreground/90">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {posting.description_markdown}
-              </ReactMarkdown>
-            </div>
+            <MarkdownRenderer source={posting.description_markdown} className="prose-jd mt-3" />
           ) : (
             <p className="mt-3 text-[13px] text-muted-foreground">No description available.</p>
           )}

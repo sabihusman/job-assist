@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, test } from 'vitest';
 
-import { ActionButton } from '@/components/triage/ActionButton';
+import { ActionButton } from '@/components/shared/ActionButton';
 
 describe('ActionButton', () => {
   test('compact variant renders the hotkey digit only', () => {
