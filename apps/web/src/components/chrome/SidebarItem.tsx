@@ -33,6 +33,10 @@ export function SidebarItem({
   return (
     <Link
       href={href}
+      // Pin the accessible name to just the label — otherwise the
+      // badge count gets concatenated ("Triage 24") and a11y queries
+      // for "Triage" need a regex match. The visible text is unchanged.
+      aria-label={label}
       aria-current={active ? 'page' : undefined}
       data-active={active}
       className={cn(
@@ -46,7 +50,10 @@ export function SidebarItem({
         <>
           <span className="ml-3 flex-1 truncate">{label}</span>
           {badge !== undefined && (
-            <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+            <span
+              aria-hidden="true"
+              className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+            >
               {badge}
             </span>
           )}
