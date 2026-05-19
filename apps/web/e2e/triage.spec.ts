@@ -149,9 +149,12 @@ test.beforeEach(async ({ page }) => {
 
 test('Triage page renders cards from the API', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByText('Alpha Co')).toBeVisible();
-  await expect(page.getByText('Beta Co')).toBeVisible();
-  await expect(page.getByText('Gamma Co')).toBeVisible();
+  // Each company name appears multiple times once the first card
+  // auto-selects (card body + detail panel header + detail h3), so
+  // query via the card's accessible-label aria-label.
+  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
+  await expect(page.getByLabel(/Open detail for Beta Co/)).toBeVisible();
+  await expect(page.getByLabel(/Open detail for Gamma Co/)).toBeVisible();
 });
 
 test('clicking a TIER chip updates URL search params', async ({ page }) => {
