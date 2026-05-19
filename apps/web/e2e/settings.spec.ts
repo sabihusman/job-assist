@@ -108,12 +108,16 @@ test('API keys section renders all 5 env-var rows', async ({ page }) => {
 test('Manual job: discover-ats run shows RESPONSE panel', async ({ page }) => {
   await page.goto('/settings');
   const content = mainContent(page);
-  // Wait for the manual jobs section to render.
-  const runRow = content
-    .locator('div')
-    .filter({ hasText: 'Run discover-ats' })
-    .first();
-  await runRow.getByRole('button', { name: /run/i }).click();
+  // The previous `.locator('div').filter({ hasText: 'Run discover-ats' })`
+  // matched a higher-up container that wraps all three rows, so all
+  // three "run" buttons fell inside scope. Scope to the row card
+  // (ManualJobRow's outermost div has the title text as a direct
+  // descendant) by anchoring on the title span first.
+  const titleSpan = content.getByText('Run discover-ats', { exact: true });
+  // Walk up to the closest rounded-md card. xpath="ancestor::*[contains(@class,'rounded-md')][1]"
+  // is awkward in Playwright; use `locator('..')` chain instead.
+  const rowCard = titleSpan.locator('xpath=ancestor::div[contains(@class,"rounded-md")][1]');
+  await rowCard.getByRole('button').click();
   // RESPONSE panel renders inline with the JSON body.
   await expect(content.getByText(/^Response$/i)).toBeVisible({ timeout: 10_000 });
 });
