@@ -183,9 +183,13 @@ test('Companies table shows column headers and company rows', async ({ page }) =
   // Wait explicitly for the /companies fetch — the prior approach of
   // waiting for skeletons to clear is flaky when react-query resolves
   // synchronously from the mocked route, never producing a skeleton.
-  const responsePromise = page.waitForResponse((res) =>
-    /\/companies(\?|$)/.test(new URL(res.url()).pathname + res.url().search),
-  );
+  const responsePromise = page.waitForResponse((res) => {
+    // NB: `res.url()` returns a string — earlier attempt to read
+    // `.search` directly on the string returned undefined and broke
+    // the match. Parse with the URL constructor and read the pathname.
+    const url = new URL(res.url());
+    return url.pathname.endsWith('/companies') && res.request().method() === 'GET';
+  });
   await page.goto('/companies');
   await responsePromise;
   const content = mainContent(page);
@@ -200,9 +204,13 @@ test('Companies table shows column headers and company rows', async ({ page }) =
 });
 
 test('Companies subtitle reports target count', async ({ page }) => {
-  const responsePromise = page.waitForResponse((res) =>
-    /\/companies(\?|$)/.test(new URL(res.url()).pathname + res.url().search),
-  );
+  const responsePromise = page.waitForResponse((res) => {
+    // NB: `res.url()` returns a string — earlier attempt to read
+    // `.search` directly on the string returned undefined and broke
+    // the match. Parse with the URL constructor and read the pathname.
+    const url = new URL(res.url());
+    return url.pathname.endsWith('/companies') && res.request().method() === 'GET';
+  });
   await page.goto('/companies');
   await responsePromise;
   // Subtitle lives in the chrome banner, not the main content region.
