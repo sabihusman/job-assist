@@ -16,7 +16,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from job_assist.db.enums import ActionReason, ActionType
 
@@ -215,3 +215,70 @@ class PostingStateRequest(BaseModel):
     reason: ActionReason | None = None
     snooze_until: datetime | None = None
     notes: str | None = None
+
+
+# ── PR #30b — stats response shapes ──────────────────────────────────────────
+
+
+class StatsWindow(BaseModel):
+    """The resolved ``[since, until]`` window echoed back to the client.
+
+    Serialised to ISO-8601 so the frontend can render "Showing X for
+    {window_label}" without round-tripping its own date parser.
+    """
+
+    since: datetime
+    until: datetime
+
+
+class TopRejectedRoleFamily(BaseModel):
+    """One row in ``calibration.top_rejected_role_families``."""
+
+    role_family: str
+    count: int
+
+
+class CalibrationResponse(BaseModel):
+    """Body of ``GET /stats/calibration``.
+
+    ``interested_rate`` is ``interested / surfaced`` rounded to 2dp, or
+    ``None`` when ``surfaced == 0`` (the frontend renders "—" rather
+    than 0%).
+    """
+
+    window: StatsWindow
+    surfaced: int
+    interested: int
+    interested_rate: float | None
+    applied: int
+    rejected_by_you: int
+    top_rejected_role_families: list[TopRejectedRoleFamily]
+
+
+class FunnelStage(BaseModel):
+    name: str
+    count: int
+
+
+class FunnelConversionRate(BaseModel):
+    """One row in ``funnel.conversion_rates``.
+
+    ``from`` collides with the Python keyword, so we alias the wire
+    field to ``from_stage`` internally and let Pydantic populate it
+    from either name on parse / serialise.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_stage: str = Field(alias="from")
+    to: str
+    rate: float | None
+
+
+class FunnelResponse(BaseModel):
+    """Body of ``GET /stats/funnel``. Stages always returned in the
+    fixed order ``[surfaced, interested, applied]``."""
+
+    window: StatsWindow
+    stages: list[FunnelStage]
+    conversion_rates: list[FunnelConversionRate]
