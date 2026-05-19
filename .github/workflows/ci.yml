@@ -182,6 +182,28 @@ jobs:
       - run: uv sync --frozen
       - run: uv run mypy src
 
+  api-openapi-snapshot:
+    # Asserts `apps/api/openapi.json` matches whatever FastAPI emits from
+    # the current source. The frontend (PR #32a+) reads from this
+    # snapshot to generate TypeScript types, so any backend schema
+    # change must regenerate the snapshot in the same PR.
+    name: API · OpenAPI Snapshot
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Regenerate openapi.json
+        run: |
+          uv run python -c "import json, sys; sys.path.insert(0, 'src'); from job_assist.main import app; print(json.dumps(app.openapi(), indent=2))" > openapi.json.fresh
+      - name: Assert no drift vs committed snapshot
+        run: diff -u openapi.json openapi.json.fresh
+
   api-test:
     name: API · Unit Tests
     runs-on: ubuntu-latest
@@ -339,6 +361,7 @@ jobs:
       - web-e2e
       - api-lint
       - api-typecheck
+      - api-openapi-snapshot
       - api-test
       - api-migration-check
       - secret-scan
@@ -357,6 +380,7 @@ jobs:
               'Web · E2E':              '${{ needs.web-e2e.result }}',
               'API · Lint':             '${{ needs.api-lint.result }}',
               'API · Typecheck':        '${{ needs.api-typecheck.result }}',
+              'API · OpenAPI Snapshot': '${{ needs.api-openapi-snapshot.result }}',
               'API · Unit Tests':       '${{ needs.api-test.result }}',
               'API · Migration Check':  '${{ needs.api-migration-check.result }}',
               'Secret Scan':            '${{ needs.secret-scan.result }}',
@@ -420,6 +444,7 @@ jobs:
       - web-e2e
       - api-lint
       - api-typecheck
+      - api-openapi-snapshot
       - api-test
       - api-migration-check
       - secret-scan

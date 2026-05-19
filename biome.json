@@ -14,6 +14,8 @@
       "build",
       "coverage",
       "apps/api/**",
+      "apps/web/src/lib/types/openapi.ts",
+      "src/lib/types/openapi.ts",
       "packages/shared-types/generated/**"
     ]
   },

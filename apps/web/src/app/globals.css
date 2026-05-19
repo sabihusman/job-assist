@@ -1,3 +1,104 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Theme tokens (PR #32a) — oklch values lifted verbatim from UI_SPEC.md.
+ * Hex equivalents are reference-only; oklch is the source of truth.
+ *
+ * Tailwind v3 doesn't grok the `oklch(var(...) / <alpha-value>)` color
+ * function the way v4 does, so we store just the oklch components in the
+ * CSS variables and Tailwind's color utilities wrap them with `oklch(...)`
+ * via `tailwind.config.ts`.
+ * ────────────────────────────────────────────────────────────────────── */
+
+@layer base {
+  :root {
+    --background: 98.5% 0.003 95;
+    --foreground: 20.5% 0 0;
+    --surface: 100% 0 0;
+    --surface-2: 96.5% 0.003 95;
+    --card: 100% 0 0;
+    --card-foreground: 20.5% 0 0;
+    --muted: 96.5% 0.003 95;
+    --muted-foreground: 52% 0.01 255;
+    --border: 91% 0.004 95;
+    --border-strong: 83% 0.004 95;
+    --input: 100% 0 0;
+    --popover: 100% 0 0;
+    --popover-foreground: 20.5% 0 0;
+    --primary: 60% 0.11 215;
+    --primary-foreground: 99% 0 0;
+    --secondary: 96.5% 0.003 95;
+    --secondary-foreground: 20.5% 0 0;
+    --accent: 95% 0.005 95;
+    --accent-foreground: 20.5% 0 0;
+    --destructive: 58% 0.21 27;
+    --destructive-foreground: 99% 0 0;
+    --positive: 60% 0.11 215;
+    --positive-foreground: 99% 0 0;
+    --negative: 58% 0.21 27;
+    --negative-foreground: 99% 0 0;
+    --pending: 66% 0.16 55;
+    --pending-foreground: 99% 0 0;
+    --ring: 60% 0.11 215;
+    --tier-1: 55% 0.15 150;
+    --tier-2: 52% 0.16 245;
+    --tier-3: 50% 0.18 295;
+    --tier-4: 55% 0.015 255;
+    --ats-greenhouse: 50% 0.14 150;
+    --ats-lever: 60% 0.17 50;
+    --ats-ashby: 50% 0.16 285;
+    --radius: 0.375rem;
+    --shadow-card: 0 1px 2px 0 rgba(0, 0, 0, 0.03), 0 4px 12px -2px rgba(0, 0, 0, 0.04);
+  }
+
+  .dark {
+    --background: 14.5% 0 0;
+    --foreground: 93% 0 0;
+    --surface: 19.6% 0 0;
+    --surface-2: 23.5% 0 0;
+    --card: 19.6% 0 0;
+    --card-foreground: 93% 0 0;
+    --muted: 23.5% 0 0;
+    --muted-foreground: 68% 0 0;
+    --border: 27% 0 0;
+    --border-strong: 34% 0 0;
+    --input: 19.6% 0 0;
+    --popover: 19.6% 0 0;
+    --popover-foreground: 93% 0 0;
+    --primary: 78% 0.13 195;
+    --primary-foreground: 14.5% 0 0;
+    --secondary: 23.5% 0 0;
+    --secondary-foreground: 93% 0 0;
+    --accent: 27% 0 0;
+    --accent-foreground: 93% 0 0;
+    --destructive: 66% 0.16 35;
+    --destructive-foreground: 14.5% 0 0;
+    --positive: 78% 0.13 195;
+    --positive-foreground: 14.5% 0 0;
+    --negative: 66% 0.16 35;
+    --negative-foreground: 14.5% 0 0;
+    --pending: 78% 0.14 75;
+    --pending-foreground: 14.5% 0 0;
+    --ring: 78% 0.13 195;
+    --tier-1: 74% 0.17 145;
+    --tier-2: 74% 0.14 230;
+    --tier-3: 74% 0.14 290;
+    --tier-4: 66% 0.04 250;
+    --ats-greenhouse: 70% 0.15 150;
+    --ats-lever: 72% 0.14 50;
+    --ats-ashby: 72% 0.14 280;
+    --shadow-card: 0 1px 2px 0 rgba(0, 0, 0, 0.4), 0 4px 12px -2px rgba(0, 0, 0, 0.3);
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv11", "ss01", "ss03";
+  }
+
+  /* Focus ring lifted verbatim from UI_SPEC.md "Borders, shadows, radii". */
+  *:focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+}
