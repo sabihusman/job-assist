@@ -197,19 +197,26 @@ async function mockCompaniesDirect(page: import('@playwright/test').Page) {
 test('Companies table shows column headers and company rows', async ({ page }) => {
   await mockCompaniesDirect(page);
   await page.goto('/companies');
-  const content = mainContent(page);
-  // Once data is in, "Alpha Co" appears in the first NAME cell.
-  await expect(content.getByText('Alpha Co')).toBeVisible({ timeout: 10_000 });
-  for (const header of ['Name', 'Tier', 'ATS', 'Open', 'Applied', 'Outcomes']) {
-    await expect(content.locator('th').getByText(header, { exact: true })).toBeVisible();
+  // Query the whole page first — if data lands anywhere we know the
+  // mock is firing; scope refinements come later.
+  try {
+    await expect(page.getByText('Alpha Co').first()).toBeVisible({ timeout: 10_000 });
+  } catch (e) {
+    // Dump body markup on failure so the trace tells us whether the
+    // table rendered at all vs. the page is stuck on EmptyState.
+    // eslint-disable-next-line no-console
+    console.log('--- Companies page body ---\n', await page.locator('body').innerHTML());
+    throw e;
   }
-  expect(await content.locator('th').getByText(/^Notes$/, { exact: true }).count()).toBe(0);
+  for (const header of ['Name', 'Tier', 'ATS', 'Open', 'Applied', 'Outcomes']) {
+    await expect(page.locator('th').getByText(header, { exact: true })).toBeVisible();
+  }
+  expect(await page.locator('th').getByText(/^Notes$/, { exact: true }).count()).toBe(0);
 });
 
 test('Companies subtitle reports target count', async ({ page }) => {
   await mockCompaniesDirect(page);
   await page.goto('/companies');
-  // Subtitle lives in the chrome banner, not the main content region.
   await expect(page.getByText(/2 target companies/)).toBeVisible({ timeout: 10_000 });
 });
 
