@@ -220,6 +220,54 @@
         }
       }
     },
+    "/admin/seed/contacts": {
+      "post": {
+        "summary": "Seed Contacts",
+        "description": "Seed ``contact`` rows from a JSON body (PR #39).\n\nSame shape as ``/admin/seed/target-companies``: the body IS the seed\npayload, so the operator's private Tippie alumni JSON never has to\nland on the Railway container::\n\n    curl -X POST -H 'Content-Type: application/json' \\\n         -d @/tmp/contacts.json \\\n         https://<host>/admin/seed/contacts\n\nIdempotent. Re-running with the same payload returns ``inserted=0``\nand ``skipped_duplicate_*`` matching the prior insert count, because\ndedup uses ``LOWER(email_primary)`` / ``LOWER(linkedin_url)`` \u2014\ncase-insensitive, matches the partial unique indexes.\n\nPrivacy: response shape contains no names, emails, or LinkedIn URLs;\nsame for the structlog line emitted by the seed service.\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
+        "operationId": "seed_contacts_admin_seed_contacts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array",
+                "title": "Rows"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "type": "object",
+                  "title": "Response Seed Contacts Admin Seed Contacts Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/gmail/backfill": {
       "post": {
         "summary": "Gmail Backfill",

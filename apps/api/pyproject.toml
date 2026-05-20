@@ -46,6 +46,10 @@ dev = [
     "ruff>=0.7.0",
     "mypy>=1.13.0",
     "types-requests>=2.32.0",
+    # Used by scripts/tippie_to_contacts_json.py (PR #39) — operator-local
+    # tool, never runs in the Railway container, so it stays out of the
+    # runtime ``dependencies`` list.
+    "openpyxl>=3.1.0",
 ]
 
 [project.scripts]

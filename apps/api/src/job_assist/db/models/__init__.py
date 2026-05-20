@@ -2,6 +2,7 @@
 
 from job_assist.db.models.application_state import ApplicationState
 from job_assist.db.models.closed_channel import ClosedChannel
+from job_assist.db.models.contact import Contact
 from job_assist.db.models.division import Division
 from job_assist.db.models.ingest_run import IngestRun
 from job_assist.db.models.job_posting import JobPosting
@@ -15,6 +16,7 @@ from job_assist.db.models.triage_result import TriageResult
 __all__ = [
     "ApplicationState",
     "ClosedChannel",
+    "Contact",
     "Division",
     "IngestRun",
     "JobPosting",

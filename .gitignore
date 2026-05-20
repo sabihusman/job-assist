@@ -67,3 +67,10 @@ apps/api/seeds/*.json
 !apps/api/seeds/*.example.json
 *.gmail-token
 credentials.json
+
+# Operator-personal contact data (PR #39) — Tippie alumni directory and
+# any derived JSON. Real PII for ~388 people; must never land in git.
+Connecting_With_Classmates_Directory.xlsx
+*alumni*.xlsx
+apps/api/seeds/contacts.json
+/tmp/contacts.json
