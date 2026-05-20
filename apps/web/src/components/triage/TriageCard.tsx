@@ -191,6 +191,10 @@ function AtsBadge({ ats }: { ats: string }) {
     greenhouse: 'text-ats-greenhouse',
     lever: 'text-ats-lever',
     ashby: 'text-ats-ashby',
+    // Workday (PR #33) — no brand color yet, so we just use the
+    // muted-foreground token. Explicit entry to make the omission
+    // intentional rather than accidental.
+    workday: 'text-muted-foreground',
   };
   const colorClass = known[ats.toLowerCase()] ?? 'text-muted-foreground';
   return (
