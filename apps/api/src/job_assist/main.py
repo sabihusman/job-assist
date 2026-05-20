@@ -1322,6 +1322,67 @@ async def retry_division_enrichment_endpoint(
     }
 
 
+# ── JD summary enrichment (PR #41) ────────────────────────────────────────────
+
+
+@app.post("/enrichment/jd-summaries/sweep", tags=["enrichment"])
+async def sweep_jd_summaries_endpoint(
+    db: DbSession,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Run the JD-summary sweep over eligible ``job_posting`` rows.
+
+    Called by the daily ``enrich-jd-summaries`` GitHub Actions cron at
+    08:30 UTC (after ingest + company + division enrichment). The sweep
+    caps at ``limit`` rows per call so a Gemini RPM hit doesn't drag the
+    workflow past its 15-minute timeout. Idempotent — each row's
+    ``jd_summary_markdown IS NOT NULL`` short-circuits the LLM call.
+
+    TODO: add authentication before exposing this endpoint publicly.
+          Currently dev-mode only — single-user deployment.
+    """
+    from job_assist.services.jd_summary_enrichment import sweep_jd_summaries
+
+    summary = await sweep_jd_summaries(db, limit=limit)
+    return {
+        "total": summary.total,
+        "enriched": summary.enriched,
+        "skipped": summary.skipped,
+        "exhausted": summary.exhausted,
+        "missing_context": summary.missing_context,
+        "errors": summary.errors,
+        "error_details": summary.error_details,
+    }
+
+
+@app.post(
+    "/enrichment/jd-summaries/{posting_id}/retry",
+    tags=["enrichment"],
+)
+async def retry_jd_summary_enrichment_endpoint(
+    posting_id: uuid.UUID,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Reset ``jd_summary_enrichment_attempt_count`` and re-run.
+
+    Mirrors the company / division retry endpoints. Clears any cached
+    summary so the next call is a fresh attempt.
+    """
+    from job_assist.services.jd_summary_enrichment import reset_attempts_and_retry
+
+    result = await reset_attempts_and_retry(db, posting_id)
+    if result.status == "not_found":
+        raise HTTPException(
+            status_code=404,
+            detail=f"job_posting id={posting_id} not found",
+        )
+    return {
+        "status": result.status,
+        "posting_id": result.posting_id,
+        "error": result.error,
+    }
+
+
 # ── Logging setup ─────────────────────────────────────────────────────────────
 
 

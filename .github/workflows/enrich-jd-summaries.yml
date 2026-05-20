@@ -1,0 +1,87 @@
+name: Enrich JD summaries
+
+# Fires once a day at 08:30 UTC against POST /enrichment/jd-summaries/sweep.
+# Runs after the company (07:00) and division (08:00) enrichments so the
+# org context they generate is already in place when the JD summary
+# prompt sees the parent rows — and well before the next ingest cycle at
+# 06:00 UTC the following day.
+#
+# The sweep itself is capped at 100 rows per call to keep one workflow run
+# inside both Gemini's free-tier RPM budget (15/min) and the 15-minute
+# job timeout. Backfilling all existing postings takes multiple days; the
+# operator can hit the endpoint manually if they want to accelerate it.
+#
+# Secrets required (already configured in repo settings):
+#   API_URL — Railway production base URL. Same secret used by every
+#             other workflow that hits the API.
+#
+# Pause: Actions tab → Enrich JD summaries → "···" → Disable workflow.
+# Manual trigger: Actions tab → Enrich JD summaries → Run workflow.
+
+on:
+  schedule:
+    # 08:30 UTC = 02:30 US Central. Slots in 30 min after enrich-divisions
+    # (08:00) and before the next day's daily-ingest at 06:00.
+    - cron: '30 8 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Sweep is idempotent (skip-on-not-null) so overlap is safe, but queueing
+# overlapping firings keeps the logs cleaner and avoids burning RPM budget
+# on the same row twice.
+concurrency:
+  group: enrich-jd-summaries
+  cancel-in-progress: false
+
+jobs:
+  enrich:
+    name: Run JD summary sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_URL: ${{ secrets.API_URL }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Trigger JD summary sweep
+        id: sweep
+        run: |
+          # Body and status captured separately so a non-200 still gets
+          # logged before the step exits 1.
+          status=$(curl -sS --max-time 540 \
+            -o /tmp/jd_summary.json -w "%{http_code}" \
+            -X POST "$API_URL/enrichment/jd-summaries/sweep")
+
+          if [ "$status" != "200" ]; then
+            echo "Sweep failed with HTTP $status"
+            cat /tmp/jd_summary.json
+            exit 1
+          fi
+
+          echo "Sweep succeeded:"
+          python3 -m json.tool < /tmp/jd_summary.json
+
+      - name: Surface counters in the workflow summary
+        if: always() && hashFiles('/tmp/jd_summary.json') != ''
+        run: |
+          python3 <<'PYEOF' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          try:
+              d = json.loads(pathlib.Path("/tmp/jd_summary.json").read_text())
+          except Exception as exc:
+              print(f"## JD summary sweep\n\nCould not parse response: {exc}")
+              raise SystemExit(0)
+          print("## JD summary sweep")
+          print()
+          print(f"- Total: **{d.get('total', 0)}**")
+          print(f"- Enriched (new): **{d.get('enriched', 0)}**")
+          print(f"- Skipped (already enriched): {d.get('skipped', 0)}")
+          print(f"- Missing context (jd_text too short): {d.get('missing_context', 0)}")
+          print(f"- Errors: {d.get('errors', 0)}")
+          print(f"- Exhausted (need /retry): {d.get('exhausted', 0)}")
+          for err in d.get("error_details", []):
+              print(f"  - `{err.get('posting_id','?')}` → `{err.get('error','?')}`")
+          PYEOF

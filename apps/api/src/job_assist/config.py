@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     division_desc_model: str = Field(default="gemini-2.5-flash-lite")
     division_enrich_max_attempts: int = Field(default=3)
 
+    # JD summarization (PR #41) — Flash Lite same as the other enrichment
+    # paths. ``jd_summary_max_output_tokens`` caps cost per call; the
+    # prompt asks for 100-200 words which sits ~250-400 tokens.
+    jd_summary_model: str = Field(default="gemini-2.5-flash-lite")
+    jd_summary_enrich_max_attempts: int = Field(default=3)
+    jd_summary_max_output_tokens: int = Field(default=500)
+
     # Gmail
     gmail_credentials_path: str = Field(default="./credentials.json")
     gmail_token_path: str = Field(default="./token.json")
