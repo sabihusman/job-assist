@@ -106,6 +106,9 @@ export type PostingActionRow = {
 
 export type PostingDetail = PostingListItem & {
   description_markdown: string | null;
+  // Gemini-generated operator-focused summary (PR #41/#42). NULL until
+  // the enrichment sweep has visited the row.
+  jd_summary_markdown: string | null;
   division: DivisionEmbedded | null;
   posted_at: string | null;
   last_seen_at: string | null;

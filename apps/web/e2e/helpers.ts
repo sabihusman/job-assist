@@ -1,4 +1,4 @@
-import { expect, type Page, type Route } from '@playwright/test';
+import { type Page, type Route, expect } from '@playwright/test';
 
 /**
  * Conventions for E2E tests in this project.

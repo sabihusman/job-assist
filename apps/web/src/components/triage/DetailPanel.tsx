@@ -175,17 +175,14 @@ function DetailContent({
           </div>
         </section>
 
-        {/* JD markdown */}
-        <section className="mt-6">
-          <h4 className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
-            Job description
-          </h4>
-          {posting.description_markdown ? (
-            <MarkdownRenderer source={posting.description_markdown} className="prose-jd mt-3" />
-          ) : (
-            <p className="mt-3 text-[13px] text-muted-foreground">No description available.</p>
-          )}
-        </section>
+        {/* JD markdown — summary preferred, full description on toggle.
+            Keyed on posting.id so the showFullJd state resets whenever
+            the operator selects a different posting. */}
+        <JdSection
+          key={posting.id}
+          summary={posting.jd_summary_markdown}
+          fullText={posting.description_markdown}
+        />
       </div>
 
       {/* Sticky action bar */}
@@ -213,6 +210,80 @@ function DetailContent({
         </div>
       </div>
     </aside>
+  );
+}
+
+/**
+ * JD section. Three states:
+ *   1. summary present → render summary, toggle reveals full description below
+ *   2. summary null, full present → render full + "summary pending" footnote
+ *   3. both null → empty-state line
+ *
+ * Toggle state is *intentionally* not lifted: the parent re-keys this
+ * component on posting.id, so showFullJd resets implicitly on selection
+ * change without needing a useEffect.
+ */
+function JdSection({
+  summary,
+  fullText,
+}: {
+  summary: string | null;
+  fullText: string | null;
+}) {
+  const [showFullJd, setShowFullJd] = useState(false);
+
+  if (summary) {
+    return (
+      <section className="mt-6">
+        <h4 className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
+          Job description (summary)
+        </h4>
+        <MarkdownRenderer source={summary} className="prose-jd mt-3" />
+        {fullText && (
+          <>
+            <button
+              type="button"
+              onClick={() => setShowFullJd((open) => !open)}
+              aria-expanded={showFullJd}
+              className="mt-3 inline-flex items-center gap-1 rounded text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              {showFullJd ? 'Hide full description ↑' : 'Show full description ↓'}
+            </button>
+            {showFullJd && (
+              <div className="mt-3 border-t border-border pt-3">
+                <h5 className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
+                  Full description
+                </h5>
+                <MarkdownRenderer source={fullText} className="prose-jd mt-2" />
+              </div>
+            )}
+          </>
+        )}
+      </section>
+    );
+  }
+
+  if (fullText) {
+    return (
+      <section className="mt-6">
+        <h4 className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
+          Job description
+        </h4>
+        <MarkdownRenderer source={fullText} className="prose-jd mt-3" />
+        <p className="mt-3 text-[11px] italic text-muted-foreground">
+          Summary pending — will populate after next enrichment run.
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="mt-6">
+      <h4 className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
+        Job description
+      </h4>
+      <p className="mt-3 text-[13px] text-muted-foreground">No description available.</p>
+    </section>
   );
 }
 

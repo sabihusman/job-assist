@@ -970,6 +970,7 @@ async def get_posting(
         "score": None,
         "state": _state_block(pa_action_type, pa_reason, pa_snooze_until, pa_created_at),
         "description_markdown": jp.jd_text or None,
+        "jd_summary_markdown": jp.jd_summary_markdown,
         "division": division_block,
         "posted_at": jp.posted_at.isoformat() if jp.posted_at else None,
         "last_seen_at": jp.last_seen_at.isoformat() if jp.last_seen_at else None,
