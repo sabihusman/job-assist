@@ -1,0 +1,52 @@
+name: Keepalive ping
+
+# Fires every 5 minutes against GET /health to keep the Railway service
+# warm. Railway scales free-tier services to zero after a short idle
+# window; the cold-start path is ~5-30s and surfaces as a 503 to the
+# frontend before the worker boots. A periodic ping resets the
+# inactivity timer and removes the cold-start tax entirely.
+#
+# Secrets required (already configured in repo settings):
+#   API_URL — Railway production base URL. Same secret used by
+#             gmail-poll.yml, ingest-daily.yml, deploy.yml.
+#
+# Pause: Actions tab → Keepalive ping → "···" → Disable workflow.
+# Manual trigger: Actions tab → Keepalive ping → Run workflow.
+
+on:
+  schedule:
+    # */5 = every 5 minutes. ~288 runs/day. Each run does one tiny GET
+    # and exits in <2s warm / <30s cold. GitHub Actions free tier
+    # includes 2,000 min/month for private repos; this workflow uses
+    # ~7h/month, well under the cap.
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Skip a firing if the previous one is still in flight. A stuck ping
+# should not pile up — the next 5-min tick will resume the schedule.
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    name: Ping /health
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      API_URL: ${{ secrets.API_URL }}
+    steps:
+      - name: GET /health
+        run: |
+          # -f → exit non-zero on HTTP >=400 (Actions marks the run red)
+          # -sS → silent except errors
+          # -o /dev/null → discard body (just want the status)
+          # --max-time 60 → cap a single ping at 60s; the cold-start path
+          #                 is well under that, and a hang past that is
+          #                 a real outage worth surfacing.
+          curl -fsS --max-time 60 -o /dev/null \
+            -w "Status: %{http_code} · Time: %{time_total}s\n" \
+            "$API_URL/health"
