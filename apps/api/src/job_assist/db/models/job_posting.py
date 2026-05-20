@@ -94,6 +94,19 @@ class JobPosting(Base):
     # division-discovery query in PR #28b.
     department: Mapped[str | None] = mapped_column(Text, nullable=True)
     team: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ── JD summary enrichment (PR #41) ───────────────────────────────────
+    # Gemini-generated markdown summary, set once and treated as cached
+    # until /retry is called. Same six-status state machine as company /
+    # division enrichment; the sweep skips rows where
+    # ``jd_summary_markdown IS NOT NULL``.
+    jd_summary_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
+    jd_summary_enriched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    jd_summary_enrichment_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    jd_summary_enrichment_attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
 
     __table_args__ = (
         UniqueConstraint("content_hash", name="idx_job_posting_content_hash"),
