@@ -208,7 +208,7 @@ def ingest(
     asyncio.run(_ingest_async(ats, handle, all_companies))
 
 
-_SUPPORTED_ATS = {"greenhouse", "lever", "ashby"}
+_SUPPORTED_ATS = {"greenhouse", "lever", "ashby", "workday"}
 
 
 async def _ingest_async(ats: str, handle: str | None, all_companies: bool) -> None:
@@ -227,8 +227,11 @@ async def _ingest_async(ats: str, handle: str | None, all_companies: bool) -> No
         )
         raise typer.Exit(1)
 
-    # Build the adapter for the requested ATS.
-    adapter: Adapter
+    # Build the adapter for the requested ATS. Workday is the only one
+    # that needs a per-company adapter_config (wd_number + site), so the
+    # branch defers construction until we've loaded the target_company
+    # row inside the engine block below.
+    adapter: Adapter | None = None
     if ats == "greenhouse":
         from job_assist.adapters.greenhouse import GreenhouseAdapter
 
@@ -241,6 +244,9 @@ async def _ingest_async(ats: str, handle: str | None, all_companies: bool) -> No
         from job_assist.adapters.ashby import AshbyAdapter
 
         adapter = AshbyAdapter()
+    elif ats == "workday":
+        # Adapter constructed later — needs adapter_config from the DB.
+        adapter = None
     else:  # pragma: no cover — guarded by _SUPPORTED_ATS above
         raise typer.Exit(1)
 
@@ -268,17 +274,50 @@ async def _ingest_async(ats: str, handle: str | None, all_companies: bool) -> No
         assert handle is not None
         handles = [handle]
 
-    async with adapter:
+    # Workday adapters are per-tenant: each `handle` has its own
+    # `adapter_config` (wd_number + site), so we construct a fresh
+    # `WorkdayAdapter` inside the loop. Other ATSes share one instance.
+    if ats == "workday":
+        from job_assist.adapters.workday import WorkdayAdapter
+
         for h in handles:
             async with factory() as session:
-                typer.echo(f"Ingesting {ats}/{h} …")
-                run = await service.ingest_source(adapter, h, session)
+                cfg_row = await session.execute(
+                    select(TargetCompany).where(
+                        TargetCompany.ats == "workday",
+                        TargetCompany.ats_handle == h,
+                    )
+                )
+                tc = cfg_row.scalar_one_or_none()
+                cfg = (tc.adapter_config if tc else None) or {}
+                if not isinstance(cfg, dict) or "wd_number" not in cfg or "site" not in cfg:
+                    typer.echo(
+                        f"  ✗ {h}: target_company missing adapter_config (needs wd_number + site)",
+                        err=True,
+                    )
+                    continue
+                async with WorkdayAdapter(adapter_config=cfg) as wd_adapter:
+                    typer.echo(f"Ingesting workday/{h} …")
+                    run = await service.ingest_source(wd_adapter, h, session)
                 icon = "✓" if run.status == "success" else "✗"
                 typer.echo(
                     f"  {icon} {h}: status={run.status}  "
                     f"new={run.postings_new}  updated={run.postings_updated}  "
                     f"fetched={run.postings_fetched}"
                 )
+    else:
+        assert adapter is not None  # narrowed by the branches above
+        async with adapter:
+            for h in handles:
+                async with factory() as session:
+                    typer.echo(f"Ingesting {ats}/{h} …")
+                    run = await service.ingest_source(adapter, h, session)
+                    icon = "✓" if run.status == "success" else "✗"
+                    typer.echo(
+                        f"  {icon} {h}: status={run.status}  "
+                        f"new={run.postings_new}  updated={run.postings_updated}  "
+                        f"fetched={run.postings_fetched}"
+                    )
 
     await engine.dispose()
 

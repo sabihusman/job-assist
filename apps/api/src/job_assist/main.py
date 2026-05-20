@@ -66,9 +66,9 @@ async def root() -> dict[str, str]:
 # ── Admin — ingestion ─────────────────────────────────────────────────────────
 
 
-# ATS sources the daily cron knows how to ingest. Workday rows are filtered
-# out — that adapter doesn't exist yet (Week 2+ roadmap).
-_INGESTABLE_ATS = ("greenhouse", "lever", "ashby")
+# ATS sources the daily cron knows how to ingest. Workday joined the
+# set in PR #33.
+_INGESTABLE_ATS = ("greenhouse", "lever", "ashby", "workday")
 
 
 @app.get("/admin/ingest/plan")
@@ -131,13 +131,17 @@ async def trigger_ingest(
     TODO: add authentication before exposing this endpoint publicly.
           Currently dev-mode only — single-user deployment.
     """
+    from sqlalchemy import select
+
     from job_assist.adapters.ashby import AshbyAdapter
     from job_assist.adapters.base import Adapter
     from job_assist.adapters.greenhouse import GreenhouseAdapter
     from job_assist.adapters.lever import LeverAdapter
+    from job_assist.adapters.workday import WorkdayAdapter
+    from job_assist.db.models.target_company import TargetCompany
     from job_assist.services.ingestion import IngestionService
 
-    _SUPPORTED = {"greenhouse", "lever", "ashby"}
+    _SUPPORTED = {"greenhouse", "lever", "ashby", "workday"}
     if ats not in _SUPPORTED:
         raise HTTPException(
             status_code=400,
@@ -151,6 +155,36 @@ async def trigger_ingest(
         adapter = LeverAdapter()
     elif ats == "ashby":
         adapter = AshbyAdapter()
+    elif ats == "workday":
+        # Workday's URL needs the tenant's wd_number + site shard, which
+        # live on `target_company.adapter_config` (PR #33). Look them up
+        # by the handle the caller passed.
+        tc_row = (
+            await db.execute(
+                select(TargetCompany).where(
+                    TargetCompany.ats == "workday",
+                    TargetCompany.ats_handle == handle,
+                )
+            )
+        ).scalar_one_or_none()
+        if tc_row is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"No target_company with ats='workday' and "
+                    f"ats_handle={handle!r}. Seed via SQL with adapter_config."
+                ),
+            )
+        cfg = tc_row.adapter_config or {}
+        if not isinstance(cfg, dict) or "wd_number" not in cfg or "site" not in cfg:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"target_company {handle!r} is missing adapter_config keys "
+                    f"`wd_number` and `site`."
+                ),
+            )
+        adapter = WorkdayAdapter(adapter_config=cfg)
     else:
         # Unreachable given the guard above, but keeps mypy happy.
         raise HTTPException(status_code=400, detail=f"ATS {ats!r} not yet implemented")

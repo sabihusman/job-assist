@@ -7,7 +7,7 @@ from datetime import datetime
 
 from sqlalchemy import DateTime, Index, Integer, String, Text
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -32,6 +32,10 @@ class TargetCompany(Base):
         server_default=ATS.unknown.value,
     )
     ats_handle: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Per-ATS extension config — needed by Workday for wd_number + site
+    # (PR #33); NULL for Greenhouse / Lever / Ashby where the public
+    # endpoints don't need extras.
+    adapter_config: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
     tier: Mapped[int] = mapped_column(Integer, nullable=False)
     role_filter: Mapped[str | None] = mapped_column(String(50), nullable=True)
     domain: Mapped[str | None] = mapped_column(String, nullable=True)
