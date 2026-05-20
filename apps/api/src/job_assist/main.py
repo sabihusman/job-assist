@@ -265,6 +265,41 @@ async def seed_target_companies(
     return {"inserted": inserted, "skipped": skipped, "total": inserted + skipped}
 
 
+# ── Admin — seed contact ──────────────────────────────────────────────────────
+
+
+@app.post("/admin/seed/contacts")
+async def seed_contacts(
+    rows: list[dict[str, Any]],
+    db: DbSession,
+) -> dict[str, int]:
+    """Seed ``contact`` rows from a JSON body (PR #39).
+
+    Same shape as ``/admin/seed/target-companies``: the body IS the seed
+    payload, so the operator's private Tippie alumni JSON never has to
+    land on the Railway container::
+
+        curl -X POST -H 'Content-Type: application/json' \\
+             -d @/tmp/contacts.json \\
+             https://<host>/admin/seed/contacts
+
+    Idempotent. Re-running with the same payload returns ``inserted=0``
+    and ``skipped_duplicate_*`` matching the prior insert count, because
+    dedup uses ``LOWER(email_primary)`` / ``LOWER(linkedin_url)`` —
+    case-insensitive, matches the partial unique indexes.
+
+    Privacy: response shape contains no names, emails, or LinkedIn URLs;
+    same for the structlog line emitted by the seed service.
+
+    TODO: add authentication before exposing this endpoint publicly.
+          Currently dev-mode only — single-user deployment.
+    """
+    from job_assist.contact_seed import seed_contacts_from_rows
+
+    response = await seed_contacts_from_rows(db, rows)
+    return response.model_dump()
+
+
 # ── Admin — Gmail backfill + poll ─────────────────────────────────────────────
 
 
