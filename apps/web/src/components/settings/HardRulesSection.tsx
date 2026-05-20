@@ -1,0 +1,298 @@
+'use client';
+
+import { useState } from 'react';
+import { Controller, useForm } from 'react-hook-form';
+import { toast } from 'sonner';
+
+import { ConfirmRulesModal, type RuleChange } from '@/components/settings/ConfirmRulesModal';
+import { SettingsRow, SettingsSection } from '@/components/settings/layout';
+import { useUpdateProfile } from '@/lib/api/settings';
+import {
+  CLOSED_CHANNELS_STUB,
+  DEFAULT_ROLE_FAMILY_WEIGHTS,
+  type OperatorProfileRead,
+  type RoleFamilyWeights,
+} from '@/lib/settings/types';
+import { cn } from '@/lib/utils';
+
+/**
+ * Hard rule thresholds. Five subsections:
+ *   - Maximum applicant count    (numeric + slider, backend column)
+ *   - Salary floor               (numeric + slider, backend column)
+ *   - Closed channels            (read-only stub; no backend API)
+ *   - Staffing firm blocklist    (textarea, backend column)
+ *   - Role family weights        (frontend-only state; no backend column)
+ *
+ * Save button is the only dirty-aware control in the entire Settings
+ * page (per UI_SPEC.md). Clicking it on a dirty form opens the
+ * confirm modal; clean state is a no-op.
+ */
+
+type HardRulesFormState = {
+  applicant_cap: number;
+  salary_floor_usd: number;
+  staffing_firm_blocklist: string; // textarea: newline-joined
+  role_family_weights: RoleFamilyWeights;
+};
+
+const FAMILY_LABELS: Record<keyof RoleFamilyWeights, string> = {
+  product_management: 'Product Management',
+  product_owner: 'Product Owner',
+  product_marketing: 'Product Marketing',
+  program_management: 'Program Manager',
+};
+
+export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) {
+  const form = useForm<HardRulesFormState>({
+    defaultValues: {
+      applicant_cap: profile.applicant_cap,
+      salary_floor_usd: profile.salary_floor_usd,
+      staffing_firm_blocklist: profile.staffing_firm_blocklist.join('\n'),
+      role_family_weights: { ...DEFAULT_ROLE_FAMILY_WEIGHTS },
+    },
+  });
+  const { control, register, handleSubmit, formState, watch, reset, getValues } = form;
+  const update = useUpdateProfile();
+  const [modalOpen, setModalOpen] = useState(false);
+
+  const isDirty = formState.isDirty;
+
+  const onSaveClick = () => {
+    if (!isDirty) return;
+    setModalOpen(true);
+  };
+
+  const onConfirmSave = async () => {
+    const values = getValues();
+    const body = {
+      applicant_cap: values.applicant_cap,
+      salary_floor_usd: values.salary_floor_usd,
+      staffing_firm_blocklist: values.staffing_firm_blocklist
+        .split('\n')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    };
+    try {
+      await update.mutateAsync(body);
+      toast.success('✓ Rules saved');
+      setModalOpen(false);
+      // Reset isDirty to false now that the new values match the backend.
+      reset(values);
+    } catch {
+      // Modal stays open; error message shows inline.
+    }
+  };
+
+  // Build the field-diff list for the modal. Skip role_family_weights
+  // (per spec — too noisy to enumerate four sliders) and only include
+  // fields whose dirty flag is set.
+  const changes: RuleChange[] = [];
+  if (formState.dirtyFields.applicant_cap) {
+    changes.push({
+      label: 'Maximum applicant count',
+      from: String(profile.applicant_cap),
+      to: String(watch('applicant_cap')),
+    });
+  }
+  if (formState.dirtyFields.salary_floor_usd) {
+    changes.push({
+      label: 'Salary floor',
+      from: fmtUsd(profile.salary_floor_usd),
+      to: fmtUsd(watch('salary_floor_usd')),
+    });
+  }
+  if (formState.dirtyFields.staffing_firm_blocklist) {
+    const fromLen = profile.staffing_firm_blocklist.length;
+    const toLen = watch('staffing_firm_blocklist')
+      .split('\n')
+      .filter((s) => s.trim().length > 0).length;
+    changes.push({
+      label: 'Staffing firm blocklist',
+      from: `${fromLen} ${fromLen === 1 ? 'entry' : 'entries'}`,
+      to: `${toLen} ${toLen === 1 ? 'entry' : 'entries'}`,
+    });
+  }
+
+  return (
+    <SettingsSection heading="Hard rule thresholds" description="Filters applied before triage.">
+      <form onSubmit={handleSubmit(onSaveClick)} className="flex flex-col gap-8">
+        <SettingsRow
+          label="Maximum applicant count"
+          sub="Drop postings above this applicant count."
+        >
+          <Controller
+            control={control}
+            name="applicant_cap"
+            render={({ field }) => (
+              <SliderRow
+                value={field.value}
+                onChange={field.onChange}
+                min={50}
+                max={500}
+                step={10}
+                inputAriaLabel="Maximum applicant count"
+              />
+            )}
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          label="Salary floor (annual USD)"
+          sub="Drop postings whose max salary falls below this."
+        >
+          <Controller
+            control={control}
+            name="salary_floor_usd"
+            render={({ field }) => (
+              <SliderRow
+                value={field.value}
+                onChange={field.onChange}
+                min={50_000}
+                max={300_000}
+                step={5_000}
+                inputAriaLabel="Salary floor"
+                displayFormat={fmtUsd}
+              />
+            )}
+          />
+        </SettingsRow>
+
+        <SettingsRow label="Closed channels" sub="Companies you've explicitly opted out of.">
+          <div className="flex flex-col gap-2">
+            <ul className="flex list-none flex-col gap-1 p-0">
+              {CLOSED_CHANNELS_STUB.map((row) => (
+                <li
+                  key={row.company}
+                  className="flex items-center justify-between rounded border border-border bg-card px-3 py-2 text-[13px]"
+                >
+                  <span className="font-medium">{row.company}</span>
+                  <span className="text-muted-foreground">{row.reason}</span>
+                  <span className="font-mono text-[11px] text-muted-foreground">{row.date}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="text-[12px] italic text-muted-foreground">
+              Add or remove via SQL for now.
+            </p>
+          </div>
+        </SettingsRow>
+
+        <SettingsRow label="Staffing firm blocklist" sub="one firm per line">
+          <textarea
+            {...register('staffing_firm_blocklist')}
+            aria-label="Staffing firm blocklist"
+            className="min-h-[100px] w-full rounded-md border border-border bg-input px-3 py-2 text-[13px] outline-none placeholder:text-muted-foreground focus:border-border-strong"
+          />
+        </SettingsRow>
+
+        <SettingsRow label="Role family weights" sub="0.0 = never surface · 1.0 = full weight">
+          <div className="flex flex-col gap-3">
+            {(Object.keys(FAMILY_LABELS) as (keyof RoleFamilyWeights)[]).map((family) => (
+              <Controller
+                key={family}
+                control={control}
+                name={`role_family_weights.${family}`}
+                render={({ field }) => (
+                  <div className="flex items-center gap-3 text-[13px]">
+                    <span className="w-44">{FAMILY_LABELS[family]}</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={field.value}
+                      aria-label={`${FAMILY_LABELS[family]} weight`}
+                      onChange={(e) => field.onChange(Number.parseFloat(e.target.value))}
+                      className="h-1 w-48 cursor-pointer accent-primary"
+                    />
+                    <span className="w-12 text-right font-mono text-[12px]">
+                      {field.value.toFixed(2)}
+                    </span>
+                  </div>
+                )}
+              />
+            ))}
+            <p className="text-[12px] text-muted-foreground">
+              How aggressively to surface each role family.
+            </p>
+          </div>
+        </SettingsRow>
+
+        <div className="flex items-center justify-end">
+          <button
+            type="submit"
+            data-dirty={isDirty}
+            className={cn(
+              'inline-flex h-9 items-center rounded-md border px-4 text-sm transition-colors',
+              isDirty
+                ? 'border-primary bg-primary/15 text-primary hover:bg-primary/25'
+                : 'border-border bg-surface text-foreground/60 hover:bg-accent',
+            )}
+          >
+            Save hard rules
+          </button>
+        </div>
+      </form>
+
+      <ConfirmRulesModal
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+        changes={changes}
+        onSave={onConfirmSave}
+        isSaving={update.isPending}
+        error={update.error ? (update.error as Error).message : null}
+      />
+    </SettingsSection>
+  );
+}
+
+function SliderRow({
+  value,
+  onChange,
+  min,
+  max,
+  step,
+  inputAriaLabel,
+  displayFormat,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+  min: number;
+  max: number;
+  step: number;
+  inputAriaLabel: string;
+  displayFormat?: (n: number) => string;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <input
+        type="number"
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        aria-label={inputAriaLabel}
+        onChange={(e) => onChange(Number.parseInt(e.target.value, 10) || min)}
+        className="h-8 w-28 rounded-md border border-border bg-input px-2 text-[13px] outline-none focus:border-border-strong"
+      />
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        aria-label={`${inputAriaLabel} slider`}
+        onChange={(e) => onChange(Number.parseInt(e.target.value, 10))}
+        className="h-1 w-64 cursor-pointer accent-primary"
+      />
+      {displayFormat && (
+        <span className="font-mono text-[12px] text-foreground">{displayFormat(value)}</span>
+      )}
+    </div>
+  );
+}
+
+function fmtUsd(n: number): string {
+  if (n >= 1000) return `$${Math.round(n / 1000)}K`;
+  return `$${n}`;
+}
