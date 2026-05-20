@@ -58,7 +58,13 @@ async def _call_plan(db_session: Any) -> list[dict[str, str]]:
 
 @_NEEDS_DB
 async def test_returns_only_supported_ats(db_session: Any) -> None:
-    """Rows with ats='workday' or 'unknown' must NOT appear in the plan."""
+    """Rows with ats='unknown' must NOT appear in the plan.
+
+    Workday is a supported adapter as of PR #33, so workday rows with a
+    handle now show up in the plan. adapter_config validation happens at
+    trigger time, not plan time — the plan endpoint just lists what's
+    eligible for ingest.
+    """
     db_session.add_all(
         [
             _tc("AlphaCo", ats="greenhouse", handle="alphaco", tier=1),
@@ -72,7 +78,7 @@ async def test_returns_only_supported_ats(db_session: Any) -> None:
 
     plan = await _call_plan(db_session)
     handles = {item["handle"] for item in plan}
-    assert handles == {"alphaco", "betaco", "gammaco"}
+    assert handles == {"alphaco", "betaco", "gammaco", "workdayco"}
 
 
 @_NEEDS_DB

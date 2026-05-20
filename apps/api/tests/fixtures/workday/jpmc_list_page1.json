@@ -1,0 +1,22 @@
+{
+  "total": 2,
+  "jobPostings": [
+    {
+      "title": "Senior Product Manager, Wealth Platform",
+      "externalPath": "/job/New-York-NY/Senior-Product-Manager_R-12345",
+      "locationsText": "New York, NY",
+      "postedOn": "Posted Today",
+      "bulletFields": ["R-12345"],
+      "remoteType": "Hybrid",
+      "jobFamily": "Product"
+    },
+    {
+      "title": "Staff Engineer, Payments",
+      "externalPath": "/job/Plano-TX/Staff-Engineer_R-67890",
+      "locationsText": "Plano, TX",
+      "postedOn": "Posted 5 Days Ago",
+      "bulletFields": ["R-67890"],
+      "jobFamily": "Engineering"
+    }
+  ]
+}

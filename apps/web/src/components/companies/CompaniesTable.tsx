@@ -150,13 +150,17 @@ function TierBadge({ tier }: { tier: number | null }) {
 }
 
 function AtsBadge({ ats }: { ats: string }) {
+  // PR #33 adds "workday" to the ATS vocabulary. No brand color yet,
+  // so workday falls through to the muted-foreground default — same
+  // tone the spec asks for ("neutral slate/gray").
   const cls =
     (
       {
         greenhouse: 'text-ats-greenhouse',
         lever: 'text-ats-lever',
         ashby: 'text-ats-ashby',
+        workday: 'text-muted-foreground',
       } as const
-    )[ats.toLowerCase() as 'greenhouse' | 'lever' | 'ashby'] ?? 'text-muted-foreground';
+    )[ats.toLowerCase() as 'greenhouse' | 'lever' | 'ashby' | 'workday'] ?? 'text-muted-foreground';
   return <span className={cn('font-mono text-[10px] uppercase tracking-wide', cls)}>{ats}</span>;
 }
