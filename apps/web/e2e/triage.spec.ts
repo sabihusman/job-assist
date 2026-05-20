@@ -1,4 +1,4 @@
-import { expect, test, type Route } from '@playwright/test';
+import { type Route, expect, test } from '@playwright/test';
 
 /**
  * Triage page E2E.
@@ -120,12 +120,22 @@ async function mockApi(page: import('@playwright/test').Page) {
     // GET /postings/{id} — detail response
     const id = route.request().url().split('/').pop()?.split('?')[0];
     const item = POSTINGS.find((p) => p.id === id) ?? POSTINGS[0];
+    // Per-posting summary so the JD-summary E2E can assert both shapes:
+    // p-alpha keeps the legacy "no summary yet" behavior (raw JD visible
+    // by default); p-beta returns a real summary so the toggle test can
+    // collapse/expand it.
+    const summaryByPosting: Record<string, string | null> = {
+      'p-alpha': null,
+      'p-beta': '**Scope**: Senior PM owns risk signals at Beta Co.',
+      'p-gamma': null,
+    };
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         ...item,
         description_markdown: '## About the role\n\n- bullet',
+        jd_summary_markdown: summaryByPosting[item.id] ?? null,
         division: null,
         posted_at: null,
         last_seen_at: null,
@@ -186,4 +196,27 @@ test('clicking the Tune surfacing link navigates to /settings', async ({ page })
   await page.goto('/');
   await page.getByRole('link', { name: /tune surfacing/i }).click();
   await expect(page).toHaveURL('/settings');
+});
+
+// ── PR #42: jd_summary_markdown in the detail panel ──────────────────────────
+
+test('detail panel shows JD summary when jd_summary_markdown is present', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel(/Open detail for Beta Co/).click();
+  // Summary heading + body.
+  await expect(page.getByText(/job description \(summary\)/i)).toBeVisible();
+  await expect(page.getByText(/Senior PM owns risk signals/i)).toBeVisible();
+  // Toggle is offered, but the full JD body ("bullet") is NOT visible.
+  await expect(page.getByRole('button', { name: /show full description/i })).toBeVisible();
+  await expect(page.getByText('bullet', { exact: true })).toBeHidden();
+});
+
+test('toggle expands the full JD beneath the summary', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel(/Open detail for Beta Co/).click();
+  await page.getByRole('button', { name: /show full description/i }).click();
+  // After expansion the "Full description" subheading and the JD body
+  // are both visible.
+  await expect(page.getByRole('heading', { level: 5, name: /full description/i })).toBeVisible();
+  await expect(page.getByText('bullet', { exact: true })).toBeVisible();
 });

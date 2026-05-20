@@ -17,8 +17,7 @@ import { mainContent, mockApi, waitForDataReady } from './helpers';
  */
 
 const NOW = new Date();
-const recentIso = (daysAgo: number) =>
-  new Date(NOW.getTime() - daysAgo * 86_400_000).toISOString();
+const recentIso = (daysAgo: number) => new Date(NOW.getTime() - daysAgo * 86_400_000).toISOString();
 
 const APPLIED_POSTINGS = {
   total: 2,
@@ -142,7 +141,11 @@ test('Applied row expand reveals TIMELINE label', async ({ page }) => {
   await page.goto('/applied');
   await waitForDataReady(page);
   await mainContent(page).getByRole('button', { expanded: false }).first().click();
-  await expect(mainContent(page).getByText(/timeline/i).first()).toBeVisible();
+  await expect(
+    mainContent(page)
+      .getByText(/timeline/i)
+      .first(),
+  ).toBeVisible();
 });
 
 test('Applied sort=tier reorders the URL', async ({ page }) => {
@@ -153,9 +156,7 @@ test('Applied sort=tier reorders the URL', async ({ page }) => {
   // contributes a "Tier 1" substring). `name: 'tier'` would match
   // those rows too. Use `exact: true` against the sort strip's
   // visible lowercase "tier" button instead.
-  await mainContent(page)
-    .getByRole('button', { name: 'tier', exact: true })
-    .click();
+  await mainContent(page).getByRole('button', { name: 'tier', exact: true }).click();
   await expect(page).toHaveURL(/sort=tier/);
 });
 
@@ -165,7 +166,16 @@ test('Pipeline page renders 8 stage columns in order', async ({ page }) => {
   await page.goto('/pipeline');
   await waitForDataReady(page);
   const content = mainContent(page);
-  for (const label of ['APPLIED', 'RECRUITER', 'PHONE', 'VIDEO', 'ONSITE', 'OFFER', 'REJECTED', 'GHOSTED']) {
+  for (const label of [
+    'APPLIED',
+    'RECRUITER',
+    'PHONE',
+    'VIDEO',
+    'ONSITE',
+    'OFFER',
+    'REJECTED',
+    'GHOSTED',
+  ]) {
     await expect(content.getByText(label, { exact: true })).toBeVisible();
   }
 });
@@ -233,7 +243,14 @@ test('Stats funnel shows all 6 stage labels', async ({ page }) => {
     .locator('section')
     .filter({ has: page.getByText(/outcome funnel/i) })
     .getByRole('list');
-  for (const label of ['Applied', 'Recruiter screen', 'Phone interview', 'Video interview', 'Onsite', 'Offer']) {
+  for (const label of [
+    'Applied',
+    'Recruiter screen',
+    'Phone interview',
+    'Video interview',
+    'Onsite',
+    'Offer',
+  ]) {
     await expect(funnel.getByText(label, { exact: true })).toBeVisible();
   }
 });

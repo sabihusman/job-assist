@@ -34,7 +34,7 @@ if (typeof window !== 'undefined') {
   // cmdk calls `.scrollIntoView()` on the selected item as the user
   // arrows through the list. jsdom doesn't implement it; stub as a no-op.
   if (!Element.prototype.scrollIntoView) {
-    Element.prototype.scrollIntoView = function () {};
+    Element.prototype.scrollIntoView = () => {};
   }
 
   if (!('IntersectionObserver' in window)) {

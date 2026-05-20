@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { DetailPanel } from '@/components/triage/DetailPanel';
@@ -40,6 +40,7 @@ function makeDetail(overrides: Partial<PostingDetail> = {}): PostingDetail {
     score: null,
     state: { current: null, reason: null, snooze_until: null, current_at: null },
     description_markdown: '## About the role\n\n- bullet one\n- bullet two',
+    jd_summary_markdown: null,
     division: null,
     posted_at: null,
     last_seen_at: null,
@@ -84,5 +85,92 @@ describe('DetailPanel', () => {
     const anchor = screen.getByRole('link', { name: /open job description in new tab/i });
     expect(anchor.getAttribute('target')).toBe('_blank');
     expect(anchor.getAttribute('href')).toBe('https://example.test/jd');
+  });
+
+  // ── PR #42: jd_summary_markdown surfacing ────────────────────────────────
+
+  test('renders summary when jd_summary_markdown is present', () => {
+    mockState.data = makeDetail({
+      jd_summary_markdown: '**Scope**: Senior PM owns fraud signals.\n\n**Comp**: $200k-$250k.',
+    });
+    wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
+    expect(screen.getByText(/job description \(summary\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Senior PM owns fraud signals/i)).toBeInTheDocument();
+    // Toggle is offered, but the full description is NOT yet rendered.
+    expect(screen.getByRole('button', { name: /show full description/i })).toBeInTheDocument();
+    expect(screen.queryByText(/bullet one/)).not.toBeInTheDocument();
+  });
+
+  test('renders full JD when jd_summary_markdown is null', () => {
+    mockState.data = makeDetail({ jd_summary_markdown: null });
+    wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
+    // Plain heading (no "(summary)" suffix) — and the JD body is visible
+    // immediately without any toggle.
+    expect(
+      screen.getByRole('heading', { level: 4, name: /^job description$/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/bullet one/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /show full description/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  test('shows pending footnote when summary is null but full JD exists', () => {
+    mockState.data = makeDetail({ jd_summary_markdown: null });
+    wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
+    expect(screen.getByText(/summary pending/i)).toBeInTheDocument();
+  });
+
+  test('toggle expands the full JD below the summary', () => {
+    mockState.data = makeDetail({
+      jd_summary_markdown: '**Scope**: short summary line.',
+    });
+    wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
+    // Start collapsed.
+    expect(screen.queryByText(/bullet one/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /show full description/i }));
+    expect(screen.getByText(/bullet one/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /hide full description/i })).toBeInTheDocument();
+  });
+
+  test('toggle collapses the full JD again on second click', () => {
+    mockState.data = makeDetail({
+      jd_summary_markdown: '**Scope**: short summary line.',
+    });
+    wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
+    const btn = screen.getByRole('button', { name: /show full description/i });
+    fireEvent.click(btn);
+    expect(screen.getByText(/bullet one/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /hide full description/i }));
+    expect(screen.queryByText(/bullet one/)).not.toBeInTheDocument();
+  });
+
+  test('toggle state resets when the selected posting id changes', () => {
+    // Open the toggle on posting 1, then re-render with posting 2 selected.
+    // The component is keyed on posting.id so showFullJd resets to false.
+    mockState.data = makeDetail({
+      id: 'p-1',
+      jd_summary_markdown: '**Scope**: posting 1.',
+    });
+    const { rerender } = wrap(
+      <DetailPanel selectedId={'p-1'} onClose={() => {}} onAction={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /show full description/i }));
+    expect(screen.getByText(/bullet one/)).toBeInTheDocument();
+
+    // Switch to a different posting.
+    mockState.data = makeDetail({
+      id: 'p-2',
+      jd_summary_markdown: '**Scope**: posting 2.',
+    });
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <DetailPanel selectedId={'p-2'} onClose={() => {}} onAction={() => {}} />
+      </QueryClientProvider>,
+    );
+
+    // Toggle should be back to "Show full description" — full text hidden.
+    expect(screen.getByRole('button', { name: /show full description/i })).toBeInTheDocument();
+    expect(screen.queryByText(/bullet one/)).not.toBeInTheDocument();
   });
 });

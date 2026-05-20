@@ -144,6 +144,10 @@ class PostingDetail(PostingListItem):
     """
 
     description_markdown: str | None
+    # Gemini-generated operator-focused summary (PR #41/#42). NULL until
+    # the enrichment sweep has visited the row — the frontend shows the
+    # raw description in that case + a "pending" footnote.
+    jd_summary_markdown: str | None
     division: DivisionEmbedded | None
     posted_at: datetime | None
     last_seen_at: datetime | None

@@ -1,4 +1,4 @@
-import { expect, test, type Route } from '@playwright/test';
+import { type Route, expect, test } from '@playwright/test';
 
 import { mainContent, mockApi } from './helpers';
 
