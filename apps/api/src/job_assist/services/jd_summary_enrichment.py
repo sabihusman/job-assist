@@ -157,13 +157,33 @@ def _validate_summary(text: str) -> str:
     response looks unusable. We do NOT validate against the structural
     template (``**Scope**:`` etc.) — Gemini is generally faithful and a
     strict check would force /retry on harmless formatting drift.
+
+    Control-char stripping: Postgres ``TEXT`` rejects NUL bytes
+    (``\\x00``), and Gemini occasionally embeds them in outputs.
+    Without this strip the eventual UPDATE blows up with
+    ``invalid byte sequence``, which surfaced as 500s in the first
+    production sweep (PR #44 fix). Other C0 controls except ``\\n``
+    and ``\\t`` are also stripped — they have no business in a
+    markdown summary and have caused issues with downstream renderers.
     """
     cleaned = text.strip()
     if not cleaned:
         raise ValueError("empty summary")
+    # Strip NUL + other C0 controls except newline / tab. We translate
+    # them out rather than rejecting the response so a single bad byte
+    # doesn't waste a Gemini call.
+    cleaned = cleaned.translate(_C0_CONTROL_STRIP)
+    if not cleaned.strip():
+        raise ValueError("summary became empty after control-char strip")
     if len(cleaned) > _SUMMARY_HARD_MAX:
         raise ValueError(f"summary too long: {len(cleaned)} chars (hard max {_SUMMARY_HARD_MAX})")
     return cleaned
+
+
+# Translation table that maps every C0 control character (\x00..\x1f)
+# except newline (\x0a) and tab (\x09) to None (= remove). DEL (\x7f)
+# is also stripped. Built once at module load.
+_C0_CONTROL_STRIP = {cp: None for cp in [*range(0x00, 0x20), 0x7F] if cp not in (0x09, 0x0A)}
 
 
 # ── Gemini call ──────────────────────────────────────────────────────────────
@@ -317,7 +337,27 @@ async def sweep_jd_summaries(
 
     summary = SweepSummary()
     for posting_id in eligible:
-        result = await enrich_one_posting(session, posting_id)
+        # Wrap each row so an unexpected DB-level exception (e.g. an
+        # invalid byte sequence from Gemini, a transient deadlock) can't
+        # kill the whole sweep. ``enrich_one_posting`` already catches
+        # Gemini exceptions itself; this is defence-in-depth for the
+        # commit paths that live outside that try.
+        try:
+            result = await enrich_one_posting(session, posting_id)
+        except Exception as exc:
+            # The session is now in a failed-transaction state — roll
+            # back so the next iteration starts clean.
+            await session.rollback()
+            err = str(exc)[:_ERROR_MAX_CHARS]
+            logger.warning(
+                "jd_summary_enrichment.sweep_row_failed",
+                extra={"posting_id": str(posting_id), "error": err},
+            )
+            result = EnrichmentResult(
+                status="error",
+                posting_id=str(posting_id),
+                error=err,
+            )
         summary.record(result)
     return summary
 

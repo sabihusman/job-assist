@@ -158,6 +158,28 @@ class TestValidateSummary:
         body = "**Scope**: foo\n**Comp**: bar"
         assert _validate_summary(body) == body
 
+    def test_strips_nul_bytes(self) -> None:
+        """PR #44 fix: Postgres TEXT rejects NUL bytes. Gemini occasionally
+        embeds them; we strip rather than reject so a single bad byte
+        doesn't waste the call."""
+        body = "**Scope**: \x00fraud\x00 signals."
+        assert _validate_summary(body) == "**Scope**: fraud signals."
+
+    def test_strips_other_c0_controls(self) -> None:
+        """Other C0 controls (except \\n and \\t) get stripped too."""
+        body = "**Scope**: \x01\x02fraud\x07 signals.\n**Comp**: \x08\x1f$200k."
+        assert _validate_summary(body) == "**Scope**: fraud signals.\n**Comp**: $200k."
+
+    def test_preserves_newlines_and_tabs(self) -> None:
+        body = "**Scope**:\tfraud signals.\n**Comp**:\t$200k."
+        assert _validate_summary(body) == body
+
+    def test_rejects_empty_after_strip(self) -> None:
+        """If a response is all control characters, the strip empties it
+        and we treat that the same as an empty response."""
+        with pytest.raises(ValueError, match="empty after"):
+            _validate_summary("\x00\x01\x02\x03")
+
 
 def test_sweep_summary_record_classifies_each_status() -> None:
     summary = SweepSummary()
