@@ -1,7 +1,6 @@
 'use client';
 
 import { Clock, MapPin } from 'lucide-react';
-import { useState } from 'react';
 
 import { ActionButton } from '@/components/shared/ActionButton';
 import { CompanyAvatar } from '@/components/shared/CompanyAvatar';
@@ -13,12 +12,18 @@ import { cn } from '@/lib/utils';
  * One repeating list card. Every visual detail is anchored to
  * UI_SPEC.md "Triage card (primary repeating component)".
  *
- * State:
- *  - `isSelected` (lifted) — drives the selected styling and the right
+ * State (all lifted, PR #47):
+ *  - `isSelected` — drives the selected styling and the right
  *    detail panel.
- *  - `reasonOpen` (local) — true after action 2 / Pass; reveals the
- *    ReasonPicker beneath the meta row. Closed when the picker fires
- *    onSelect or onCancel.
+ *  - `reasonOpen` — true when the operator pressed Pass (button or
+ *    keyboard `2`) and the ReasonPicker should expand beneath the
+ *    meta row. Lifted because the page-level keyboard handler needs
+ *    to flip it on the `2` chord — local state on the card was
+ *    unreachable from the parent's keydown listener (the bug PR #47
+ *    fixes).
+ *  - `onToggleReason` — flips ``reasonOpen``. Called from the Pass
+ *    button click, the ReasonPicker's cancel (Esc/×), and after a
+ *    successful reason commit.
  */
 
 export type TriageCardAction = { kind: ActionType; reason?: ActionReason };
@@ -26,22 +31,26 @@ export type TriageCardAction = { kind: ActionType; reason?: ActionReason };
 export function TriageCard({
   posting,
   isSelected,
+  reasonOpen,
   onSelect,
+  onToggleReason,
   onAction,
 }: {
   posting: PostingListItem;
   isSelected: boolean;
+  reasonOpen: boolean;
   onSelect: () => void;
+  onToggleReason: () => void;
   onAction: (action: TriageCardAction) => void;
 }) {
-  const [reasonOpen, setReasonOpen] = useState(false);
-
   const handlePassAction = () => {
-    setReasonOpen((open) => !open);
+    onToggleReason();
   };
 
   const handlePickReason = (reason: ActionReason) => {
-    setReasonOpen(false);
+    // Close the picker first so a re-render of the same card after
+    // the action lands doesn't leave a stale picker visible.
+    onToggleReason();
     onAction({ kind: 'not_interested', reason });
   };
 
@@ -152,10 +161,12 @@ export function TriageCard({
       </div>
 
       {/* Inline reason picker — only rendered when expanded so its
-          keyboard listener doesn't compete with the page-level one. */}
+          keyboard listener doesn't compete with the page-level one
+          (the page-level hook is also paused via ``enabled=false``
+          when ``reasonOpen`` is true; this is belt-and-suspenders). */}
       {reasonOpen && (
         <div className="absolute inset-x-4 bottom-2 top-auto translate-y-full rounded-md border border-border bg-surface-2 p-3">
-          <ReasonPicker onSelect={handlePickReason} onCancel={() => setReasonOpen(false)} />
+          <ReasonPicker onSelect={handlePickReason} onCancel={onToggleReason} />
         </div>
       )}
     </article>

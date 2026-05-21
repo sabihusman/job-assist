@@ -220,3 +220,45 @@ test('toggle expands the full JD beneath the summary', async ({ page }) => {
   await expect(page.getByRole('heading', { level: 5, name: /full description/i })).toBeVisible();
   await expect(page.getByText('bullet', { exact: true })).toBeVisible();
 });
+
+// ── PR #47: keyboard chord 2 → 1-9 opens the reason picker and commits ──────
+// These tests exercise the full chord (not just the per-key unit handlers)
+// because the audit caught a regression where the page-level `2` handler
+// dispatched a toast but never opened any picker. Per-handler unit tests
+// passed CI because they bypassed the chord.
+
+test("keyboard '2' opens the inline reason picker for the focused card", async ({ page }) => {
+  await page.goto('/');
+  // p-alpha auto-selects on first render (index 0).
+  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
+  // Confirm the picker is NOT yet open.
+  await expect(page.getByText(/why not\?/i)).toBeHidden();
+  // Fire the chord.
+  await page.keyboard.press('2');
+  // Picker mounts within ~1s with the full 9-chip vocabulary.
+  await expect(page.getByText(/why not\?/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: /Wrong role 1/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Too senior 8/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Too junior 9/ })).toBeVisible();
+  // Esc closes without committing.
+  await page.keyboard.press('Escape');
+  await expect(page.getByText(/why not\?/i)).toBeHidden();
+});
+
+test("keyboard '2' then '8' commits not_interested with reason=too_senior", async ({ page }) => {
+  // Intercept the state POST so we can verify the body.
+  const stateRequest = page.waitForRequest(
+    (req) => /\/postings\/[^/?]+\/state/.test(req.url()) && req.method() === 'POST',
+  );
+
+  await page.goto('/');
+  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
+  await page.keyboard.press('2');
+  await expect(page.getByText(/why not\?/i)).toBeVisible();
+  await page.keyboard.press('8');
+
+  const req = await stateRequest;
+  const body = req.postDataJSON() as { action_type: string; reason: string | null };
+  expect(body.action_type).toBe('not_interested');
+  expect(body.reason).toBe('too_senior');
+});

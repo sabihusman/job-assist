@@ -84,6 +84,15 @@ function TriagePageInner() {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const selectedId = selectedIndex !== null ? (items[selectedIndex]?.id ?? null) : null;
 
+  // PR #47: lifted reason-picker state. Local-to-TriageCard state was
+  // unreachable from the page-level keyboard handler, which is why the
+  // ``2`` keybind was a no-op (toast only). Now ``2`` flips this state
+  // and the card renders its picker via the prop.
+  const [reasonPickerCardId, setReasonPickerCardId] = useState<string | null>(null);
+  const handleToggleReason = useCallback((postingId: string) => {
+    setReasonPickerCardId((prev) => (prev === postingId ? null : postingId));
+  }, []);
+
   // Clear selection when the result set shrinks past the cursor — e.g.
   // after an optimistic remove of the last card on the page.
   useEffect(() => {
@@ -148,11 +157,11 @@ function TriagePageInner() {
         if (selectedId) handleAction(selectedId, { kind: 'interested' });
       },
       onAction2: () => {
-        // Just-in-time stub — the per-card ReasonPicker handles the
-        // expand+commit flow when triggered via mouse/touch. For keyboard
-        // we toast a hint until #32c wires a page-level picker; tests
-        // don't assert this path either way.
-        toast.message('Press 2 again on the focused card to pass with reason');
+        // PR #47: open the reason picker for the focused card. Doesn't
+        // commit anything — the operator picks 1-9 (or Esc) once the
+        // picker has the keystrokes (its own listener takes over,
+        // because we pause this hook via ``enabled`` below).
+        if (selectedId) handleToggleReason(selectedId);
       },
       onAction3: () => {
         if (selectedId) handleAction(selectedId, { kind: 'applied' });
@@ -162,7 +171,7 @@ function TriagePageInner() {
       },
       onEscape: () => setSelectedIndex(null),
     },
-    /* enabled */ !recordAction.isPending,
+    /* enabled */ !recordAction.isPending && reasonPickerCardId === null,
   );
 
   return (
@@ -180,7 +189,9 @@ function TriagePageInner() {
           <TriageList
             postings={items}
             selectedIndex={selectedIndex}
+            reasonPickerCardId={reasonPickerCardId}
             onSelect={setSelectedIndex}
+            onToggleReason={handleToggleReason}
             onAction={handleAction}
           />
         </MainColumn>
