@@ -11,7 +11,7 @@ import { useEffect } from 'react';
  *   1 / 2 / 3 / 4  fire action 1-4 on selected card
  *   Esc          clear selection (close detail panel)
  *
- * The reason picker (1-7 + esc) has its own listener inside
+ * The reason picker (1-9 + esc) has its own listener inside
  * `ReasonPicker`. When the picker is open, this hook is paused via
  * `enabled=false` so the two don't fight over keystrokes.
  *

@@ -20,7 +20,10 @@ export type ActionReason =
   | 'wrong_industry'
   | 'wrong_stage'
   | 'already_rejected_here'
-  | 'just_not_feeling_it';
+  | 'just_not_feeling_it'
+  // PR #43: seniority-band reasons.
+  | 'too_senior'
+  | 'too_junior';
 
 export type RemoteType = 'remote' | 'hybrid' | 'onsite';
 

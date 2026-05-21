@@ -68,10 +68,12 @@ class PostingAction(Base):
             name="ck_posting_action_action_type",
         ),
         # Reason vocabulary guard (NULL allowed; specific strings otherwise).
+        # PR #43 added ``too_senior`` / ``too_junior``.
         CheckConstraint(
             "reason IS NULL OR reason IN ("
             "'wrong_role','wrong_location','comp_too_low','wrong_industry',"
-            "'wrong_stage','already_rejected_here','just_not_feeling_it')",
+            "'wrong_stage','already_rejected_here','just_not_feeling_it',"
+            "'too_senior','too_junior')",
             name="ck_posting_action_reason",
         ),
         # Reason ↔ action_type cross-rule:

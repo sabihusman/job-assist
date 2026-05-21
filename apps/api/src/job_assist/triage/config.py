@@ -23,6 +23,18 @@ class HardRuleConfig:
     # values on the posting are tolerated.
     salary_floor_usd: int = 85_000
 
+    # PR #43: optional upper bound in USD/year. ``None`` = no ceiling (rule
+    # disabled). When set, postings whose ``salary_min`` exceeds the
+    # ceiling are dropped; postings with NULL ``salary_min`` (unknown
+    # comp) pass through so they still reach triage.
+    salary_ceiling_usd: int | None = None
+
+    # PR #43: explicit list of ``SeniorityLevel`` enum values to include.
+    # Empty tuple = include all (rule disabled). The rule drops postings
+    # whose ``seniority_level`` is set and NOT in the tuple; postings with
+    # NULL / ``unknown`` seniority pass through.
+    seniority_levels_included: tuple[str, ...] = ()
+
     # Geographic whitelist matched case-insensitively against the posting's
     # ``location_raw`` and the ``locations_normalized`` entries. Any single
     # hit anywhere in the location string passes the rule.

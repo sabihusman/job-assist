@@ -22,8 +22,13 @@ export type OperatorProfileRead = {
   role_keywords: string[];
   geo_whitelist: string[];
   salary_floor_usd: number;
+  // PR #43: nullable upper bound paired with the floor.
+  salary_ceiling_usd: number | null;
   applicant_cap: number;
   staffing_firm_blocklist: string[];
+  // PR #43: list of SeniorityLevel enum values to include. null or empty
+  // means "include all levels".
+  seniority_levels_included: string[] | null;
   created_at: string;
   updated_at: string;
 };
@@ -33,9 +38,25 @@ export type OperatorProfileUpdate = Partial<{
   role_keywords: string[];
   geo_whitelist: string[];
   salary_floor_usd: number;
+  salary_ceiling_usd: number | null;
   applicant_cap: number;
   staffing_firm_blocklist: string[];
+  seniority_levels_included: string[];
 }>;
+
+/**
+ * SeniorityLevel enum values — must match apps/api/.../db/enums.py.
+ * Labels shown in the UI are PM-specific because the underlying schema
+ * is PM-specific (project is a PM job-search tool).
+ */
+export const SENIORITY_LEVELS: readonly { value: string; label: string }[] = [
+  { value: 'intern', label: 'Intern' },
+  { value: 'apm', label: 'APM' },
+  { value: 'pm', label: 'PM' },
+  { value: 'senior_pm', label: 'Senior PM' },
+  { value: 'lead_pm', label: 'Lead PM' },
+  { value: 'principal_pm', label: 'Principal PM' },
+] as const;
 
 /**
  * Frontend-only state extension for the four UI fields the backend

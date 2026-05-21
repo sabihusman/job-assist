@@ -345,3 +345,83 @@ def test_custom_config_overrides_defaults() -> None:
     cfg = HardRuleConfig(salary_floor_usd=120_000)
     result = apply_hard_rules(posting, _target(), None, cfg)
     assert result.failed_rule == "salary_floor"
+
+
+# ── PR #43: Salary ceiling ────────────────────────────────────────────────────
+
+
+class TestSalaryCeiling:
+    """Symmetric to the floor rule. ``salary_min`` is the comparison key."""
+
+    def test_drops_posting_above_ceiling(self) -> None:
+        posting = _posting(salary_max=300_000)
+        posting.salary_min = 250_000
+        cfg = HardRuleConfig(salary_ceiling_usd=180_000)
+        result = apply_hard_rules(posting, _target(), None, cfg)
+        assert result.passed is False
+        assert result.failed_rule == "salary_ceiling"
+
+    def test_allows_posting_at_ceiling(self) -> None:
+        posting = _posting()
+        posting.salary_min = 180_000
+        cfg = HardRuleConfig(salary_ceiling_usd=180_000)
+        result = apply_hard_rules(posting, _target(), None, cfg)
+        assert result.passed is True
+
+    def test_allows_posting_below_ceiling(self) -> None:
+        posting = _posting()
+        posting.salary_min = 120_000
+        cfg = HardRuleConfig(salary_ceiling_usd=180_000)
+        result = apply_hard_rules(posting, _target(), None, cfg)
+        assert result.passed is True
+
+    def test_allows_posting_with_null_salary_min(self) -> None:
+        """Unknown comp → surface for triage rather than silent drop."""
+        posting = _posting()
+        posting.salary_min = None
+        cfg = HardRuleConfig(salary_ceiling_usd=180_000)
+        result = apply_hard_rules(posting, _target(), None, cfg)
+        assert result.passed is True
+
+    def test_disabled_when_ceiling_is_none(self) -> None:
+        """``salary_ceiling_usd=None`` short-circuits — no rule evaluated."""
+        posting = _posting()
+        posting.salary_min = 999_999  # would fail any positive ceiling
+        cfg = HardRuleConfig(salary_ceiling_usd=None)
+        result = apply_hard_rules(posting, _target(), None, cfg)
+        assert result.passed is True
+
+
+# ── PR #43: Seniority levels ──────────────────────────────────────────────────
+
+
+class TestSeniorityLevels:
+    def test_drops_posting_outside_included_set(self) -> None:
+        posting = _posting()
+        posting.seniority_level = SeniorityLevel.principal_pm
+        cfg = HardRuleConfig(seniority_levels_included=("apm", "pm"))
+        result = apply_hard_rules(posting, _target(), None, cfg)
+        assert result.passed is False
+        assert result.failed_rule == "seniority_levels"
+
+    def test_keeps_posting_inside_included_set(self) -> None:
+        posting = _posting()
+        posting.seniority_level = SeniorityLevel.pm
+        cfg = HardRuleConfig(seniority_levels_included=("apm", "pm"))
+        result = apply_hard_rules(posting, _target(), None, cfg)
+        assert result.passed is True
+
+    def test_allows_unknown_seniority_when_filter_active(self) -> None:
+        """``unknown`` seniority passes through — surface for triage."""
+        posting = _posting()
+        posting.seniority_level = SeniorityLevel.unknown
+        cfg = HardRuleConfig(seniority_levels_included=("apm", "pm"))
+        result = apply_hard_rules(posting, _target(), None, cfg)
+        assert result.passed is True
+
+    def test_empty_tuple_disables_filter(self) -> None:
+        posting = _posting()
+        posting.seniority_level = SeniorityLevel.principal_pm
+        cfg = HardRuleConfig(seniority_levels_included=())
+        result = apply_hard_rules(posting, _target(), None, cfg)
+        assert result.passed is True
