@@ -80,6 +80,24 @@ def test_contact_seed_row_normalizes_linkedin_url() -> None:
 
 
 # ── 5 ─────────────────────────────────────────────────────────────────────────
+def test_contact_seed_row_adds_https_prefix_when_missing() -> None:
+    """Scheme-less inputs (``linkedin.com/in/foo``) canonicalise to
+    ``https://linkedin.com/in/foo``.
+
+    The ``test_contact_seed_row_normalizes_linkedin_url`` case above
+    already covers this inside its variants loop; this is the named
+    PR #43 test the spec asks for so a grep for "https_prefix" lands
+    on the dedicated assertion.
+    """
+    row = ContactSeedRow.model_validate(_base(linkedin_url="linkedin.com/in/foo"))
+    assert row.linkedin_url == "https://linkedin.com/in/foo"
+
+    # www. + scheme-less also lands on the canonical form.
+    row2 = ContactSeedRow.model_validate(_base(linkedin_url="www.linkedin.com/in/bar"))
+    assert row2.linkedin_url == "https://linkedin.com/in/bar"
+
+
+# ── 6 ─────────────────────────────────────────────────────────────────────────
 def test_contact_seed_row_lowercases_email() -> None:
     row = ContactSeedRow.model_validate(_base(email_primary="  Foo.Bar@EXAMPLE.com  "))
     assert row.email_primary == "foo.bar@example.com"
