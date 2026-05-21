@@ -21,8 +21,20 @@ describe('parseFilters', () => {
   });
 
   test('drops invalid enum values', () => {
-    const f = parseFilters(new URLSearchParams('ats=workday&ats=greenhouse'));
+    // PR #43 added workday to the valid ATS set, so the bogus value
+    // here is "bogus_ats". Anything not in the union gets stripped.
+    const f = parseFilters(new URLSearchParams('ats=bogus_ats&ats=greenhouse'));
     expect(f.ats).toEqual(['greenhouse']);
+  });
+
+  test('PR #43: workday is now a valid ATS', () => {
+    const f = parseFilters(new URLSearchParams('ats=workday'));
+    expect(f.ats).toEqual(['workday']);
+  });
+
+  test('PR #43: other is now a valid role_family', () => {
+    const f = parseFilters(new URLSearchParams('role_family=other'));
+    expect(f.role_family).toEqual(['other']);
   });
 });
 

@@ -30,7 +30,7 @@ export const DEFAULT_FILTERS: TriageFilters = {
   offset: 0,
 };
 
-const VALID_ATS = new Set<Ats>(['greenhouse', 'lever', 'ashby']);
+const VALID_ATS = new Set<Ats>(['greenhouse', 'lever', 'ashby', 'workday']);
 const VALID_REMOTE = new Set<RemoteType>(['remote', 'hybrid', 'onsite']);
 const VALID_FAMILY = new Set<RoleFamilyWire>([
   'product_management',

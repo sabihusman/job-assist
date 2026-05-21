@@ -30,6 +30,8 @@ const ATS_CHIPS = [
   { wire: 'greenhouse' as Ats, label: 'greenhouse' },
   { wire: 'lever' as Ats, label: 'lever' },
   { wire: 'ashby' as Ats, label: 'ashby' },
+  // PR #33 added the Workday adapter; PR #43 exposes the chip.
+  { wire: 'workday' as Ats, label: 'workday' },
 ] as const;
 const REMOTE_CHIPS = [
   { wire: 'remote' as RemoteType, label: 'remote' },

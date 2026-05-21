@@ -24,7 +24,10 @@ export type ActionReason =
 
 export type RemoteType = 'remote' | 'hybrid' | 'onsite';
 
-export type Ats = 'greenhouse' | 'lever' | 'ashby';
+// PR #33 added Workday to the backend ATS vocabulary; PR #43 wires it into
+// the frontend filter chips. Keeping the union closed so a typo in chip
+// definitions surfaces at typecheck.
+export type Ats = 'greenhouse' | 'lever' | 'ashby' | 'workday';
 
 export type RoleFamilyWire =
   | 'product_management'
