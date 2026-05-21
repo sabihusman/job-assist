@@ -49,7 +49,11 @@ RuleName = Literal[
     "staffing_firm",
     "geo_whitelist",
     "salary_floor",
+    # PR #43: paired with salary_floor; uses ``salary_min`` rather than max.
+    "salary_ceiling",
     "applicant_cap",
+    # PR #43: explicit set of allowed seniority levels.
+    "seniority_levels",
     "no_rule_failed",
 ]
 
@@ -123,6 +127,24 @@ def _under_salary_floor(posting: JobPosting, floor_usd: int) -> bool:
     if currency is not None and currency.upper() != "USD":
         return False
     return posting.salary_max < floor_usd
+
+
+def _over_salary_ceiling(posting: JobPosting, ceiling_usd: int) -> bool:
+    """True when the posting's annual USD min is known and above the ceiling.
+
+    Symmetric to ``_under_salary_floor`` but uses ``salary_min`` so a
+    posting advertising "$200k-$280k" gets dropped when the ceiling is
+    $180k. Unknown comp / non-USD / non-annual rows pass through —
+    same tolerance as the floor rule.
+    """
+    if posting.salary_min is None:
+        return False
+    if posting.salary_period not in (SalaryPeriod.annual, SalaryPeriod.unknown):
+        return False
+    currency = posting.salary_currency
+    if currency is not None and currency.upper() != "USD":
+        return False
+    return posting.salary_min > ceiling_usd
 
 
 def apply_hard_rules(
@@ -200,13 +222,45 @@ def apply_hard_rules(
             ),
         )
 
-    # 6. Applicant cap — tolerated when unknown.
+    # 6. Salary ceiling (PR #43). Paired with the floor — operator can now
+    #    set a range. Skipped when ``salary_ceiling_usd`` is None.
+    if cfg.salary_ceiling_usd is not None and _over_salary_ceiling(posting, cfg.salary_ceiling_usd):
+        return FilterResult(
+            passed=False,
+            failed_rule="salary_ceiling",
+            detail=(
+                f"salary_min=${posting.salary_min:,} ({posting.salary_currency or 'USD'}, "
+                f"{posting.salary_period.value}) > ceiling=${cfg.salary_ceiling_usd:,}"
+            ),
+        )
+
+    # 7. Applicant cap — tolerated when unknown.
     if posting.applicant_count is not None and posting.applicant_count > cfg.applicant_cap:
         return FilterResult(
             passed=False,
             failed_rule="applicant_cap",
             detail=(f"applicant_count={posting.applicant_count} > cap={cfg.applicant_cap}"),
         )
+
+    # 8. Seniority levels (PR #43). Only applies when the operator has
+    #    populated the allowed set; empty/None tuple = filter disabled.
+    #    Postings with ``unknown`` / NULL seniority pass through — we'd
+    #    rather surface a possibly-mismatched role than silently drop
+    #    on missing data.
+    if cfg.seniority_levels_included:
+        posting_level = posting.seniority_level.value if posting.seniority_level else None
+        if (
+            posting_level is not None
+            and posting_level != "unknown"
+            and posting_level not in cfg.seniority_levels_included
+        ):
+            return FilterResult(
+                passed=False,
+                failed_rule="seniority_levels",
+                detail=(
+                    f"seniority_level={posting_level!r} not in {cfg.seniority_levels_included!r}"
+                ),
+            )
 
     return FilterResult(passed=True, failed_rule="no_rule_failed", detail="passed")
 

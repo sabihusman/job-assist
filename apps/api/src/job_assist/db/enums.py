@@ -116,6 +116,13 @@ class ActionReason(enum.StrEnum):
     wrong_stage = "wrong_stage"
     already_rejected_here = "already_rejected_here"
     just_not_feeling_it = "just_not_feeling_it"
+    # PR #43: seniority-band reasons. The hard-rule filter now drops
+    # postings outside the operator's selected seniority levels, but
+    # these reasons capture the cases where a posting slipped through
+    # (NULL seniority_level on the posting) and the operator wants the
+    # calibration card to show why.
+    too_senior = "too_senior"
+    too_junior = "too_junior"
 
 
 class ClosedChannelReason(enum.StrEnum):

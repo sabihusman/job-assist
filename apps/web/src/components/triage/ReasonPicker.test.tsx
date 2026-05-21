@@ -5,11 +5,45 @@ import { describe, expect, test, vi } from 'vitest';
 import { REASON_CHOICES, ReasonPicker } from '@/components/triage/ReasonPicker';
 
 describe('ReasonPicker', () => {
-  test('renders all 7 chips with hotkey suffixes', () => {
+  test('renders all 9 chips with hotkey suffixes', () => {
     render(<ReasonPicker onSelect={() => {}} onCancel={() => {}} />);
+    expect(REASON_CHOICES.length).toBe(9);
     for (const c of REASON_CHOICES) {
       expect(screen.getByText(c.label)).toBeInTheDocument();
     }
+  });
+
+  // PR #43: too_senior / too_junior chips
+  test('chip 8 commits too_senior on click', async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    render(<ReasonPicker onSelect={onSelect} onCancel={() => {}} />);
+    await user.click(screen.getByText('Too senior'));
+    expect(onSelect).toHaveBeenCalledWith('too_senior');
+  });
+
+  test('chip 9 commits too_junior on click', async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    render(<ReasonPicker onSelect={onSelect} onCancel={() => {}} />);
+    await user.click(screen.getByText('Too junior'));
+    expect(onSelect).toHaveBeenCalledWith('too_junior');
+  });
+
+  test('hotkey 8 commits too_senior without any click', async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    render(<ReasonPicker onSelect={onSelect} onCancel={() => {}} />);
+    await user.keyboard('8');
+    expect(onSelect).toHaveBeenCalledWith('too_senior');
+  });
+
+  test('hotkey 9 commits too_junior without any click', async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    render(<ReasonPicker onSelect={onSelect} onCancel={() => {}} />);
+    await user.keyboard('9');
+    expect(onSelect).toHaveBeenCalledWith('too_junior');
   });
 
   test('clicking a chip calls onSelect with the correct reason', async () => {

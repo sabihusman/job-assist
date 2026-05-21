@@ -6,13 +6,16 @@ import type { ActionReason } from '@/lib/triage/types';
 import { cn } from '@/lib/utils';
 
 /**
- * Inline 7-chip reason picker that expands beneath a TriageCard's meta
+ * Inline 9-chip reason picker that expands beneath a TriageCard's meta
  * row when the operator presses `2`/clicks Pass, and also lives in the
  * DetailPanel action bar.
  *
- * Hotkeys (1-7) commit a reason; Esc cancels. Listeners attach as long
+ * Hotkeys (1-9) commit a reason; Esc cancels. Listeners attach as long
  * as the picker is mounted — the consuming card unmounts the picker
  * when collapsed, so this hook is naturally scoped.
+ *
+ * PR #43 added chips 8 (too_senior) and 9 (too_junior) so the
+ * calibration card can split "comp" mismatches from "level" mismatches.
  *
  * Inputs trigger no auto-submit (numbers typed inside an input field
  * are user data, not shortcuts) — same focus-guard pattern as
@@ -22,7 +25,7 @@ import { cn } from '@/lib/utils';
 type Choice = {
   reason: ActionReason;
   label: string;
-  hotkey: '1' | '2' | '3' | '4' | '5' | '6' | '7';
+  hotkey: '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9';
 };
 
 export const REASON_CHOICES: readonly Choice[] = [
@@ -33,6 +36,8 @@ export const REASON_CHOICES: readonly Choice[] = [
   { reason: 'wrong_stage', label: 'Wrong stage', hotkey: '5' },
   { reason: 'already_rejected_here', label: 'Already rejected here', hotkey: '6' },
   { reason: 'just_not_feeling_it', label: 'Just not feeling it', hotkey: '7' },
+  { reason: 'too_senior', label: 'Too senior', hotkey: '8' },
+  { reason: 'too_junior', label: 'Too junior', hotkey: '9' },
 ];
 
 function isEditable(target: EventTarget | null): boolean {

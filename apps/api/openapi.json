@@ -1259,7 +1259,9 @@
           "wrong_industry",
           "wrong_stage",
           "already_rejected_here",
-          "just_not_feeling_it"
+          "just_not_feeling_it",
+          "too_senior",
+          "too_junior"
         ],
         "title": "ActionReason",
         "description": "Operator's reason for ``not_interested`` (PR #31).\n\nRequired when ``action_type = not_interested``; forbidden otherwise."
@@ -1341,6 +1343,17 @@
             ],
             "title": "Salary Floor Usd"
           },
+          "salary_ceiling_usd": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Salary Ceiling Usd"
+          },
           "applicant_cap": {
             "anyOf": [
               {
@@ -1365,6 +1378,20 @@
               }
             ],
             "title": "Staffing Firm Blocklist"
+          },
+          "seniority_levels_included": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seniority Levels Included"
           }
         },
         "additionalProperties": false,

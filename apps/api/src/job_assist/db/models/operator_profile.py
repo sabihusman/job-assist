@@ -49,8 +49,20 @@ class OperatorProfile(Base):
         Integer, nullable=False, server_default=text("85000")
     )
 
+    # PR #43: optional upper bound paired with the floor. NULL = no ceiling
+    # (hard-rule filter skips the check). When set, postings whose declared
+    # salary_min exceeds this value are dropped.
+    salary_ceiling_usd: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # Mirrors HardRuleConfig.applicant_cap.
     applicant_cap: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("150"))
+
+    # PR #43: explicit list of ``SeniorityLevel`` enum values to include.
+    # NULL or empty = include all levels (filter disabled). A posting with
+    # ``seniority_level`` NOT in this set is dropped; postings with NULL /
+    # ``unknown`` seniority pass through (we surface for triage rather than
+    # silently drop on missing data).
+    seniority_levels_included: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
 
     # Mirrors HardRuleConfig.staffing_firm_blocklist.
     staffing_firm_blocklist: Mapped[list[str]] = mapped_column(
