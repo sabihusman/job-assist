@@ -153,7 +153,5 @@ class OperatorProfileUpdate(BaseModel):
             and self.salary_ceiling_usd is not None
             and self.salary_ceiling_usd < self.salary_floor_usd
         ):
-            raise ValueError(
-                "salary_ceiling_usd must be greater than or equal to salary_floor_usd"
-            )
+            raise ValueError("salary_ceiling_usd must be greater than or equal to salary_floor_usd")
         return self
