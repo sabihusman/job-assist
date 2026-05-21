@@ -246,19 +246,39 @@ test("keyboard '2' opens the inline reason picker for the focused card", async (
 });
 
 test("keyboard '2' then '8' commits not_interested with reason=too_senior", async ({ page }) => {
-  // Intercept the state POST so we can verify the body.
-  const stateRequest = page.waitForRequest(
-    (req) => /\/postings\/[^/?]+\/state/.test(req.url()) && req.method() === 'POST',
-  );
+  // Register a state-specific route BEFORE goto so it wins precedence over
+  // the broader ``**/postings/*`` matcher set up in mockApi (the broader
+  // glob doesn't cross /, so /postings/<id>/state otherwise falls through
+  // to the network and the waitForRequest pattern timed out in CI).
+  let capturedBody: { action_type: string; reason: string | null } | null = null;
+  await page.route('**/postings/*/state', async (route: Route) => {
+    if (route.request().method() === 'POST') {
+      capturedBody = route.request().postDataJSON();
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        current: 'not_interested',
+        reason: 'too_senior',
+        snooze_until: null,
+        current_at: new Date().toISOString(),
+      }),
+    });
+  });
 
   await page.goto('/');
   await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
   await page.keyboard.press('2');
   await expect(page.getByText(/why not\?/i)).toBeVisible();
   await page.keyboard.press('8');
+  // Picker closes after the chord lands — proves onSelect fired.
+  await expect(page.getByText(/why not\?/i)).toBeHidden();
 
-  const req = await stateRequest;
-  const body = req.postDataJSON() as { action_type: string; reason: string | null };
-  expect(body.action_type).toBe('not_interested');
-  expect(body.reason).toBe('too_senior');
+  // The captured body is the load-bearing assertion: the chord must
+  // surface ``too_senior`` as the reason, not ``wrong_role`` or anything
+  // else that '1' or another hotkey would commit.
+  expect(capturedBody).not.toBeNull();
+  expect(capturedBody!.action_type).toBe('not_interested');
+  expect(capturedBody!.reason).toBe('too_senior');
 });
