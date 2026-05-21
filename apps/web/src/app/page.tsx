@@ -13,6 +13,7 @@ import { TriageList } from '@/components/triage/TriageList';
 import { useRecordAction, useTriagePostings } from '@/lib/api/hooks';
 import { useTriageKeyboard } from '@/lib/keyboard/useTriageKeyboard';
 import { parseFilters } from '@/lib/triage/filters';
+import { computeSubtitle } from '@/lib/triage/subtitle';
 import type { TriageFilters } from '@/lib/triage/types';
 
 /**
@@ -29,15 +30,19 @@ import type { TriageFilters } from '@/lib/triage/types';
  * useSearchParams. The fallback must not itself touch useSearchParams.
  */
 export default function TriagePage() {
+  // The inner component owns AppShell so it can pass a dynamic subtitle
+  // (PR #43). The Suspense fallback renders its own static-subtitle shell
+  // because the inner's subtitle depends on useSearchParams + queries.
   return (
-    <AppShell title="Triage" subtitle="Pending review" adornments={<KeyboardLegend />}>
-      {/* Fallback must NOT touch useSearchParams — that'd recreate the
-          same prerender bailout it's meant to bridge. Render a bare
-          loading skeleton instead. */}
-      <Suspense fallback={<PageFallback />}>
-        <TriagePageInner />
-      </Suspense>
-    </AppShell>
+    <Suspense
+      fallback={
+        <AppShell title="Triage" subtitle="loading…" adornments={<KeyboardLegend />}>
+          <PageFallback />
+        </AppShell>
+      }
+    >
+      <TriagePageInner />
+    </Suspense>
   );
 }
 
@@ -49,10 +54,32 @@ function TriagePageInner() {
   const filters: TriageFilters = useMemo(() => parseFilters(searchParams), [searchParams]);
 
   const { data, isLoading, isError, error, refetch } = useTriagePostings(filters);
+  // PR #43: fire a second light query to drive the dynamic subtitle's
+  // applied count. limit=1 is enough — we only need ``total`` on the
+  // response. The query is cached separately from the main triage list.
+  const appliedQuery = useTriagePostings({
+    ...filters,
+    state: ['applied'],
+    limit: 1,
+    offset: 0,
+  });
   const recordAction = useRecordAction();
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
+
+  // PR #43: subtitle reads from the live query state. Both queries
+  // start loading on first paint; render a placeholder until at least
+  // the pending one resolves so the operator doesn't see a flash of
+  // "0 pending · 0 applied". On error we fall back to the static
+  // string that used to be hardcoded — preserves the legacy behavior
+  // when the API is unreachable.
+  const subtitle = computeSubtitle({
+    pendingTotal: data?.total ?? null,
+    appliedTotal: appliedQuery.data?.total ?? null,
+    isPendingLoading: isLoading,
+    isError: isError || appliedQuery.isError,
+  });
 
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const selectedId = selectedIndex !== null ? (items[selectedIndex]?.id ?? null) : null;
@@ -139,30 +166,32 @@ function TriagePageInner() {
   );
 
   return (
-    <div className="flex">
-      <MainColumn
-        loading={isLoading}
-        error={isError ? ((error as Error)?.message ?? 'Unknown error') : null}
-        empty={!isLoading && !isError && items.length === 0}
-        showing={items.length}
-        total={total}
-        onResetFilters={() => router.replace('/?state=triage', { scroll: false })}
-        onRetry={() => refetch()}
-      >
-        <TriageList
-          postings={items}
-          selectedIndex={selectedIndex}
-          onSelect={setSelectedIndex}
+    <AppShell title="Triage" subtitle={subtitle} adornments={<KeyboardLegend />}>
+      <div className="flex">
+        <MainColumn
+          loading={isLoading}
+          error={isError ? ((error as Error)?.message ?? 'Unknown error') : null}
+          empty={!isLoading && !isError && items.length === 0}
+          showing={items.length}
+          total={total}
+          onResetFilters={() => router.replace('/?state=triage', { scroll: false })}
+          onRetry={() => refetch()}
+        >
+          <TriageList
+            postings={items}
+            selectedIndex={selectedIndex}
+            onSelect={setSelectedIndex}
+            onAction={handleAction}
+          />
+        </MainColumn>
+
+        <DetailPanel
+          selectedId={selectedId}
+          onClose={() => setSelectedIndex(null)}
           onAction={handleAction}
         />
-      </MainColumn>
-
-      <DetailPanel
-        selectedId={selectedId}
-        onClose={() => setSelectedIndex(null)}
-        onAction={handleAction}
-      />
-    </div>
+      </div>
+    </AppShell>
   );
 }
 
@@ -188,7 +217,7 @@ function KeyboardLegend() {
       <KeyHint>4</KeyHint>
       act
       <span aria-hidden="true">·</span>
-      <KeyHint>2</KeyHint>→<KeyHint>1</KeyHint>–<KeyHint>7</KeyHint>
+      <KeyHint>2</KeyHint>→<KeyHint>1</KeyHint>–<KeyHint>9</KeyHint>
       reason
     </div>
   );

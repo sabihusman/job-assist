@@ -57,4 +57,38 @@ describe('FilterRow', () => {
     render(<FilterRow showing={20} total={42} />);
     expect(screen.getByText(/showing 20 of 42/)).toBeInTheDocument();
   });
+
+  // ── PR #43 ──────────────────────────────────────────────────────────────
+
+  test("FAMILY group includes an 'Other' chip", () => {
+    setParams('');
+    render(<FilterRow showing={0} total={0} />);
+    expect(screen.getByRole('button', { name: 'Other' })).toBeInTheDocument();
+  });
+
+  test("clicking 'Other' chip writes role_family=other to URL", async () => {
+    setParams('');
+    replaceMock.mockClear();
+    const user = userEvent.setup();
+    render(<FilterRow showing={0} total={0} />);
+    await user.click(screen.getByRole('button', { name: 'Other' }));
+    const url = replaceMock.mock.calls[0]?.[0] as string;
+    expect(url).toContain('role_family=other');
+  });
+
+  test('SOURCE group includes a workday chip', () => {
+    setParams('');
+    render(<FilterRow showing={0} total={0} />);
+    expect(screen.getByRole('button', { name: 'workday' })).toBeInTheDocument();
+  });
+
+  test('clicking workday chip writes ats=workday to URL', async () => {
+    setParams('');
+    replaceMock.mockClear();
+    const user = userEvent.setup();
+    render(<FilterRow showing={0} total={0} />);
+    await user.click(screen.getByRole('button', { name: 'workday' }));
+    const url = replaceMock.mock.calls[0]?.[0] as string;
+    expect(url).toContain('ats=workday');
+  });
 });
