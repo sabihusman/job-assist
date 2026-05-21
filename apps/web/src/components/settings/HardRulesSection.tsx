@@ -12,6 +12,7 @@ import {
   DEFAULT_ROLE_FAMILY_WEIGHTS,
   type OperatorProfileRead,
   type RoleFamilyWeights,
+  SENIORITY_LEVELS,
 } from '@/lib/settings/types';
 import { cn } from '@/lib/utils';
 
@@ -31,6 +32,11 @@ import { cn } from '@/lib/utils';
 type HardRulesFormState = {
   applicant_cap: number;
   salary_floor_usd: number;
+  // PR #43: nullable ceiling. The form represents "no ceiling" as 0 so the
+  // numeric input works naturally; the save handler converts 0 back to null.
+  salary_ceiling_usd: number;
+  // PR #43: which SeniorityLevel enum values to include. Empty = no filter.
+  seniority_levels_included: string[];
   staffing_firm_blocklist: string; // textarea: newline-joined
   role_family_weights: RoleFamilyWeights;
 };
@@ -47,6 +53,10 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
     defaultValues: {
       applicant_cap: profile.applicant_cap,
       salary_floor_usd: profile.salary_floor_usd,
+      // PR #43: backend stores null when unset; surface that as 0 in the
+      // form so the numeric input has a real value to bind to.
+      salary_ceiling_usd: profile.salary_ceiling_usd ?? 0,
+      seniority_levels_included: profile.seniority_levels_included ?? [],
       staffing_firm_blocklist: profile.staffing_firm_blocklist.join('\n'),
       role_family_weights: { ...DEFAULT_ROLE_FAMILY_WEIGHTS },
     },
@@ -64,9 +74,14 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
 
   const onConfirmSave = async () => {
     const values = getValues();
+    // PR #43: convert "no ceiling" (0 in the form) back to null on the
+    // wire — the backend stores NULL to mean "rule disabled".
+    const ceiling = values.salary_ceiling_usd > 0 ? values.salary_ceiling_usd : null;
     const body = {
       applicant_cap: values.applicant_cap,
       salary_floor_usd: values.salary_floor_usd,
+      salary_ceiling_usd: ceiling,
+      seniority_levels_included: values.seniority_levels_included,
       staffing_firm_blocklist: values.staffing_firm_blocklist
         .split('\n')
         .map((s) => s.trim())
@@ -99,6 +114,23 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
       label: 'Salary floor',
       from: fmtUsd(profile.salary_floor_usd),
       to: fmtUsd(watch('salary_floor_usd')),
+    });
+  }
+  if (formState.dirtyFields.salary_ceiling_usd) {
+    const ceilingNow = watch('salary_ceiling_usd');
+    changes.push({
+      label: 'Salary ceiling',
+      from: profile.salary_ceiling_usd ? fmtUsd(profile.salary_ceiling_usd) : '—',
+      to: ceilingNow > 0 ? fmtUsd(ceilingNow) : '—',
+    });
+  }
+  if (formState.dirtyFields.seniority_levels_included) {
+    const fromList = profile.seniority_levels_included ?? [];
+    const toList = watch('seniority_levels_included');
+    changes.push({
+      label: 'Seniority levels',
+      from: fromList.length ? fromList.join(', ') : '—',
+      to: toList.length ? toList.join(', ') : '—',
     });
   }
   if (formState.dirtyFields.staffing_firm_blocklist) {
@@ -154,6 +186,38 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
                 displayFormat={fmtUsd}
               />
             )}
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          label="Salary ceiling (annual USD)"
+          sub="Drop postings whose minimum salary exceeds this. Set to 0 to disable."
+        >
+          <Controller
+            control={control}
+            name="salary_ceiling_usd"
+            render={({ field }) => (
+              <SliderRow
+                value={field.value}
+                onChange={field.onChange}
+                min={0}
+                max={500_000}
+                step={5_000}
+                inputAriaLabel="Salary ceiling"
+                displayFormat={(n) => (n > 0 ? fmtUsd(n) : 'No ceiling')}
+              />
+            )}
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          label="Seniority levels to include"
+          sub="Drop postings outside these levels. Leave empty to include all."
+        >
+          <Controller
+            control={control}
+            name="seniority_levels_included"
+            render={({ field }) => <SeniorityChips value={field.value} onChange={field.onChange} />}
           />
         </SettingsRow>
 
@@ -295,4 +359,64 @@ function SliderRow({
 function fmtUsd(n: number): string {
   if (n >= 1000) return `$${Math.round(n / 1000)}K`;
   return `$${n}`;
+}
+
+/**
+ * Multi-select chip group for the SeniorityLevel filter (PR #43).
+ *
+ * Click toggles inclusion. Empty selection (length 0) is the
+ * "no filter applied" state — surfaced as a muted footnote so the
+ * operator isn't confused by an apparently-empty control.
+ */
+function SeniorityChips({
+  value,
+  onChange,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const toggle = (level: string) => {
+    if (value.includes(level)) {
+      onChange(value.filter((v) => v !== level));
+    } else {
+      // Preserve canonical order from the SENIORITY_LEVELS constant so the
+      // dirty-diff output is stable across click order.
+      const next = SENIORITY_LEVELS.filter(
+        (entry) => entry.value === level || value.includes(entry.value),
+      ).map((entry) => entry.value);
+      onChange(next);
+    }
+  };
+
+  return (
+    <fieldset className="flex flex-col gap-1.5 border-0 p-0">
+      <legend className="sr-only">Seniority levels</legend>
+      <div className="flex flex-wrap gap-1.5">
+        {SENIORITY_LEVELS.map((entry) => {
+          const selected = value.includes(entry.value);
+          return (
+            <button
+              key={entry.value}
+              type="button"
+              aria-pressed={selected}
+              onClick={() => toggle(entry.value)}
+              className={cn(
+                'inline-flex h-7 items-center rounded-md border px-2.5 text-[12px] transition-colors',
+                selected
+                  ? 'border-primary bg-primary/15 text-primary hover:bg-primary/25'
+                  : 'border-border bg-surface text-foreground/80 hover:bg-accent',
+              )}
+            >
+              {entry.label}
+            </button>
+          );
+        })}
+      </div>
+      {value.length === 0 && (
+        <p className="text-[11px] italic text-muted-foreground">
+          All seniority levels are currently included.
+        </p>
+      )}
+    </fieldset>
+  );
 }
