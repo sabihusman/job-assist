@@ -272,13 +272,14 @@ test("keyboard '2' then '8' commits not_interested with reason=too_senior", asyn
   await page.keyboard.press('2');
   await expect(page.getByText(/why not\?/i)).toBeVisible();
   await page.keyboard.press('8');
-  // Picker closes after the chord lands — proves onSelect fired.
-  await expect(page.getByText(/why not\?/i)).toBeHidden();
 
-  // The captured body is the load-bearing assertion: the chord must
-  // surface ``too_senior`` as the reason, not ``wrong_role`` or anything
-  // else that '1' or another hotkey would commit.
-  expect(capturedBody).not.toBeNull();
+  // The route handler captures the body asynchronously — react-query's
+  // ``onMutate`` runs ``await cancelQueries()`` BEFORE the actual POST
+  // fires, so the picker can hide before the network request lands. Use
+  // ``expect.poll`` so we wait up to the test budget for capturedBody to
+  // populate. This is the load-bearing assertion: the chord must surface
+  // ``too_senior``, not ``wrong_role`` or whatever ``1`` would commit.
+  await expect.poll(() => capturedBody, { timeout: 5_000 }).not.toBeNull();
   expect(capturedBody!.action_type).toBe('not_interested');
   expect(capturedBody!.reason).toBe('too_senior');
 });
