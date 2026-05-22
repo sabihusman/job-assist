@@ -508,8 +508,8 @@ async def reclassify_sweep_endpoint(
     if payload.only_unclassified:
         stmt = stmt.where(
             or_(
-                cast(JobPosting.role_family, text("text")) == "other",
-                cast(JobPosting.seniority_level, text("text")) == "unknown",
+                cast(JobPosting.role_family, Text) == "other",
+                cast(JobPosting.seniority_level, Text) == "unknown",
             )
         )
     # Oldest classified_at first; NULLs sort first so never-LLM-classified
@@ -561,7 +561,7 @@ async def reclassify_sweep_endpoint(
     rf_rows = (
         await db.execute(
             select(
-                func.lower(cast(JobPosting.role_family, text("text"))).label("val"),
+                func.lower(cast(JobPosting.role_family, Text)).label("val"),
                 func.count().label("cnt"),
             ).group_by(text("val"))
         )
@@ -569,7 +569,7 @@ async def reclassify_sweep_endpoint(
     sn_rows = (
         await db.execute(
             select(
-                func.lower(cast(JobPosting.seniority_level, text("text"))).label("val"),
+                func.lower(cast(JobPosting.seniority_level, Text)).label("val"),
                 func.count().label("cnt"),
             ).group_by(text("val"))
         )
