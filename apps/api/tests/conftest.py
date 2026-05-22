@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool  # noqa: E402
 
 # ── Migration setup (runs once per session) ────────────────────────────────────
 
@@ -59,7 +60,10 @@ async def db_session(_apply_migrations: None) -> AsyncGenerator[AsyncSession, No
     if not _TEST_DATABASE_URL:
         pytest.skip("TEST_DATABASE_URL not set")
 
-    engine = create_async_engine(_TEST_DATABASE_URL, echo=False)
+    # NullPool prevents asyncpg connections from being reused across tests.
+    # Without it, a pooled connection bound to test N's event loop would be
+    # handed to test N+1 (on a different loop) → "attached to a different loop".
+    engine = create_async_engine(_TEST_DATABASE_URL, echo=False, poolclass=NullPool)
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
         engine, class_=AsyncSession, expire_on_commit=False
     )
