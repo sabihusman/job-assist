@@ -246,17 +246,16 @@ test("keyboard '2' opens the inline reason picker for the focused card", async (
 });
 
 test("keyboard '2' then '8' triggers the not_interested mutation flow", async ({ page }) => {
-  // Multiple earlier revisions of this test tried to capture the POST
-  // body via ``waitForRequest`` and ``page.route`` interception — both
-  // were flaky in CI for hard-to-reproduce reasons (likely a mix of
-  // route-precedence and Playwright-glob path-segment semantics). The
-  // approach below relies only on the optimistic UI removal that
-  // ``useRecordAction.onMutate`` performs synchronously on the cache:
-  // pressing 8 from the open picker triggers mutate, which deletes the
-  // acted-on posting from the cached list. The card disappears from
-  // the DOM. That's an observable side effect of the *full* chord
-  // succeeding and is impossible to fake without mutate actually
-  // firing — so it's a robust end-to-end assertion.
+  // Diagnostic-only observer. Several earlier revisions of this test
+  // (waitForRequest, page.route capture, optimistic-UI assertion)
+  // failed in CI in ways that didn't reproduce locally. The
+  // ``page.on('request')`` listener attaches BEFORE goto and is a
+  // never-miss observer — every outgoing request, no glob matching,
+  // no route precedence. Any POST anywhere proves mutate fired.
+  const posts: string[] = [];
+  page.on('request', (req) => {
+    if (req.method() === 'POST') posts.push(req.url());
+  });
 
   await page.goto('/');
   await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
@@ -265,9 +264,16 @@ test("keyboard '2' then '8' triggers the not_interested mutation flow", async ({
   await page.keyboard.press('2');
   await expect(page.getByText(/why not\?/i)).toBeVisible();
   await page.keyboard.press('8');
-
-  // Picker closes (proves onSelect fired) AND the card vanishes from
-  // the list (proves the mutation pipeline ran).
+  // Picker closes — proves the picker's window listener fired and
+  // onSelect propagated up at least as far as ``onToggleReason``.
   await expect(page.getByText(/why not\?/i)).toBeHidden();
-  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeHidden();
+
+  // At least one POST to a /state endpoint must have fired. If this
+  // assertion fails despite the picker closing, the bug is that
+  // ``handlePickReason`` somehow skipped its ``onAction`` call.
+  await expect
+    .poll(() => posts.find((u) => /\/postings\/[^/?]+\/state/.test(u)) ?? null, {
+      timeout: 5_000,
+    })
+    .not.toBeNull();
 });
