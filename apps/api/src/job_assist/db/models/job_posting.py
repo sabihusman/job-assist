@@ -111,9 +111,7 @@ class JobPosting(Base):
     # Stamped by /admin/reclassify/sweep. NULL on rows that have only ever
     # been classified by the ingest-time regex heuristic (normalization.py).
     # Non-null values mean the LLM sweep has run at least once.
-    classified_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    classified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     classifier_version: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (

@@ -192,9 +192,7 @@ async def test_classify_posting_parses_valid_json_response(
     # Also patch the lazy `from google import genai` so no SDK import is needed.
     import types as _types
 
-    fake_genai_module = _types.SimpleNamespace(
-        Client=lambda **_kw: _types.SimpleNamespace()
-    )
+    fake_genai_module = _types.SimpleNamespace(Client=lambda **_kw: _types.SimpleNamespace())
     monkeypatch.setattr("google.genai", fake_genai_module, raising=False)
 
     family, seniority = await classify_posting(
@@ -208,7 +206,10 @@ async def test_classify_posting_parses_valid_json_response(
 async def test_classify_posting_all_role_families(monkeypatch: pytest.MonkeyPatch) -> None:
     """Each role_family value can be returned by a mocked classify_posting."""
     for expected_family in _VALID_ROLE_FAMILIES:
-        async def _stub(jd_text: str, title: str, _fam: str = expected_family, **_: Any) -> tuple[str, str]:
+
+        async def _stub(
+            jd_text: str, title: str, _fam: str = expected_family, **_: Any
+        ) -> tuple[str, str]:
             return _fam, "pm"  # type: ignore[return-value]
 
         monkeypatch.setattr("job_assist.services.classifier.classify_posting", _stub)
@@ -220,7 +221,10 @@ async def test_classify_posting_all_role_families(monkeypatch: pytest.MonkeyPatc
 async def test_classify_posting_all_seniority_values(monkeypatch: pytest.MonkeyPatch) -> None:
     """Each seniority_level value can be returned by a mocked classify_posting."""
     for expected_seniority in _VALID_SENIORITY_LEVELS:
-        async def _stub(jd_text: str, title: str, _sen: str = expected_seniority, **_: Any) -> tuple[str, str]:
+
+        async def _stub(
+            jd_text: str, title: str, _sen: str = expected_seniority, **_: Any
+        ) -> tuple[str, str]:
             return "product_management", _sen  # type: ignore[return-value]
 
         monkeypatch.setattr("job_assist.services.classifier.classify_posting", _stub)
@@ -231,6 +235,7 @@ async def test_classify_posting_all_seniority_values(monkeypatch: pytest.MonkeyP
 @pytest.mark.asyncio
 async def test_classify_posting_other_unknown_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     """other + unknown is the canonical fallback pair."""
+
     async def _stub(jd_text: str, title: str, **_: Any) -> tuple[str, str]:
         return _FALLBACK_ROLE_FAMILY, _FALLBACK_SENIORITY
 
