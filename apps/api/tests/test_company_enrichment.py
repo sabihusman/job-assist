@@ -98,6 +98,9 @@ async def test_generate_description_includes_company_in_prompt(
     monkeypatch: pytest.MonkeyPatch, mock_gemini_response: Any
 ) -> None:
     """``generate_description`` reaches the SDK with a prompt that names the company."""
+    import sys
+    import types as _types
+
     captured: dict[str, Any] = {}
 
     class _FakeModels:
@@ -110,32 +113,36 @@ async def test_generate_description_includes_company_in_prompt(
         def __init__(self, *_: Any, **__: Any) -> None:
             self.models = _FakeModels()
 
-    import sys
-    import types
+    class _FakeCfg:
+        def __init__(self, **_: Any) -> None:
+            pass
 
-    fake_genai = types.ModuleType("genai")
-    fake_types = types.ModuleType("types")
+    fake_types_mod = _types.SimpleNamespace(GenerateContentConfig=_FakeCfg)
+    fake_genai_mod = _types.SimpleNamespace(Client=_FakeClient, types=fake_types_mod)
 
-    class _Cfg:
-        def __init__(self, **kwargs: Any) -> None:
-            self.kwargs = kwargs
+    # Patch the package attribute (covers `from google import genai`) AND the
+    # module cache (covers `from google.genai import types`). Both lookups must
+    # return the fake; on CI the real SDK is installed and the google package
+    # already has `genai` in its __dict__, which bypasses sys.modules alone.
+    monkeypatch.setattr("google.genai", fake_genai_mod, raising=False)
+    monkeypatch.setitem(sys.modules, "google.genai", fake_genai_mod)
+    monkeypatch.setitem(sys.modules, "google.genai.types", fake_types_mod)
 
-    fake_types.GenerateContentConfig = _Cfg  # type: ignore[attr-defined]
-    fake_genai.Client = _FakeClient  # type: ignore[attr-defined]
-    fake_genai.types = fake_types  # type: ignore[attr-defined]
-    sys.modules["google.genai"] = fake_genai
-    sys.modules["google.genai.types"] = fake_types
+    # Run _call() synchronously in the test thread — no real thread needed.
+    async def _fake_to_thread(fn: Any, *_: Any, **__: Any) -> Any:
+        return fn()
 
-    try:
-        result = await generate_description(
-            "Acmecorp",
-            "acmecorp.com",
-            api_key="pk_test",
-            model="gemini-2.5-flash-lite",
-        )
-    finally:
-        sys.modules.pop("google.genai", None)
-        sys.modules.pop("google.genai.types", None)
+    monkeypatch.setattr(
+        "job_assist.services.company_enrichment.asyncio.to_thread",
+        _fake_to_thread,
+    )
+
+    result = await generate_description(
+        "Acmecorp",
+        "acmecorp.com",
+        api_key="pk_test",
+        model="gemini-2.5-flash-lite",
+    )
 
     assert result == "Acmecorp builds developer tools."
     assert "Acmecorp" in captured["contents"]
