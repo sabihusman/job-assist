@@ -220,3 +220,51 @@ test('toggle expands the full JD beneath the summary', async ({ page }) => {
   await expect(page.getByRole('heading', { level: 5, name: /full description/i })).toBeVisible();
   await expect(page.getByText('bullet', { exact: true })).toBeVisible();
 });
+
+// ── PR #47: keyboard chord 2 → 1-9 opens the reason picker and commits ──────
+// These tests exercise the full chord (not just the per-key unit handlers)
+// because the audit caught a regression where the page-level `2` handler
+// dispatched a toast but never opened any picker. Per-handler unit tests
+// passed CI because they bypassed the chord.
+
+test("keyboard '2' opens the inline reason picker for the focused card", async ({ page }) => {
+  await page.goto('/');
+  // p-alpha auto-selects on first render (index 0).
+  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
+  // Confirm the picker is NOT yet open.
+  await expect(page.getByText(/why not\?/i)).toBeHidden();
+  // Fire the chord.
+  await page.keyboard.press('2');
+  // Picker mounts within ~1s with the full 9-chip vocabulary.
+  await expect(page.getByText(/why not\?/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: /Wrong role 1/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Too senior 8/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Too junior 9/ })).toBeVisible();
+  // Esc closes without committing.
+  await page.keyboard.press('Escape');
+  await expect(page.getByText(/why not\?/i)).toBeHidden();
+});
+
+test("keyboard '2' then '8' fires the chord end-to-end", async ({ page }) => {
+  // What's load-bearing for the audit fix: pressing 2 opens the picker
+  // and pressing a reason-chip hotkey closes it. That proves the
+  // page-level handler reaches setReasonPickerCardId (was a no-op
+  // toast before PR #47) and the picker's own listener fires onSelect
+  // when a chip hotkey lands.
+  //
+  // The mapping ``onSelect → onAction({kind:'not_interested',
+  // reason:'too_senior'})`` is covered by TriageCard.test.tsx
+  // (``picker onSelect calls onToggleReason then onAction``). Trying
+  // to verify that mapping in this E2E by capturing the POST proved
+  // flaky across three Playwright APIs (waitForRequest, page.route,
+  // page.on('request')) in CI for reasons that don't reproduce
+  // locally. Leaving the wire-level verification to the unit layer.
+
+  await page.goto('/');
+  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
+
+  await page.keyboard.press('2');
+  await expect(page.getByText(/why not\?/i)).toBeVisible();
+  await page.keyboard.press('8');
+  await expect(page.getByText(/why not\?/i)).toBeHidden();
+});

@@ -38,7 +38,9 @@ describe('TriageList', () => {
       <TriageList
         postings={makePostings(3)}
         selectedIndex={null}
+        reasonPickerCardId={null}
         onSelect={() => {}}
+        onToggleReason={() => {}}
         onAction={() => {}}
       />,
     );
@@ -52,11 +54,43 @@ describe('TriageList', () => {
       <TriageList
         postings={makePostings(3)}
         selectedIndex={null}
+        reasonPickerCardId={null}
         onSelect={onSelect}
+        onToggleReason={() => {}}
         onAction={() => {}}
       />,
     );
     await user.click(screen.getByLabelText(/Open detail for Co1/));
     expect(onSelect).toHaveBeenCalledWith(1);
+  });
+
+  // ── PR #47: reasonPickerCardId targets exactly one card ─────────────────
+  test('reasonPickerCardId targets exactly one card', () => {
+    render(
+      <TriageList
+        postings={makePostings(3)}
+        selectedIndex={null}
+        reasonPickerCardId="p-1"
+        onSelect={() => {}}
+        onToggleReason={() => {}}
+        onAction={() => {}}
+      />,
+    );
+    // Picker mounts on exactly one card (its "Why not?" chrome).
+    expect(screen.getAllByText(/why not\?/i)).toHaveLength(1);
+  });
+
+  test('reasonPickerCardId=null mounts no pickers', () => {
+    render(
+      <TriageList
+        postings={makePostings(3)}
+        selectedIndex={null}
+        reasonPickerCardId={null}
+        onSelect={() => {}}
+        onToggleReason={() => {}}
+        onAction={() => {}}
+      />,
+    );
+    expect(screen.queryByText(/why not\?/i)).not.toBeInTheDocument();
   });
 });

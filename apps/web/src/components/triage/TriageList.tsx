@@ -18,12 +18,20 @@ import type { PostingListItem } from '@/lib/triage/types';
 export function TriageList({
   postings,
   selectedIndex,
+  reasonPickerCardId,
   onSelect,
+  onToggleReason,
   onAction,
 }: {
   postings: readonly PostingListItem[];
   selectedIndex: number | null;
+  /** PR #47: which card's reason picker is currently expanded.
+   *  ``null`` = no picker open. Threaded down so the page-level keyboard
+   *  handler can flip it on the ``2`` chord. */
+  reasonPickerCardId: string | null;
   onSelect: (index: number) => void;
+  /** PR #47: toggle the reason picker open/closed for one card. */
+  onToggleReason: (postingId: string) => void;
   onAction: (postingId: string, action: TriageCardAction) => void;
 }) {
   const containerRef = useRef<HTMLUListElement>(null);
@@ -46,7 +54,9 @@ export function TriageList({
           <TriageCard
             posting={posting}
             isSelected={selectedIndex === index}
+            reasonOpen={reasonPickerCardId === posting.id}
             onSelect={() => onSelect(index)}
+            onToggleReason={() => onToggleReason(posting.id)}
             onAction={(action) => onAction(posting.id, action)}
           />
         </li>
