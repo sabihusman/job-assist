@@ -107,6 +107,12 @@ class JobPosting(Base):
     jd_summary_enrichment_attempt_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
+    # ── LLM classifier metadata (PR #48) ─────────────────────────────────
+    # Stamped by /admin/reclassify/sweep. NULL on rows that have only ever
+    # been classified by the ingest-time regex heuristic (normalization.py).
+    # Non-null values mean the LLM sweep has run at least once.
+    classified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    classifier_version: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("content_hash", name="idx_job_posting_content_hash"),

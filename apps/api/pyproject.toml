@@ -110,4 +110,11 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Share one event loop across all async tests so the module-level SQLAlchemy
+# engine in db/session.py stays on the same loop for the full test run.
+# Without this, function-scoped loops cause "attached to a different loop"
+# errors because pooled asyncpg connections are bound to the loop that
+# created them.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 addopts = "-ra --strict-markers --cov=job_assist --cov-report=term-missing"

@@ -32,6 +32,25 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool  # noqa: E402
+
+# ── CRITICAL: replace the app's pooled engine with a NullPool engine ─────────
+# `job_assist.db.session` creates a module-level AsyncEngine with the default
+# QueuePool at import time. When tests use ASGITransport(app=app), the app's
+# get_db() dependency uses THIS engine — not the per-test db_session fixture.
+# With pytest-asyncio's function-scoped loops, a connection pooled by test N
+# (on loop L_N) gets handed to test N+1 (on loop L_{N+1}) → "Future attached
+# to a different loop". We must rebuild the engine with NullPool BEFORE the
+# first test imports main.py.
+if _TEST_DATABASE_URL:
+    import job_assist.db.session as _app_session
+
+    _app_session.engine = create_async_engine(
+        _TEST_DATABASE_URL, echo=False, poolclass=NullPool, pool_pre_ping=True
+    )
+    _app_session._session_factory = async_sessionmaker(
+        _app_session.engine, class_=AsyncSession, expire_on_commit=False
+    )
 
 # ── Migration setup (runs once per session) ────────────────────────────────────
 
@@ -59,7 +78,10 @@ async def db_session(_apply_migrations: None) -> AsyncGenerator[AsyncSession, No
     if not _TEST_DATABASE_URL:
         pytest.skip("TEST_DATABASE_URL not set")
 
-    engine = create_async_engine(_TEST_DATABASE_URL, echo=False)
+    # NullPool prevents asyncpg connections from being reused across tests.
+    # Without it, a pooled connection bound to test N's event loop would be
+    # handed to test N+1 (on a different loop) → "attached to a different loop".
+    engine = create_async_engine(_TEST_DATABASE_URL, echo=False, poolclass=NullPool)
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
         engine, class_=AsyncSession, expire_on_commit=False
     )

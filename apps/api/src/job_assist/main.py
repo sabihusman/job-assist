@@ -19,6 +19,7 @@ from job_assist.config import settings
 from job_assist.db.session import get_db
 from job_assist.schemas.operator_profile import OperatorProfileUpdate
 from job_assist.schemas.public import PostingStateRequest
+from job_assist.schemas.reclassify import ReclassifySweepRequest, ReclassifySweepResponse
 
 logger = structlog.get_logger(__name__)
 
@@ -466,6 +467,123 @@ async def update_operator_profile(
     await db.commit()
     await db.refresh(row)
     return OperatorProfileRead.model_validate(row).model_dump(mode="json")
+
+
+# ── Admin — reclassify sweep (PR #48) ────────────────────────────────────────
+
+
+@app.post("/admin/reclassify/sweep", tags=["admin"])
+async def reclassify_sweep_endpoint(
+    payload: ReclassifySweepRequest,
+    db: DbSession,
+) -> ReclassifySweepResponse:
+    """Reclassify up to ``limit`` postings using the Gemini LLM classifier.
+
+    Replaces the ingest-time regex heuristic (``adapters/normalization.py``)
+    for existing rows.  Idempotent — re-running with the same LLM response
+    produces the same values; ``changed`` will be 0.
+
+    Selection order: oldest ``classified_at`` first (NULLs first so
+    never-classified rows are processed before already-classified ones).
+
+    On per-row LLM failure: log + skip + continue.  The row's original
+    ``role_family`` / ``seniority_level`` is preserved.
+
+    ``distribution`` in the response is a full-table snapshot taken AFTER
+    the sweep so the operator can see the cumulative effect.
+
+    TODO: add authentication before exposing publicly.
+          Currently dev-mode only — single-user deployment.
+    """
+    from datetime import UTC, datetime
+
+    from sqlalchemy import cast, func, or_, select, text
+
+    from job_assist.db.models import JobPosting
+    from job_assist.schemas.reclassify import ReclassifyDistribution
+    from job_assist.services.classifier import CLASSIFIER_VERSION, classify_posting
+
+    # ── 1. Select candidates ──────────────────────────────────────────────
+    stmt = select(JobPosting)
+    if payload.only_unclassified:
+        stmt = stmt.where(
+            or_(
+                cast(JobPosting.role_family, Text) == "other",
+                cast(JobPosting.seniority_level, Text) == "unknown",
+            )
+        )
+    # Oldest classified_at first; NULLs sort first so never-LLM-classified
+    # rows are processed before rows the sweep has already touched.
+    stmt = stmt.order_by(
+        JobPosting.classified_at.asc().nulls_first(),
+        JobPosting.first_seen_at.asc(),
+    ).limit(payload.limit)
+
+    rows = (await db.execute(stmt)).scalars().all()
+
+    processed = 0
+    changed = 0
+    skipped = 0
+
+    for posting in rows:
+        processed += 1
+        old_family = str(posting.role_family)
+        old_seniority = str(posting.seniority_level)
+
+        try:
+            new_family, new_seniority = await classify_posting(
+                posting.jd_text or "",
+                posting.normalized_title,
+            )
+        except Exception as exc:
+            logger.warning(
+                "reclassify_sweep.row_failed",
+                extra={
+                    "posting_id": str(posting.id),
+                    "error": str(exc)[:300],
+                },
+            )
+            skipped += 1
+            continue
+
+        posting.role_family = new_family  # type: ignore[assignment]
+        posting.seniority_level = new_seniority  # type: ignore[assignment]
+        posting.classifier_version = CLASSIFIER_VERSION
+        posting.classified_at = datetime.now(tz=UTC)
+
+        if new_family != old_family or new_seniority != old_seniority:
+            changed += 1
+
+    if processed > skipped:
+        await db.commit()
+
+    # ── 2. Distribution snapshot (full table, two queries) ────────────────
+    rf_rows = (
+        await db.execute(
+            select(
+                func.lower(cast(JobPosting.role_family, Text)).label("val"),
+                func.count().label("cnt"),
+            ).group_by(text("val"))
+        )
+    ).all()
+    sn_rows = (
+        await db.execute(
+            select(
+                func.lower(cast(JobPosting.seniority_level, Text)).label("val"),
+                func.count().label("cnt"),
+            ).group_by(text("val"))
+        )
+    ).all()
+
+    return ReclassifySweepResponse(
+        processed=processed,
+        changed=changed,
+        skipped=skipped,
+        distribution=ReclassifyDistribution(
+            role_family={row.val: row.cnt for row in rf_rows},
+            seniority={row.val: row.cnt for row in sn_rows},
+        ),
+    )
 
 
 # ── Admin — backfills ─────────────────────────────────────────────────────────
