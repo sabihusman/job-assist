@@ -43,7 +43,7 @@ from sqlalchemy.pool import NullPool  # noqa: E402
 # to a different loop". We must rebuild the engine with NullPool BEFORE the
 # first test imports main.py.
 if _TEST_DATABASE_URL:
-    import job_assist.db.session as _app_session  # noqa: E402
+    import job_assist.db.session as _app_session
 
     _app_session.engine = create_async_engine(
         _TEST_DATABASE_URL, echo=False, poolclass=NullPool, pool_pre_ping=True
