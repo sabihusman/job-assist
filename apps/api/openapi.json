@@ -440,6 +440,48 @@
         }
       }
     },
+    "/admin/score/sweep": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Score Sweep Endpoint",
+        "description": "Score up to ``limit`` postings using the heuristic fit-scoring model.\n\nSelection order (PR #56):\n  * ``only_unscored=True`` (default) \u2014 postings with ``fit_score IS NULL``,\n    ordered ``first_seen_at ASC, id ASC`` (stable tiebreaker per the\n    bestiary \u2014 postings sharing a same-second first_seen_at land in a\n    deterministic order across runs).\n  * ``only_unscored=False`` \u2014 all postings, ordered\n    ``scored_at NULLS FIRST, first_seen_at ASC, id ASC`` so previously\n    scored rows get refreshed in oldest-first order.\n\nOn per-row scoring failure: log + skip + continue. The row's previous\n``fit_score`` is preserved (the score is decoration; the sweep must\nnever wipe data on a transient failure).\n\n``distribution`` in the response is a coarse-bucket snapshot of the\nFULL table (not just the rows this sweep touched) taken AFTER the\nsweep, so the operator sees the cumulative effect.\n\nTODO: add authentication before exposing publicly. Dev-mode only today.",
+        "operationId": "score_sweep_endpoint_admin_score_sweep_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScoreSweepRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoreSweepResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/backfill/department-team": {
       "post": {
         "tags": [
@@ -1583,6 +1625,77 @@
         ],
         "title": "ReclassifySweepResponse",
         "description": "Response body for POST /admin/reclassify/sweep."
+      },
+      "ScoreDistribution": {
+        "properties": {
+          "by_bucket": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "By Bucket",
+            "description": "fit_score bucket -> count across ALL job_posting rows. Buckets: ``0-19``, ``20-39``, ``40-59``, ``60-79``, ``80-100``, ``unscored``."
+          }
+        },
+        "type": "object",
+        "required": [
+          "by_bucket"
+        ],
+        "title": "ScoreDistribution",
+        "description": "Per-bucket distribution counts taken after the sweep."
+      },
+      "ScoreSweepRequest": {
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "description": "Maximum number of postings to score in this call. Capped at 500 to keep the request within a reasonable timeout window.",
+            "default": 50
+          },
+          "only_unscored": {
+            "type": "boolean",
+            "title": "Only Unscored",
+            "description": "When True (default), only score postings where fit_score IS NULL. When False, rescore ALL postings regardless \u2014 useful after a weight or extractor change.",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "ScoreSweepRequest",
+        "description": "Body for POST /admin/score/sweep."
+      },
+      "ScoreSweepResponse": {
+        "properties": {
+          "processed": {
+            "type": "integer",
+            "title": "Processed",
+            "description": "Number of postings the sweep attempted to score."
+          },
+          "changed": {
+            "type": "integer",
+            "title": "Changed",
+            "description": "Postings whose fit_score changed."
+          },
+          "skipped": {
+            "type": "integer",
+            "title": "Skipped",
+            "description": "Postings where the scoring function raised; previous score preserved."
+          },
+          "distribution": {
+            "$ref": "#/components/schemas/ScoreDistribution",
+            "description": "Full-table fit_score-bucket snapshot taken after the sweep."
+          }
+        },
+        "type": "object",
+        "required": [
+          "processed",
+          "changed",
+          "skipped",
+          "distribution"
+        ],
+        "title": "ScoreSweepResponse",
+        "description": "Response body for POST /admin/score/sweep."
       },
       "ValidationError": {
         "properties": {

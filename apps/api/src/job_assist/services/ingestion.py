@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from job_assist.adapters.base import Adapter
 from job_assist.db.models.ingest_run import IngestRun
 from job_assist.db.models.job_posting import JobPosting
+from job_assist.db.models.operator_profile import OperatorProfile
 from job_assist.db.models.posting_source import PostingSource
 from job_assist.db.models.target_company import TargetCompany
 
@@ -68,6 +69,14 @@ class IngestionService:
             canonical_name: str = (
                 target_company.name if target_company else handle.replace("-", " ").title()
             )
+
+            # ── Operator profile (PR #56) ────────────────────────────────────
+            # Loaded once per ingest run. Scoring is per-posting but cheap;
+            # passing the profile in by reference avoids N+1 reads. NULL means
+            # the table is unseeded — score_posting falls through to neutral
+            # defaults if any extractor needs a field that isn't set.
+            op_row = await session.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
+            operator_profile = op_row.scalar_one_or_none()
 
             # ── Fetch ─────────────────────────────────────────────────────────
             raw_postings = await adapter.fetch_postings(handle)
@@ -125,6 +134,32 @@ class IngestionService:
                     if job_posting.team is None and norm.team is not None:
                         job_posting.team = norm.team
                     postings_updated += 1
+
+                # ── Auto-score (PR #56) ──────────────────────────────────────
+                # Compute and write fit_score on every new/updated posting.
+                # Bestiary contract (PR #56 Decision E): a scoring failure
+                # must NEVER cascade to fail an ingest run. Score is
+                # optional decoration — log + continue on any exception so
+                # a Workday/iCIMS ingest keeps progressing even if the
+                # heuristic raises on a malformed payload.
+                if operator_profile is not None:
+                    try:
+                        from job_assist.services.scoring import SCORER_VERSION, score_posting
+
+                        new_score = score_posting(
+                            job_posting,
+                            operator_profile,
+                            tier=(target_company.tier if target_company else None),
+                        )
+                        job_posting.fit_score = new_score
+                        job_posting.scored_at = datetime.now(tz=UTC)
+                        job_posting.scorer_version = SCORER_VERSION
+                    except Exception as exc:
+                        logger.warning(
+                            "ingestion.scoring_failed",
+                            posting_id=str(job_posting.id) if job_posting.id else None,
+                            error=str(exc)[:300],
+                        )
 
                 # ── Upsert PostingSource by (ats, source_job_id) ──────────────
                 ps_row = await session.execute(
