@@ -113,6 +113,16 @@ class JobPosting(Base):
     # Non-null values mean the LLM sweep has run at least once.
     classified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     classifier_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ── Heuristic fit score (PR #56) ─────────────────────────────────────
+    # 0-100 composite score from ``services/scoring.py``. Written by both
+    # the ingest path (in IngestionService) and the classifier sweep
+    # (re-scored after each successful classification) AND by the
+    # standalone POST /admin/score/sweep endpoint for backfill.
+    # ``scorer_version`` lets us detect rows scored by an older heuristic
+    # and rescore them when the algorithm changes.
+    fit_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    scored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scorer_version: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("content_hash", name="idx_job_posting_content_hash"),

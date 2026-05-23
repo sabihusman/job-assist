@@ -20,6 +20,7 @@ from job_assist.db.session import get_db
 from job_assist.schemas.operator_profile import OperatorProfileUpdate
 from job_assist.schemas.public import DEFAULT_SORT, PostingStateRequest, SortKey
 from job_assist.schemas.reclassify import ReclassifySweepRequest, ReclassifySweepResponse
+from job_assist.schemas.score import ScoreSweepRequest, ScoreSweepResponse
 
 logger = structlog.get_logger(__name__)
 
@@ -534,8 +535,11 @@ async def reclassify_sweep_endpoint(
     from sqlalchemy import cast, func, or_, select, text
 
     from job_assist.db.models import JobPosting
+    from job_assist.db.models.operator_profile import OperatorProfile
+    from job_assist.db.models.target_company import TargetCompany
     from job_assist.schemas.reclassify import ReclassifyDistribution
     from job_assist.services.classifier import CLASSIFIER_VERSION, classify_posting
+    from job_assist.services.scoring import SCORER_VERSION, score_posting
 
     # ── 1. Select candidates ──────────────────────────────────────────────
     stmt = select(JobPosting)
@@ -554,6 +558,12 @@ async def reclassify_sweep_endpoint(
     ).limit(payload.limit)
 
     rows = (await db.execute(stmt)).scalars().all()
+
+    # PR #56: load the operator profile once for the post-classification
+    # rescoring pass below. NULL profile means the table is unseeded —
+    # skip rescoring rather than fail the classifier sweep.
+    op_row = await db.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
+    operator_profile = op_row.scalar_one_or_none()
 
     processed = 0
     changed = 0
@@ -584,6 +594,37 @@ async def reclassify_sweep_endpoint(
         posting.seniority_level = new_seniority  # type: ignore[assignment]
         posting.classifier_version = CLASSIFIER_VERSION
         posting.classified_at = datetime.now(tz=UTC)
+
+        # PR #56: rescore after each successful classification. role_family
+        # and seniority_level are 50% of the composite weight; a sweep that
+        # changes them must update fit_score to match. Defensive try/except
+        # mirrors the ingest path — a scoring bug must not cascade to fail
+        # the whole sweep.
+        if operator_profile is not None:
+            try:
+                tier_value: int | None = None
+                if posting.target_company_id is not None:
+                    tier_row = await db.execute(
+                        select(TargetCompany.tier).where(
+                            TargetCompany.id == posting.target_company_id
+                        )
+                    )
+                    tier_value = tier_row.scalar_one_or_none()
+                posting.fit_score = score_posting(
+                    posting,
+                    operator_profile,
+                    tier=tier_value,
+                )
+                posting.scored_at = datetime.now(tz=UTC)
+                posting.scorer_version = SCORER_VERSION
+            except Exception as exc:
+                logger.warning(
+                    "reclassify_sweep.scoring_failed",
+                    extra={
+                        "posting_id": str(posting.id),
+                        "error": str(exc)[:300],
+                    },
+                )
 
         if new_family != old_family or new_seniority != old_seniority:
             changed += 1
@@ -616,6 +657,130 @@ async def reclassify_sweep_endpoint(
         distribution=ReclassifyDistribution(
             role_family={row.val: row.cnt for row in rf_rows},
             seniority={row.val: row.cnt for row in sn_rows},
+        ),
+    )
+
+
+# ── Admin — score sweep (PR #56) ─────────────────────────────────────────────
+
+
+@app.post("/admin/score/sweep", tags=["admin"])
+async def score_sweep_endpoint(
+    payload: ScoreSweepRequest,
+    db: DbSession,
+) -> ScoreSweepResponse:
+    """Score up to ``limit`` postings using the heuristic fit-scoring model.
+
+    Selection order (PR #56):
+      * ``only_unscored=True`` (default) — postings with ``fit_score IS NULL``,
+        ordered ``first_seen_at ASC, id ASC`` (stable tiebreaker per the
+        bestiary — postings sharing a same-second first_seen_at land in a
+        deterministic order across runs).
+      * ``only_unscored=False`` — all postings, ordered
+        ``scored_at NULLS FIRST, first_seen_at ASC, id ASC`` so previously
+        scored rows get refreshed in oldest-first order.
+
+    On per-row scoring failure: log + skip + continue. The row's previous
+    ``fit_score`` is preserved (the score is decoration; the sweep must
+    never wipe data on a transient failure).
+
+    ``distribution`` in the response is a coarse-bucket snapshot of the
+    FULL table (not just the rows this sweep touched) taken AFTER the
+    sweep, so the operator sees the cumulative effect.
+
+    TODO: add authentication before exposing publicly. Dev-mode only today.
+    """
+    from datetime import UTC, datetime
+
+    from sqlalchemy import case, func, select
+
+    from job_assist.db.models import JobPosting
+    from job_assist.db.models.operator_profile import OperatorProfile
+    from job_assist.db.models.target_company import TargetCompany
+    from job_assist.schemas.score import ScoreDistribution
+    from job_assist.services.scoring import SCORER_VERSION, bucket_for_score, score_posting
+
+    # ── 0. Load operator profile (one read per sweep) ────────────────────
+    op_row = await db.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
+    operator_profile = op_row.scalar_one_or_none()
+    if operator_profile is None:
+        raise HTTPException(
+            status_code=400,
+            detail="operator_profile is unseeded; cannot score postings",
+        )
+
+    # ── 1. Select candidates ─────────────────────────────────────────────
+    # Tier comes from target_company via OUTER JOIN — postings without a
+    # matched company get NULL tier, which the scorer maps to 50 (neutral).
+    stmt = select(JobPosting, TargetCompany.tier).outerjoin(
+        TargetCompany, JobPosting.target_company_id == TargetCompany.id
+    )
+    if payload.only_unscored:
+        stmt = stmt.where(JobPosting.fit_score.is_(None))
+    # Stable id ASC tiebreaker on every key (bestiary entry).
+    stmt = stmt.order_by(
+        JobPosting.scored_at.asc().nulls_first(),
+        JobPosting.first_seen_at.asc(),
+        JobPosting.id.asc(),
+    ).limit(payload.limit)
+
+    rows = (await db.execute(stmt)).all()
+
+    processed = 0
+    changed = 0
+    skipped = 0
+
+    for posting, tier in rows:
+        processed += 1
+        old_score = posting.fit_score
+
+        try:
+            new_score = score_posting(posting, operator_profile, tier=tier)
+        except Exception as exc:
+            logger.warning(
+                "score_sweep.row_failed",
+                extra={
+                    "posting_id": str(posting.id),
+                    "error": str(exc)[:300],
+                },
+            )
+            skipped += 1
+            continue
+
+        posting.fit_score = new_score
+        posting.scorer_version = SCORER_VERSION
+        posting.scored_at = datetime.now(tz=UTC)
+
+        if new_score != old_score:
+            changed += 1
+
+    if processed > skipped:
+        await db.commit()
+
+    # ── 2. Distribution snapshot (full table, single GROUP BY) ───────────
+    # Coarse buckets keep the response payload small; bucket_for_score maps
+    # the integer to the label inline via a CASE expression so we don't need
+    # a Python loop over every row.
+    bucket_label = case(
+        (JobPosting.fit_score.is_(None), "unscored"),
+        (JobPosting.fit_score >= 80, "80-100"),
+        (JobPosting.fit_score >= 60, "60-79"),
+        (JobPosting.fit_score >= 40, "40-59"),
+        (JobPosting.fit_score >= 20, "20-39"),
+        else_="0-19",
+    ).label("bucket")
+    dist_rows = (
+        await db.execute(select(bucket_label, func.count().label("cnt")).group_by(bucket_label))
+    ).all()
+    _ = bucket_for_score  # imported for docstring referencing; CASE is the
+    #                     # actual aggregator here.
+
+    return ScoreSweepResponse(
+        processed=processed,
+        changed=changed,
+        skipped=skipped,
+        distribution=ScoreDistribution(
+            by_bucket={row.bucket: row.cnt for row in dist_rows},
         ),
     )
 
