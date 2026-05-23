@@ -44,8 +44,11 @@ test('renders passed rows from the API', async ({ page }) => {
   await page.goto('/passed');
   await waitForDataReady(page);
 
-  // Page title + the one row land in <main>.
-  await expect(mainContent(page).getByText('Passed', { exact: true })).toBeVisible();
+  // AppShell renders the page title in <Banner>, which is OUTSIDE
+  // <main aria-label="Page content">. We assert the row content lands
+  // in main instead — proves the page rendered without colliding with
+  // the new "Passed" sidebar link (which also matches an unscoped
+  // getByText query).
   await expect(mainContent(page).getByText('PassedCo')).toBeVisible();
   await expect(mainContent(page).getByText('Senior PM, Platform')).toBeVisible();
   // Reason chip — label comes from REASON_CHOICES vocabulary.

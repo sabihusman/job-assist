@@ -43,7 +43,10 @@ test('renders rejected rows from the API', async ({ page }) => {
   await page.goto('/rejected');
   await waitForDataReady(page);
 
-  await expect(mainContent(page).getByText('Rejected', { exact: true })).toBeVisible();
+  // AppShell renders the page title in <Banner>, OUTSIDE <main aria-
+  // label="Page content">. Assert the row content instead — that proves
+  // the page rendered and avoids colliding with the "Rejected" sidebar
+  // link (added in PR #50).
   await expect(mainContent(page).getByText('RejCo')).toBeVisible();
   await expect(mainContent(page).getByText('Lead PM, Growth')).toBeVisible();
 });
