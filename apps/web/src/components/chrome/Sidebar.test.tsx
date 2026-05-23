@@ -20,19 +20,29 @@ afterEach(() => {
 });
 
 describe('Sidebar', () => {
-  test('renders all six primary nav items and no Outreach', () => {
+  test('renders all primary nav items (8 entries after PR #50)', () => {
     renderWithProviders(<Sidebar />);
     const nav = screen.getByRole('navigation', { name: /^primary$/i });
     const links = within(nav).getAllByRole('link');
     const labels = links.map((l) => l.textContent ?? '');
     expect(labels.some((l) => l.includes('Triage'))).toBe(true);
     expect(labels.some((l) => l.includes('Applied'))).toBe(true);
+    // PR #50: Passed and Rejected slot under Applied.
+    expect(labels.some((l) => l.includes('Passed'))).toBe(true);
+    expect(labels.some((l) => l.includes('Rejected'))).toBe(true);
     expect(labels.some((l) => l.includes('Pipeline'))).toBe(true);
     expect(labels.some((l) => l.includes('Companies'))).toBe(true);
     expect(labels.some((l) => l.includes('Stats'))).toBe(true);
     expect(labels.some((l) => l.includes('Settings'))).toBe(true);
-    expect(labels.some((l) => /outreach/i.test(l))).toBe(false);
-    expect(links).toHaveLength(6);
+    expect(links).toHaveLength(8);
+  });
+
+  test('Passed and Rejected nav links point at their pages', () => {
+    renderWithProviders(<Sidebar />);
+    const passed = screen.getByRole('link', { name: /passed/i });
+    const rejected = screen.getByRole('link', { name: /rejected/i });
+    expect(passed.getAttribute('href')).toBe('/passed');
+    expect(rejected.getAttribute('href')).toBe('/rejected');
   });
 
   test('active route is marked aria-current=page', () => {

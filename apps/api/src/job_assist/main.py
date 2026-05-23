@@ -627,7 +627,24 @@ _ALLOWED_STATE_FILTER_VALUES = {
     "not_interested",
     "applied",
     "snoozed",
+    # PR #50: ``rejected`` is the one ``state`` value that does NOT
+    # derive from posting_action.action_type — it's an EXISTS check
+    # against outcome_event. See the dual-table comment block in
+    # ``list_postings`` where the predicate is built. Frontend pages
+    # ``/passed`` and ``/rejected`` map to ``not_interested`` and
+    # ``rejected`` respectively; that page-name → wire-value mapping
+    # is documented on the page modules themselves.
+    "rejected",
 }
+# PR #50: explicit IN list, not LIKE. New rejection outcome types added
+# later (e.g. ``rejection_offer_declined``) should require an explicit
+# conversation here rather than silently auto-matching. Same convention
+# we apply to enum membership checks elsewhere.
+_REJECTION_OUTCOME_TYPES = (
+    "rejection_pre_screen",
+    "rejection_post_screen",
+    "rejection_post_interview",
+)
 
 
 def _enum_value(v: Any) -> str | None:
@@ -802,11 +819,23 @@ async def list_postings(
     #   snoozed + flag  → snoozed AND (snooze_until < now()
     #                                  OR (snooze_until IS NULL
     #                                      AND pa.created_at < now() - 7d))
+    #
+    # ── Bestiary note (PR #50) ────────────────────────────────────────────
+    # ``state`` is a FRONTEND vocabulary, not a 1:1 mirror of
+    # ``posting_action.action_type``. Most values match a posting_action row
+    # — but ``state=rejected`` derives from a different table entirely:
+    # ``outcome_event`` (Gmail-classified rejection emails). The next reader
+    # should not assume "state filter = action_type filter." The current
+    # cross-table values are:
+    #   rejected → EXISTS row on outcome_event with rejection_* type
+    # Add new cross-table values to this comment if the surface grows.
     state_clauses: list[Any] = []
     if state:
         from datetime import timedelta
 
         from sqlalchemy import false as sa_false
+
+        from job_assist.db.models import OutcomeEvent
 
         for s in state:
             if s == "triage":
@@ -830,6 +859,19 @@ async def list_postings(
                         ),
                     )
                 )
+            elif s == "rejected":
+                # PR #50: dual-table state. EXISTS folds into the WHERE
+                # clause without adding a LATERAL or a join — 2-query
+                # budget preserved. Explicit IN list (not LIKE) so new
+                # rejection outcome types require a deliberate vocab
+                # change here rather than auto-matching.
+                rejected_exists = (
+                    select(OutcomeEvent.id)
+                    .where(OutcomeEvent.job_posting_id == JobPosting.id)
+                    .where(OutcomeEvent.outcome_type.in_(_REJECTION_OUTCOME_TYPES))
+                    .exists()
+                )
+                state_clauses.append(rejected_exists)
             else:
                 state_clauses.append(recent_pa.c.pa_action_type == s)
         # Empty list after validation is impossible, but stay safe.

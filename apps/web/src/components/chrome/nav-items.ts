@@ -1,11 +1,13 @@
 import {
   Activity,
+  Ban,
   BarChart3,
   Building2,
   Inbox,
   KanbanSquare,
   type LucideIcon,
   Settings as SettingsIcon,
+  XCircle,
 } from 'lucide-react';
 
 /**
@@ -15,7 +17,18 @@ import {
  * via the filter rail.
  */
 export type NavItem = {
-  href: '/' | '/applied' | '/pipeline' | '/companies' | '/stats' | '/settings';
+  href:
+    | '/'
+    | '/applied'
+    // PR #50: state-filtered list pages — see lib/api/state-views.ts
+    // for the wire mapping. ``/passed`` → state=not_interested,
+    // ``/rejected`` → state=rejected.
+    | '/passed'
+    | '/rejected'
+    | '/pipeline'
+    | '/companies'
+    | '/stats'
+    | '/settings';
   label: string;
   icon: LucideIcon;
   badge?: number;
@@ -24,6 +37,12 @@ export type NavItem = {
 export const NAV_ITEMS: readonly NavItem[] = [
   { href: '/', label: 'Triage', icon: Inbox },
   { href: '/applied', label: 'Applied', icon: Activity },
+  // PR #50: ``Passed`` and ``Rejected`` slot under Applied. Same row
+  // height + sidebar styling; icons are XCircle (operator-passed) and
+  // Ban (company-rejected) to keep the semantic distinction visible
+  // even when the sidebar is collapsed to icons only.
+  { href: '/passed', label: 'Passed', icon: XCircle },
+  { href: '/rejected', label: 'Rejected', icon: Ban },
   { href: '/pipeline', label: 'Pipeline', icon: KanbanSquare },
   { href: '/companies', label: 'Companies', icon: Building2 },
   { href: '/stats', label: 'Stats', icon: BarChart3 },
