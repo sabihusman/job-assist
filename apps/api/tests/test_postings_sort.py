@@ -222,6 +222,10 @@ async def _seed_sort_fixture(db_session: Any) -> dict[str, uuid.UUID]:
             PostingSource(
                 job_posting_id=jp.id,
                 ats="greenhouse",
+                # source_job_id is NOT NULL on posting_source — without it
+                # the INSERT trips a NotNullViolationError. Use a UUID hex
+                # the way test_read_endpoints.py does.
+                source_job_id=uuid.uuid4().hex,
                 source_url=f"https://example.test/{jp.id}",
                 fetched_at=datetime.now(tz=UTC),
             )
