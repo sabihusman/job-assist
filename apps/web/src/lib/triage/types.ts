@@ -39,7 +39,16 @@ export type RoleFamilyWire =
   | 'program_management'
   | 'other';
 
-export type StateFilter = 'triage' | 'interested' | 'not_interested' | 'applied' | 'snoozed';
+// PR #50: ``rejected`` joins the StateFilter union as a frontend-vocabulary
+// state. Backend treats it specially — see ``apps/api/src/job_assist/main.py``
+// for the dual-table EXISTS predicate that maps it to outcome_event rows.
+export type StateFilter =
+  | 'triage'
+  | 'interested'
+  | 'not_interested'
+  | 'applied'
+  | 'snoozed'
+  | 'rejected';
 
 // PR #49: sort options for the Triage list. Wire vocabulary mirrors the
 // SortKey Literal in `apps/api/src/job_assist/schemas/public.py`. The

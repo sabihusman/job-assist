@@ -48,6 +48,9 @@ const VALID_STATE = new Set<StateFilter>([
   'not_interested',
   'applied',
   'snoozed',
+  // PR #50: cross-table state — backend maps to an EXISTS against
+  // outcome_event, not posting_action.
+  'rejected',
 ]);
 const VALID_SORT = new Set<SortKey>([
   'newest',
