@@ -1,0 +1,40 @@
+<!--
+  HAND-AUTHORED FIXTURE — VERIFY AGAINST FIRST REAL iCIMS PAGE AFTER MERGE.
+  Detail page that uses an @graph wrapper around the JobPosting JSON-LD —
+  a shape some iCIMS tenants emit. Exercises the @graph-walking branch
+  of _extract_jsonld.
+-->
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Lead Product Manager, Growth — AcmeCorp Careers</title>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "Organization",
+        "name": "AcmeCorp"
+      },
+      {
+        "@type": "JobPosting",
+        "title": "Lead Product Manager, Growth",
+        "description": "<p>Drive growth experiments end-to-end.</p>",
+        "datePosted": "2026-05-15",
+        "jobLocation": {
+          "@type": "Place",
+          "address": {
+            "@type": "PostalAddress",
+            "addressLocality": "San Francisco",
+            "addressRegion": "CA"
+          }
+        }
+      }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <h1>Lead Product Manager, Growth</h1>
+</body>
+</html>

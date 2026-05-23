@@ -1,0 +1,50 @@
+<!--
+  HAND-AUTHORED FIXTURE — VERIFY AGAINST FIRST REAL iCIMS PAGE AFTER MERGE.
+  Reflects documented iCIMS detail-page structure: a JSON-LD <script>
+  block carrying a schema.org JobPosting object alongside the HTML.
+-->
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Senior Product Manager, Platform — AcmeCorp Careers</title>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "JobPosting",
+    "title": "Senior Product Manager, Platform",
+    "description": "<p>Own the developer-platform roadmap. Partner with engineering and design to ship high-leverage features for the platform team.</p><ul><li>5+ years of PM experience</li><li>Strong technical fluency</li></ul>",
+    "datePosted": "2026-05-20",
+    "hiringOrganization": {
+      "@type": "Organization",
+      "name": "AcmeCorp"
+    },
+    "jobLocation": {
+      "@type": "Place",
+      "address": {
+        "@type": "PostalAddress",
+        "addressLocality": "New York",
+        "addressRegion": "NY",
+        "addressCountry": "US"
+      }
+    },
+    "jobLocationType": "TELECOMMUTE",
+    "baseSalary": {
+      "@type": "MonetaryAmount",
+      "currency": "USD",
+      "value": {
+        "@type": "QuantitativeValue",
+        "minValue": 180000,
+        "maxValue": 240000,
+        "unitText": "YEAR"
+      }
+    },
+    "industry": "Product",
+    "url": "https://careers-acmecorp.icims.com/jobs/12345/senior-product-manager-platform/job"
+  }
+  </script>
+</head>
+<body>
+  <h1>Senior Product Manager, Platform</h1>
+  <div class="job-description">[content rendered server-side]</div>
+</body>
+</html>

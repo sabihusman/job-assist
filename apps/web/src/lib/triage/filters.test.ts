@@ -32,6 +32,11 @@ describe('parseFilters', () => {
     expect(f.ats).toEqual(['workday']);
   });
 
+  test('PR #55: icims is a valid ATS', () => {
+    const f = parseFilters(new URLSearchParams('ats=icims'));
+    expect(f.ats).toEqual(['icims']);
+  });
+
   test('PR #43: other is now a valid role_family', () => {
     const f = parseFilters(new URLSearchParams('role_family=other'));
     expect(f.role_family).toEqual(['other']);

@@ -76,6 +76,23 @@ describe('FilterRow', () => {
     expect(url).toContain('role_family=other');
   });
 
+  test('SOURCE group includes an icims chip (PR #55)', () => {
+    setParams('');
+    replaceMock.mockClear();
+    render(<FilterRow showing={0} total={0} />);
+    expect(screen.getByRole('button', { name: 'icims' })).toBeInTheDocument();
+  });
+
+  test('clicking icims chip writes ats=icims to URL (PR #55)', async () => {
+    setParams('');
+    replaceMock.mockClear();
+    const user = userEvent.setup();
+    render(<FilterRow showing={0} total={0} />);
+    await user.click(screen.getByRole('button', { name: 'icims' }));
+    const url = replaceMock.mock.calls[0]?.[0] as string;
+    expect(url).toContain('ats=icims');
+  });
+
   test('SOURCE group includes a workday chip', () => {
     setParams('');
     render(<FilterRow showing={0} total={0} />);

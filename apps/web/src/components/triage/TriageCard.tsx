@@ -206,6 +206,9 @@ function AtsBadge({ ats }: { ats: string }) {
     // muted-foreground token. Explicit entry to make the omission
     // intentional rather than accidental.
     workday: 'text-muted-foreground',
+    // iCIMS (PR #55) — same default; will pick up a brand color in a
+    // future design pass if/when we settle on one.
+    icims: 'text-muted-foreground',
   };
   const colorClass = known[ats.toLowerCase()] ?? 'text-muted-foreground';
   return (

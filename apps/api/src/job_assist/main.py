@@ -68,8 +68,17 @@ async def root() -> dict[str, str]:
 
 
 # ATS sources the daily cron knows how to ingest. Workday joined the
-# set in PR #33.
-_INGESTABLE_ATS = ("greenhouse", "lever", "ashby", "workday")
+# set in PR #33; iCIMS in PR #55.
+#
+# TODO(adapter-dispatch-drift): The ATS vocabulary is currently
+# duplicated across three sites — this constant, ``_SUPPORTED`` in the
+# ingest-trigger handler below, and ``_SUPPORTED_ATS`` in cli.py. Each
+# adapter PR pays the copy-paste cost three times. A future adapter PR
+# (PR #56+) should consider promoting this into a single registry —
+# e.g. ``adapters/__init__.py::ADAPTERS = {"greenhouse": Greenhouse, …}``
+# — that all three sites read from. Out of scope for PR #55 per the
+# strip-philosophy "no base-class refactor" rule.
+_INGESTABLE_ATS = ("greenhouse", "lever", "ashby", "workday", "icims")
 
 
 @app.get("/admin/ingest/plan")
@@ -137,12 +146,15 @@ async def trigger_ingest(
     from job_assist.adapters.ashby import AshbyAdapter
     from job_assist.adapters.base import Adapter
     from job_assist.adapters.greenhouse import GreenhouseAdapter
+    from job_assist.adapters.icims import ICIMSAdapter
     from job_assist.adapters.lever import LeverAdapter
     from job_assist.adapters.workday import WorkdayAdapter
     from job_assist.db.models.target_company import TargetCompany
     from job_assist.services.ingestion import IngestionService
 
-    _SUPPORTED = {"greenhouse", "lever", "ashby", "workday"}
+    # Keep in sync with ``_INGESTABLE_ATS`` above and ``_SUPPORTED_ATS`` in
+    # cli.py — see the TODO(adapter-dispatch-drift) tag.
+    _SUPPORTED = {"greenhouse", "lever", "ashby", "workday", "icims"}
     if ats not in _SUPPORTED:
         raise HTTPException(
             status_code=400,
@@ -186,6 +198,28 @@ async def trigger_ingest(
                 ),
             )
         adapter = WorkdayAdapter(adapter_config=cfg)
+    elif ats == "icims":
+        # PR #55: iCIMS adapter_config is OPTIONAL — the default URL
+        # ``https://careers-<handle>.icims.com`` works for the majority
+        # of tenants. Look up the row only to surface a useful 404 when
+        # the handle isn't registered, AND to forward ``adapter_config``
+        # (which may carry a ``careers_url`` override for tenants with
+        # non-default URLs).
+        tc_row = (
+            await db.execute(
+                select(TargetCompany).where(
+                    TargetCompany.ats == "icims",
+                    TargetCompany.ats_handle == handle,
+                )
+            )
+        ).scalar_one_or_none()
+        if tc_row is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(f"No target_company with ats='icims' and ats_handle={handle!r}."),
+            )
+        icims_cfg = tc_row.adapter_config if isinstance(tc_row.adapter_config, dict) else None
+        adapter = ICIMSAdapter(adapter_config=icims_cfg)
     else:
         # Unreachable given the guard above, but keeps mypy happy.
         raise HTTPException(status_code=400, detail=f"ATS {ats!r} not yet implemented")
