@@ -1,0 +1,39 @@
+<!--
+  HAND-AUTHORED FIXTURE — VERIFY AGAINST FIRST REAL iCIMS PAGE AFTER MERGE.
+  Detail page WITHOUT a baseSalary block — confirms the salary extractor
+  returns (None, None, None) when the JSON-LD omits compensation. Many
+  iCIMS tenants do not surface salary publicly.
+-->
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Staff Engineer, Payments — AcmeCorp Careers</title>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "JobPosting",
+    "title": "Staff Engineer, Payments",
+    "description": "<p>Build the next generation of our payments stack.</p>",
+    "datePosted": "2026-05-18T00:00:00Z",
+    "hiringOrganization": {
+      "@type": "Organization",
+      "name": "AcmeCorp"
+    },
+    "jobLocation": {
+      "@type": "Place",
+      "address": {
+        "@type": "PostalAddress",
+        "addressLocality": "Plano",
+        "addressRegion": "TX",
+        "addressCountry": "US"
+      }
+    },
+    "jobLocationType": "HYBRID",
+    "url": "https://careers-acmecorp.icims.com/jobs/12346/staff-engineer-payments/job"
+  }
+  </script>
+</head>
+<body>
+  <h1>Staff Engineer, Payments</h1>
+</body>
+</html>

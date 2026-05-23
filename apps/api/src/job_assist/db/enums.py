@@ -17,6 +17,11 @@ class ATS(enum.StrEnum):
     lever = "lever"
     ashby = "ashby"
     workday = "workday"
+    # PR #55: iCIMS HTML+JSON-LD scraper. Enum extended via the
+    # ``c6d7e8f9a0b1`` migration. The Python value must match the PG
+    # enum value exactly — a typo here would silently fail the
+    # SAEnum-validated cast on read.
+    icims = "icims"
     other = "other"
     unknown = "unknown"
 

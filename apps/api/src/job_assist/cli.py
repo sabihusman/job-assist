@@ -208,7 +208,10 @@ def ingest(
     asyncio.run(_ingest_async(ats, handle, all_companies))
 
 
-_SUPPORTED_ATS = {"greenhouse", "lever", "ashby", "workday"}
+# PR #55: iCIMS joined the set. Keep in sync with ``_INGESTABLE_ATS`` and
+# ``_SUPPORTED`` in main.py — see the TODO(adapter-dispatch-drift) tag
+# above the former.
+_SUPPORTED_ATS = {"greenhouse", "lever", "ashby", "workday", "icims"}
 
 
 async def _ingest_async(ats: str, handle: str | None, all_companies: bool) -> None:
@@ -246,6 +249,12 @@ async def _ingest_async(ats: str, handle: str | None, all_companies: bool) -> No
         adapter = AshbyAdapter()
     elif ats == "workday":
         # Adapter constructed later — needs adapter_config from the DB.
+        adapter = None
+    elif ats == "icims":
+        # PR #55: same shape as Workday at this stage — adapter is
+        # constructed later inside the per-handle loop because the
+        # ``adapter_config`` (optional ``careers_url`` override) lives
+        # on each target_company row.
         adapter = None
     else:  # pragma: no cover — guarded by _SUPPORTED_ATS above
         raise typer.Exit(1)
@@ -299,6 +308,34 @@ async def _ingest_async(ats: str, handle: str | None, all_companies: bool) -> No
                 async with WorkdayAdapter(adapter_config=cfg) as wd_adapter:
                     typer.echo(f"Ingesting workday/{h} …")
                     run = await service.ingest_source(wd_adapter, h, session)
+                icon = "✓" if run.status == "success" else "✗"
+                typer.echo(
+                    f"  {icon} {h}: status={run.status}  "
+                    f"new={run.postings_new}  updated={run.postings_updated}  "
+                    f"fetched={run.postings_fetched}"
+                )
+    elif ats == "icims":
+        # PR #55: iCIMS adapter_config is OPTIONAL (defaults to the
+        # canonical ``careers-<handle>.icims.com`` URL). We still load
+        # the target_company row per handle so a ``careers_url``
+        # override is picked up when present.
+        from job_assist.adapters.icims import ICIMSAdapter
+
+        for h in handles:
+            async with factory() as session:
+                cfg_row = await session.execute(
+                    select(TargetCompany).where(
+                        TargetCompany.ats == "icims",
+                        TargetCompany.ats_handle == h,
+                    )
+                )
+                tc = cfg_row.scalar_one_or_none()
+                icims_cfg = (
+                    tc.adapter_config if (tc and isinstance(tc.adapter_config, dict)) else None
+                )
+                async with ICIMSAdapter(adapter_config=icims_cfg) as icims_adapter:
+                    typer.echo(f"Ingesting icims/{h} …")
+                    run = await service.ingest_source(icims_adapter, h, session)
                 icon = "✓" if run.status == "success" else "✗"
                 typer.echo(
                     f"  {icon} {h}: status={run.status}  "

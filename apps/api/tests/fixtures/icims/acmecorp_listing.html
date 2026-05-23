@@ -1,0 +1,43 @@
+<!--
+  HAND-AUTHORED FIXTURE — VERIFY AGAINST FIRST REAL iCIMS PAGE AFTER MERGE.
+  Reflects documented iCIMS career-site listing-page structure (HTML with
+  <a class="iCIMS_Anchor"> tags whose href is /jobs/{id}/{slug}/job).
+  If the first production ingest extracts zero rows, this fixture and
+  the _DETAIL_PATH_RE / _extract_listing_rows function need updating
+  against the live HTML shape.
+-->
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Careers at AcmeCorp</title>
+</head>
+<body>
+<div class="iCIMS_JobsTable">
+  <div class="iCIMS_JobsTableRow">
+    <a class="iCIMS_Anchor" href="/jobs/12345/senior-product-manager-platform/job?hub=8">
+      Senior Product Manager, Platform
+    </a>
+  </div>
+  <div class="iCIMS_JobsTableRow">
+    <a class="iCIMS_Anchor" href="/jobs/12346/staff-engineer-payments/job?hub=8">
+      Staff Engineer, Payments
+    </a>
+  </div>
+  <div class="iCIMS_JobsTableRow">
+    <a class="iCIMS_Anchor" href="/jobs/12347/lead-product-manager-growth/job?hub=8">
+      Lead Product Manager, Growth
+    </a>
+  </div>
+  <div class="iCIMS_JobsTableRow">
+    <!-- Non-detail href — must be ignored by the row parser. -->
+    <a href="/about">About AcmeCorp</a>
+  </div>
+  <div class="iCIMS_JobsTableRow">
+    <!-- Duplicate of row 1; dedup at parse time. -->
+    <a class="iCIMS_Anchor" href="/jobs/12345/senior-product-manager-platform/job">
+      Senior Product Manager, Platform
+    </a>
+  </div>
+</div>
+</body>
+</html>
