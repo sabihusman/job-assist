@@ -36,6 +36,23 @@ describe('parseFilters', () => {
     const f = parseFilters(new URLSearchParams('role_family=other'));
     expect(f.role_family).toEqual(['other']);
   });
+
+  // ── PR #49: sort ──────────────────────────────────────────────────────
+
+  test('PR #49: default sort is newest when no param', () => {
+    const f = parseFilters(new URLSearchParams(''));
+    expect(f.sort).toBe('newest');
+  });
+
+  test('PR #49: explicit sort param is honored', () => {
+    const f = parseFilters(new URLSearchParams('sort=salary_high_to_low'));
+    expect(f.sort).toBe('salary_high_to_low');
+  });
+
+  test('PR #49: unknown sort falls back to newest', () => {
+    const f = parseFilters(new URLSearchParams('sort=salary_low_to_high'));
+    expect(f.sort).toBe('newest');
+  });
 });
 
 describe('encodeFilters', () => {
@@ -56,6 +73,16 @@ describe('encodeFilters', () => {
   test('emits include_snoozed_past_only=true when set', () => {
     const params = encodeFilters({ include_snoozed_past_only: true });
     expect(params.get('include_snoozed_past_only')).toBe('true');
+  });
+
+  test('PR #49: omits the default sort from the URL', () => {
+    const params = encodeFilters({ sort: 'newest' });
+    expect(params.has('sort')).toBe(false);
+  });
+
+  test('PR #49: emits non-default sort', () => {
+    const params = encodeFilters({ sort: 'tier' });
+    expect(params.get('sort')).toBe('tier');
   });
 });
 

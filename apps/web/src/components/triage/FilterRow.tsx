@@ -3,9 +3,10 @@
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback } from 'react';
 
+import { SortDropdown } from '@/components/triage/SortDropdown';
 import { FAMILY_CHIPS, FAMILY_LABELS } from '@/lib/triage/family-labels';
 import { encodeFilters, parseFilters, toggleInArray } from '@/lib/triage/filters';
-import type { Ats, RemoteType, RoleFamilyWire, TriageFilters } from '@/lib/triage/types';
+import type { Ats, RemoteType, RoleFamilyWire, SortKey, TriageFilters } from '@/lib/triage/types';
 import { cn } from '@/lib/utils';
 
 /**
@@ -94,8 +95,18 @@ export function FilterRow({
         }
       />
 
-      <div className="ml-auto text-[12px] text-muted-foreground">
-        showing {showing} of {total}
+      {/* PR #49: SortDropdown is right-aligned alongside the count label.
+          Wraps to its own row on narrow viewports thanks to the parent's
+          `flex-wrap`. Changing it preserves all other filters via the
+          spread — same idiom as the chip groups above. */}
+      <div className="ml-auto flex items-center gap-4">
+        <SortDropdown
+          value={filters.sort}
+          onChange={(next: SortKey) => pushFilters({ ...filters, sort: next })}
+        />
+        <div className="text-[12px] text-muted-foreground">
+          showing {showing} of {total}
+        </div>
       </div>
     </div>
   );

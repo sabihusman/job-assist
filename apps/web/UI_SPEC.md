@@ -189,7 +189,16 @@ Title: "Triage". Subtitle: "22 pending · 5 applied". Layout: **main column + ri
   - `REMOTE` → chips `remote hybrid onsite`
   - Row 2: `FAMILY` → chips `Product Mgmt Product Owner Product Marketing Program Mgmt`
 - Each chip: `px-2 py-0.5 text-xs rounded ring-1 ring-inset ring-border bg-surface text-muted-foreground hover:text-foreground`. Selected: `bg-accent text-foreground ring-border-strong` (multi-select).
-- Right side: small label `showing 22 of 42` in 12px muted.
+- Right side (right-aligned via `ml-auto`):
+  - **Sort dropdown** (PR #49): label `SORT` (11px mono uppercase muted) + native `<select>` styled to match chips (`bg-surface ring-1 ring-border text-xs rounded px-2 py-0.5`). Five options, default first:
+    - `Newest` — wire `newest`, default. Ordering: `job_posting.first_seen_at DESC, id ASC` (when WE first saw it).
+    - `Oldest` — wire `oldest`. `first_seen_at ASC, id ASC`.
+    - `Salary high to low` — wire `salary_high_to_low`. `salary_max DESC NULLS LAST, id ASC` — postings without salary data sink to the bottom, not excluded.
+    - `Tier` — wire `tier`. `target_company.tier ASC NULLS LAST, id ASC` (T1 is best; untiered postings at the bottom).
+    - `Recently posted` — wire `recently_posted`. `posted_at DESC NULLS LAST, id ASC` (when the JOB was posted, not when we ingested it).
+  - **Count label**: `showing 22 of 42` in 12px muted.
+- **URL contract** (PR #49): sort lives in `?sort=<wire>` query param. The default (`newest`) is OMITTED from the URL — `/?sort=newest` and `/` mean the same thing. Sort persists across pagination + filter changes. Unknown values in the URL fall back to `newest` silently.
+- **Scope** (PR #49): sort applies to Triage only. Applied, Pipeline, Companies, and Stats pages do NOT get a sort dropdown in this PR.
 
 **Calibration card (under filters):**
 - Full-width card on `bg-card`, 1px border, 6px radius, ~16px padding.
