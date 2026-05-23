@@ -353,6 +353,8 @@ async def test_sweep_failed_row_preserves_previous_score(
     assert data["skipped"] == 1
     assert data["changed"] == 0
 
+    # Force fresh DB read — see scorer-metadata test for the rationale.
+    await db_session.refresh(posting)
     refreshed = (
         await db_session.execute(select(JobPosting).where(JobPosting.id == posting_id))
     ).scalar_one()
@@ -386,6 +388,12 @@ async def test_sweep_writes_scorer_metadata(
 
     assert resp.status_code == 200
 
+    # The test fixture uses ``expire_on_commit=False``, so the original
+    # ``posting`` object stays in the identity map with its pre-sweep
+    # column values. A fresh select-by-PK returns the cached object
+    # unchanged. Refresh forces SQLAlchemy to reload the row from the DB.
+    # Same pattern PR #48's test_admin_reclassify uses.
+    await db_session.refresh(posting)
     refreshed = (
         await db_session.execute(select(JobPosting).where(JobPosting.id == posting_id))
     ).scalar_one()
@@ -492,14 +500,19 @@ async def test_sweep_returns_400_when_profile_unseeded(
 ) -> None:
     """No operator_profile row → 400 with a clear error.
 
-    NOTE: this test relies on the truncate-after-test pattern in
-    conftest.py to leave operator_profile empty. The seed migration
-    isn't replayed between tests, so if the table normally has a row
-    in CI, this test would have to be reworked.
+    ``operator_profile`` is NOT in conftest.py's truncate list (other
+    tests in this file seed it via ``_seed_operator_profile``), so we
+    explicitly DELETE the row here to recreate the unseeded condition.
     """
+    from sqlalchemy import delete
+
     from job_assist.main import app
 
     _patch_score(monkeypatch, score_value=75)
+    # Wipe any seed left by other tests in the file (or by the migration
+    # if the schema ever gains a default-seeded singleton row).
+    await db_session.execute(delete(OperatorProfile))
+    await db_session.commit()
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await _post_sweep(client, limit=5, only_unscored=True)
