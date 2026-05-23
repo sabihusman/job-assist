@@ -245,6 +245,42 @@ test("keyboard '2' opens the inline reason picker for the focused card", async (
   await expect(page.getByText(/why not\?/i)).toBeHidden();
 });
 
+// ── PR #49: sort dropdown ────────────────────────────────────────────────────
+
+test('PR #49: default Triage URL has no sort param', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
+  // Default sort is 'newest' and we omit that from the URL.
+  expect(page.url()).not.toContain('sort=');
+});
+
+test('PR #49: changing SortDropdown writes ?sort= to URL', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
+  // Native <select> labeled SORT. Pick "Salary high to low".
+  const select = page.getByLabel('SORT', { exact: true });
+  await select.selectOption('salary_high_to_low');
+  await expect(page).toHaveURL(/sort=salary_high_to_low/);
+});
+
+test('PR #49: ?sort= in URL is reflected in SortDropdown selection', async ({ page }) => {
+  await page.goto('/?sort=tier');
+  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
+  const select = page.getByLabel('SORT', { exact: true });
+  await expect(select).toHaveValue('tier');
+});
+
+test('PR #49: sort and filter coexist in URL', async ({ page }) => {
+  await page.goto('/?sort=tier');
+  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
+  // Apply a TIER chip — sort should survive in the URL.
+  await page.getByRole('button', { name: 'T1' }).click();
+  await expect(page).toHaveURL(/sort=tier/);
+  await expect(page).toHaveURL(/tier=1/);
+});
+
+// ── PR #47 keyboard chord (existing test, restored after sort tests) ────────
+
 test("keyboard '2' then '8' fires the chord end-to-end", async ({ page }) => {
   // What's load-bearing for the audit fix: pressing 2 opens the picker
   // and pressing a reason-chip hotkey closes it. That proves the

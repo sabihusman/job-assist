@@ -472,7 +472,7 @@
           "public"
         ],
         "summary": "List Postings",
-        "description": "Paginated list of postings with the company/role/source/state nested.\n\nDefault sort: ``first_seen_at DESC``. Two queries total:\n  1. COUNT(*) over the same WHERE (joined onto the state LATERAL too,\n     so state filters narrow the total the same way they narrow rows).\n  2. SELECT with TWO LATERALs \u2014 most-recent posting_source and\n     most-recent posting_action \u2014 folded into the main page query.\n\nState filter values: ``triage`` (no action OR latest = reset),\n``interested``, ``not_interested``, ``applied``, ``snoozed``. Repeating\n``?state=...&state=...`` ORs them. ``include_snoozed_past_only=true``\nfurther restricts the snoozed bucket to past-due / open >7d entries.\n\nTODO: add authentication before exposing publicly.",
+        "description": "Paginated list of postings with the company/role/source/state nested.\n\nDefault sort: ``newest`` \u2192 ``first_seen_at DESC``. See\n``schemas/public.py::SortKey`` for the full enum and column mapping.\nEvery sort key gets ``job_posting.id ASC`` as a tiebreaker so\npagination stays stable across same-second timestamps or NULL\nsalary / tier rows. Two queries total:\n  1. COUNT(*) over the same WHERE (joined onto the state LATERAL too,\n     so state filters narrow the total the same way they narrow rows).\n  2. SELECT with TWO LATERALs \u2014 most-recent posting_source and\n     most-recent posting_action \u2014 folded into the main page query.\n\nState filter values: ``triage`` (no action OR latest = reset),\n``interested``, ``not_interested``, ``applied``, ``snoozed``. Repeating\n``?state=...&state=...`` ORs them. ``include_snoozed_past_only=true``\nfurther restricts the snoozed bucket to past-due / open >7d entries.\n\nTODO: add authentication before exposing publicly.",
         "operationId": "list_postings_postings_get",
         "parameters": [
           {
@@ -595,6 +595,23 @@
                 }
               ],
               "title": "Target Company Id"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "newest",
+                "oldest",
+                "salary_high_to_low",
+                "tier",
+                "recently_posted"
+              ],
+              "type": "string",
+              "default": "newest",
+              "title": "Sort"
             }
           },
           {

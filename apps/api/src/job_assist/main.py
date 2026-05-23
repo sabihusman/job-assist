@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from job_assist.config import settings
 from job_assist.db.session import get_db
 from job_assist.schemas.operator_profile import OperatorProfileUpdate
-from job_assist.schemas.public import PostingStateRequest
+from job_assist.schemas.public import DEFAULT_SORT, PostingStateRequest, SortKey
 from job_assist.schemas.reclassify import ReclassifySweepRequest, ReclassifySweepResponse
 
 logger = structlog.get_logger(__name__)
@@ -725,12 +725,17 @@ async def list_postings(
     state: Annotated[list[str] | None, Query()] = None,
     include_snoozed_past_only: bool = False,
     target_company_id: uuid.UUID | None = None,
+    sort: SortKey = DEFAULT_SORT,
     limit: int = 20,
     offset: int = 0,
 ) -> dict[str, Any]:
     """Paginated list of postings with the company/role/source/state nested.
 
-    Default sort: ``first_seen_at DESC``. Two queries total:
+    Default sort: ``newest`` → ``first_seen_at DESC``. See
+    ``schemas/public.py::SortKey`` for the full enum and column mapping.
+    Every sort key gets ``job_posting.id ASC`` as a tiebreaker so
+    pagination stays stable across same-second timestamps or NULL
+    salary / tier rows. Two queries total:
       1. COUNT(*) over the same WHERE (joined onto the state LATERAL too,
          so state filters narrow the total the same way they narrow rows).
       2. SELECT with TWO LATERALs — most-recent posting_source and
@@ -856,6 +861,36 @@ async def list_postings(
         .lateral("recent_ps")
     )
 
+    # PR #49: build ORDER BY from ``sort``. ``JobPosting.id ASC`` is the
+    # stable tiebreaker on every key — keeps pagination consistent when
+    # primary-sort values collide (NULLs in salary_max / tier, same-second
+    # first_seen_at, etc.). FastAPI's Literal-typed query param has already
+    # rejected anything outside the SortKey vocabulary with a 422, so the
+    # mapping is exhaustive by construction.
+    order_clauses: list[Any]
+    if sort == "newest":
+        order_clauses = [JobPosting.first_seen_at.desc(), JobPosting.id.asc()]
+    elif sort == "oldest":
+        order_clauses = [JobPosting.first_seen_at.asc(), JobPosting.id.asc()]
+    elif sort == "salary_high_to_low":
+        order_clauses = [
+            JobPosting.salary_max.desc().nulls_last(),
+            JobPosting.id.asc(),
+        ]
+    elif sort == "tier":
+        # Lower tier = better company (T1 > T2 > T3 > T4 per UI_SPEC.md
+        # tier chip ordering and --tier-N color tokens). NULLS LAST sinks
+        # postings without a matched target_company to the bottom.
+        order_clauses = [
+            TargetCompany.tier.asc().nulls_last(),
+            JobPosting.id.asc(),
+        ]
+    else:  # sort == "recently_posted"
+        order_clauses = [
+            JobPosting.posted_at.desc().nulls_last(),
+            JobPosting.id.asc(),
+        ]
+
     rows_stmt = (
         select(
             JobPosting,
@@ -870,7 +905,7 @@ async def list_postings(
         .select_from(base_join)
         .outerjoin(recent_ps, true())
         .outerjoin(recent_pa, true())
-        .order_by(JobPosting.first_seen_at.desc())
+        .order_by(*order_clauses)
         .limit(limit)
         .offset(offset)
     )

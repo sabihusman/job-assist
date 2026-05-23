@@ -41,6 +41,13 @@ export type RoleFamilyWire =
 
 export type StateFilter = 'triage' | 'interested' | 'not_interested' | 'applied' | 'snoozed';
 
+// PR #49: sort options for the Triage list. Wire vocabulary mirrors the
+// SortKey Literal in `apps/api/src/job_assist/schemas/public.py`. The
+// operator-facing labels live on SortDropdown.tsx.
+export type SortKey = 'newest' | 'oldest' | 'salary_high_to_low' | 'tier' | 'recently_posted';
+
+export const DEFAULT_SORT: SortKey = 'newest';
+
 // ── Embedded sub-shapes ──────────────────────────────────────────────────
 
 export type CompanyEmbedded = {
@@ -156,6 +163,9 @@ export type TriageFilters = {
   state: StateFilter[];
   include_snoozed_past_only: boolean;
   target_company_id: string | null;
+  // PR #49: sort order for the list. Default `newest` is omitted from
+  // the encoded URL — see `lib/triage/filters.ts`.
+  sort: SortKey;
   limit: number;
   offset: number;
 };

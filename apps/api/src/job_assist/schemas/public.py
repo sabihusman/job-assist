@@ -15,10 +15,36 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from job_assist.db.enums import ActionReason, ActionType
+
+# ── Sort keys (PR #49) ────────────────────────────────────────────────────────
+
+# Sort options for ``GET /postings``. Operator-facing labels live on the
+# frontend (``SortDropdown.tsx``); this is the wire vocabulary. FastAPI
+# rejects unknown values at the query-param boundary with a 422.
+#
+# Column mapping (in main.py.list_postings):
+#   newest             → job_posting.first_seen_at DESC
+#   oldest             → job_posting.first_seen_at ASC
+#   salary_high_to_low → job_posting.salary_max DESC NULLS LAST
+#   tier               → target_company.tier ASC NULLS LAST (T1 = best)
+#   recently_posted    → job_posting.posted_at DESC NULLS LAST
+#
+# Every sort gets ``job_posting.id ASC`` as a tiebreaker so pagination
+# stays stable when many rows share a same-second timestamp or a NULL
+# salary / tier.
+SortKey = Literal[
+    "newest",
+    "oldest",
+    "salary_high_to_low",
+    "tier",
+    "recently_posted",
+]
+DEFAULT_SORT: SortKey = "newest"
 
 # ── Embedded sub-shapes ───────────────────────────────────────────────────────
 

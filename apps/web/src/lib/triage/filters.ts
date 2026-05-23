@@ -1,9 +1,11 @@
-import type {
-  Ats,
-  RemoteType,
-  RoleFamilyWire,
-  StateFilter,
-  TriageFilters,
+import {
+  type Ats,
+  DEFAULT_SORT,
+  type RemoteType,
+  type RoleFamilyWire,
+  type SortKey,
+  type StateFilter,
+  type TriageFilters,
 } from '@/lib/triage/types';
 
 /**
@@ -26,6 +28,7 @@ export const DEFAULT_FILTERS: TriageFilters = {
   state: ['triage'],
   include_snoozed_past_only: false,
   target_company_id: null,
+  sort: DEFAULT_SORT,
   limit: 20,
   offset: 0,
 };
@@ -45,6 +48,13 @@ const VALID_STATE = new Set<StateFilter>([
   'not_interested',
   'applied',
   'snoozed',
+]);
+const VALID_SORT = new Set<SortKey>([
+  'newest',
+  'oldest',
+  'salary_high_to_low',
+  'tier',
+  'recently_posted',
 ]);
 
 function intsFrom(values: string[]): number[] {
@@ -66,6 +76,13 @@ export function parseFilters(params: {
   get(name: string): string | null;
 }): TriageFilters {
   const stateRaw = filterSet(params.getAll('state'), VALID_STATE);
+  // PR #49: parse ?sort=. Unknown / missing → DEFAULT_SORT. Same shape
+  // as the other Set-membership validators above — keeps the parser
+  // robust against URL tampering or stale links from before the enum
+  // was extended.
+  const sortRaw = params.get('sort');
+  const sort: SortKey =
+    sortRaw && VALID_SORT.has(sortRaw as SortKey) ? (sortRaw as SortKey) : DEFAULT_SORT;
   return {
     tier: intsFrom(params.getAll('tier')),
     ats: filterSet(params.getAll('ats'), VALID_ATS),
@@ -76,6 +93,7 @@ export function parseFilters(params: {
     state: stateRaw.length > 0 ? stateRaw : ['triage'],
     include_snoozed_past_only: params.get('include_snoozed_past_only') === 'true',
     target_company_id: params.get('target_company_id'),
+    sort,
     limit: Number.parseInt(params.get('limit') ?? '20', 10) || 20,
     offset: Number.parseInt(params.get('offset') ?? '0', 10) || 0,
   };
@@ -91,6 +109,9 @@ export function encodeFilters(filters: Partial<TriageFilters>): URLSearchParams 
   for (const s of filters.state ?? []) p.append('state', s);
   if (filters.include_snoozed_past_only) p.set('include_snoozed_past_only', 'true');
   if (filters.target_company_id) p.set('target_company_id', filters.target_company_id);
+  // PR #49: omit the default sort to keep clean URLs. ``?sort=newest``
+  // and a missing param mean the same thing.
+  if (filters.sort && filters.sort !== DEFAULT_SORT) p.set('sort', filters.sort);
   return p;
 }
 

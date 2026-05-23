@@ -46,6 +46,10 @@ function toQuery(filters: TriageFilters): Record<string, unknown> {
   if (filters.state.length) q.state = filters.state;
   if (filters.include_snoozed_past_only) q.include_snoozed_past_only = true;
   if (filters.target_company_id) q.target_company_id = filters.target_company_id;
+  // PR #49: only send ?sort= when not the default. Keeps the cache key
+  // identical between "default selected" and "no sort param" — both
+  // resolve to the same backend ORDER BY.
+  if (filters.sort && filters.sort !== 'newest') q.sort = filters.sort;
   return q;
 }
 
