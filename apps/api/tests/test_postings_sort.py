@@ -217,16 +217,22 @@ async def _seed_sort_fixture(db_session: Any) -> dict[str, uuid.UUID]:
     # Every posting needs at least one posting_source for realism (the
     # endpoint LATERAL-joins to it but a missing row still produces a
     # NULL ats — we attach one anyway so future asserts on `source` work).
+    # Mirror the full PostingSource factory shape from
+    # ``tests/test_read_endpoints.py::_posting_source``. Several columns
+    # on posting_source are NOT NULL (source_job_id, raw_payload,
+    # parser_version, fetch_status); skipping any of them trips an
+    # asyncpg NotNullViolationError on the flush.
     for jp in postings.values():
         db_session.add(
             PostingSource(
                 job_posting_id=jp.id,
                 ats="greenhouse",
-                # source_job_id is NOT NULL on posting_source — without it
-                # the INSERT trips a NotNullViolationError. Use a UUID hex
-                # the way test_read_endpoints.py does.
                 source_job_id=uuid.uuid4().hex,
                 source_url=f"https://example.test/{jp.id}",
+                apply_url=None,
+                raw_payload={},
+                parser_version="test-v1",
+                fetch_status="ok",
                 fetched_at=datetime.now(tz=UTC),
             )
         )
