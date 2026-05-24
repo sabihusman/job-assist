@@ -336,6 +336,124 @@ async def seed_contacts(
     return response.model_dump()
 
 
+# ── Public — contacts list (PR #51) ───────────────────────────────────────────
+
+
+_ALLOWED_CONTACT_SOURCE_TYPES = frozenset(
+    {"tippie_alumni", "linkedin_outreach", "recruiter_inbound", "warm_intro"}
+)
+
+
+@app.get("/contacts", tags=["public"])
+async def list_contacts(
+    db: DbSession,
+    source_type: Annotated[list[str] | None, Query()] = None,
+    search: str | None = None,
+    include_archived: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Paginated list of contacts for the Contacts page (PR #51).
+
+    Default behaviour:
+      * Excludes archived rows (``archived_at IS NULL``). Pass
+        ``include_archived=true`` to include them. The exclusion happens
+        in SQL — never in Python — so it matches the partial-UNIQUE-index
+        scope on email/LinkedIn (re-ingesting an archived contact's
+        email is allowed because their old row no longer occupies the
+        unique slot; see migration ``e8f9a0b1c2d3``).
+      * ``ORDER BY created_at DESC, id ASC`` — newest contacts first,
+        stable ``id ASC`` tiebreaker on same-second creates.
+      * Two queries total: one COUNT(*), one SELECT.
+
+    Filter: ``source_type`` repeating param (``?source_type=tippie_alumni
+    &source_type=linkedin_outreach``) ORs the matches.
+
+    Search: ``?search=foo`` runs a case-insensitive substring match on
+    ``first_name``, ``last_name``, and the concatenation. ILIKE is the
+    right call here — it's a free-form search, not enum membership.
+
+    TODO: add authentication before exposing publicly. The list returns
+    real PII; the single-operator trust model is the only thing holding
+    until proper auth lands.
+    """
+    from sqlalchemy import func, or_, select
+
+    from job_assist.db.models import Contact
+
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=422, detail="limit must be 1..100")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset must be >= 0")
+
+    if source_type:
+        for s in source_type:
+            if s not in _ALLOWED_CONTACT_SOURCE_TYPES:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(f"source_type={s!r} not in {sorted(_ALLOWED_CONTACT_SOURCE_TYPES)}"),
+                )
+
+    where_clauses: list[Any] = []
+    if not include_archived:
+        where_clauses.append(Contact.archived_at.is_(None))
+    if source_type:
+        where_clauses.append(Contact.source_type.in_(source_type))
+    if search:
+        pattern = f"%{search.strip().lower()}%"
+        if pattern.strip("%"):
+            # Match the name fields independently AND a "first last"
+            # concatenation so "jane d" finds "Jane Doe". COALESCE
+            # guards a NULL preferred_first_name from breaking concat.
+            full_name = func.lower(func.concat(Contact.first_name, " ", Contact.last_name))
+            where_clauses.append(
+                or_(
+                    func.lower(Contact.first_name).like(pattern),
+                    func.lower(Contact.last_name).like(pattern),
+                    full_name.like(pattern),
+                )
+            )
+
+    count_stmt = select(func.count()).select_from(Contact)
+    for clause in where_clauses:
+        count_stmt = count_stmt.where(clause)
+    total: int = (await db.execute(count_stmt)).scalar_one() or 0
+
+    rows_stmt = (
+        select(Contact)
+        .order_by(Contact.created_at.desc(), Contact.id.asc())
+        .limit(limit)
+        .offset(offset)
+    )
+    for clause in where_clauses:
+        rows_stmt = rows_stmt.where(clause)
+    rows = (await db.execute(rows_stmt)).scalars().all()
+
+    items = [
+        {
+            "id": str(c.id),
+            "first_name": c.first_name,
+            "last_name": c.last_name,
+            "preferred_first_name": c.preferred_first_name,
+            "email_primary": c.email_primary,
+            "email_secondary": c.email_secondary,
+            "linkedin_url": c.linkedin_url,
+            "current_employer": c.current_employer,
+            "current_position": c.current_position,
+            "location_city": c.location_city,
+            "location_state": c.location_state,
+            "location_country": c.location_country,
+            "location_metro": c.location_metro,
+            "source_type": c.source_type,
+            "target_company_id": str(c.target_company_id) if c.target_company_id else None,
+            "archived_at": c.archived_at.isoformat() if c.archived_at else None,
+            "created_at": c.created_at.isoformat(),
+        }
+        for c in rows
+    ]
+    return {"total": total, "offset": offset, "limit": limit, "items": items}
+
+
 # ── Admin — Gmail backfill + poll ─────────────────────────────────────────────
 
 

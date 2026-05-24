@@ -268,6 +268,107 @@
         }
       }
     },
+    "/contacts": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "List Contacts",
+        "description": "Paginated list of contacts for the Contacts page (PR #51).\n\nDefault behaviour:\n  * Excludes archived rows (``archived_at IS NULL``). Pass\n    ``include_archived=true`` to include them. The exclusion happens\n    in SQL \u2014 never in Python \u2014 so it matches the partial-UNIQUE-index\n    scope on email/LinkedIn (re-ingesting an archived contact's\n    email is allowed because their old row no longer occupies the\n    unique slot; see migration ``e8f9a0b1c2d3``).\n  * ``ORDER BY created_at DESC, id ASC`` \u2014 newest contacts first,\n    stable ``id ASC`` tiebreaker on same-second creates.\n  * Two queries total: one COUNT(*), one SELECT.\n\nFilter: ``source_type`` repeating param (``?source_type=tippie_alumni\n&source_type=linkedin_outreach``) ORs the matches.\n\nSearch: ``?search=foo`` runs a case-insensitive substring match on\n``first_name``, ``last_name``, and the concatenation. ILIKE is the\nright call here \u2014 it's a free-form search, not enum membership.\n\nTODO: add authentication before exposing publicly. The list returns\nreal PII; the single-operator trust model is the only thing holding\nuntil proper auth lands.",
+        "operationId": "list_contacts_contacts_get",
+        "parameters": [
+          {
+            "name": "source_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Type"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "name": "include_archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Archived"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Contacts Contacts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/gmail/backfill": {
       "post": {
         "summary": "Gmail Backfill",
