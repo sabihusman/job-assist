@@ -492,6 +492,42 @@ def _build_gmail_runtime() -> tuple[Any, Any]:
     return gmail, classifier
 
 
+def _surface_gmail_failure(endpoint: str, exc: BaseException) -> HTTPException:
+    """Convert an unhandled exception from a Gmail admin endpoint into a
+    diagnostic 500 with a structured body.
+
+    Why this exists: the gmail-poll GitHub Action only sees the HTTP
+    response. A bare ``Internal Server Error`` body forces the operator
+    to pull Railway logs to find out whether it was an OAuth token
+    revocation, a Gemini quota error, or a DB connectivity hiccup.
+    Surfacing ``exc_type`` + ``exc_message`` (one line, truncated) lets
+    CI alerts and the workflow summary diagnose at a glance.
+
+    Also logs the full traceback to Railway stdout (``exc_info=True``)
+    so the deep stack is still available when needed.
+    """
+    logger = logging.getLogger("job_assist.main")
+    logger.exception("Gmail endpoint %s failed", endpoint)
+    msg = str(exc).strip().splitlines()[0] if str(exc).strip() else ""
+    # Cap message length — some Google API errors include the full
+    # request URL with a long auth header.
+    if len(msg) > 500:
+        msg = msg[:500] + "…(truncated)"
+    return HTTPException(
+        status_code=500,
+        detail={
+            "endpoint": endpoint,
+            "exc_type": type(exc).__name__,
+            "exc_message": msg,
+            "hint": (
+                "Common causes: GMAIL_REFRESH_TOKEN revoked (re-run OAuth flow), "
+                "GEMINI_API_KEY rotated/exhausted, Railway DB unreachable. "
+                "Full traceback in Railway logs."
+            ),
+        },
+    )
+
+
 @app.post("/admin/gmail/backfill")
 async def gmail_backfill(
     db: DbSession,
@@ -522,8 +558,13 @@ async def gmail_backfill(
 
     from job_assist.gmail.backfill import run_backfill
 
-    gmail, classifier = _build_gmail_runtime()
-    report = await run_backfill(db, gmail, classifier, days_back=days)
+    try:
+        gmail, classifier = _build_gmail_runtime()
+        report = await run_backfill(db, gmail, classifier, days_back=days)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _surface_gmail_failure("/admin/gmail/backfill", exc) from exc
     return report.model_dump(mode="json")
 
 
@@ -555,8 +596,13 @@ async def gmail_poll(db: DbSession) -> dict[str, Any]:
 
     from job_assist.gmail.backfill import run_poll
 
-    gmail, classifier = _build_gmail_runtime()
-    report = await run_poll(db, gmail, classifier)
+    try:
+        gmail, classifier = _build_gmail_runtime()
+        report = await run_poll(db, gmail, classifier)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _surface_gmail_failure("/admin/gmail/poll", exc) from exc
     return report.model_dump(mode="json")
 
 
