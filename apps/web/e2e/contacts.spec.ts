@@ -133,9 +133,13 @@ test('renders contacts table from the API', async ({ page }) => {
   // contact rows in the default view (archived hidden).
   await expect(mainContent(page).getByText('Test Alpha')).toBeVisible();
   await expect(mainContent(page).getByText('Demo Recruiter')).toBeVisible();
-  // Source chip surfaces the operator-facing label, not the wire value.
-  await expect(mainContent(page).getByText('Tippie alumni')).toBeVisible();
-  await expect(mainContent(page).getByText('Recruiter inbound')).toBeVisible();
+  // The source label ("Tippie alumni", "Recruiter inbound") surfaces
+  // both as a filter chip ABOVE the table and as a source chip INSIDE
+  // each row. Scope the row-content assertion to the <table> so the
+  // chip collision doesn't trip strict-mode.
+  const table = mainContent(page).getByRole('table');
+  await expect(table.getByText('Tippie alumni')).toBeVisible();
+  await expect(table.getByText('Recruiter inbound')).toBeVisible();
 });
 
 test('empty state renders when API returns no contacts', async ({ page }) => {
