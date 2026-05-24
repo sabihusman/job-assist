@@ -3,7 +3,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { queryKeys, useRecordAction } from '@/lib/api/hooks';
+import { queryKeys, toStateRequestBody, useRecordAction } from '@/lib/api/hooks';
 import type { PostingsListResponse } from '@/lib/triage/types';
 
 // Replace the openapi-fetch client with an inline mock so the test can
@@ -98,7 +98,11 @@ describe('useRecordAction', () => {
   test('rolls back to the snapshot on POST error', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const key = seedListCache(client, [fakePosting('a'), fakePosting('b')]);
-    postMock.mockResolvedValue({ data: null, error: { detail: 'boom' } });
+    postMock.mockResolvedValue({
+      data: null,
+      error: { detail: 'boom' },
+      response: new Response(null, { status: 400 }),
+    });
 
     const { result } = renderHook(() => useRecordAction(), { wrapper: wrap(client) });
     act(() => {
@@ -110,5 +114,123 @@ describe('useRecordAction', () => {
     const cached = client.getQueryData<PostingsListResponse>(key);
     expect(cached?.items.map((p) => p.id)).toEqual(['a', 'b']);
     expect(cached?.total).toBe(2);
+  });
+
+  // ── PR #58 wire-shape contract lock ───────────────────────────────────────
+  //
+  // The Vanta pass-action bug was a wire-body field-name mismatch:
+  // production sent ``{kind, reason}``, FastAPI demanded
+  // ``{action_type, reason}``. The 422 silently rolled back the
+  // optimistic UI to phantom success. This test pins the wire body so
+  // the same regression can't reach production again without failing
+  // CI first.
+
+  test('POST body always carries action_type (not kind) on the wire', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    seedListCache(client, [fakePosting('a')]);
+    postMock.mockResolvedValue({
+      data: {
+        current: 'applied',
+        reason: null,
+        snooze_until: null,
+        current_at: new Date().toISOString(),
+      },
+      error: null,
+      response: new Response(null, { status: 200 }),
+    });
+
+    const { result } = renderHook(() => useRecordAction(), { wrapper: wrap(client) });
+    act(() => {
+      result.current.mutate({ postingId: 'a', action_type: 'applied' });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    // Grab the literal arguments openapi-fetch was handed.
+    expect(postMock).toHaveBeenCalledTimes(1);
+    const [path, opts] = postMock.mock.calls[0] as [
+      string,
+      { params: { path: { posting_id: string } }; body: Record<string, unknown> },
+    ];
+    expect(path).toBe('/postings/{posting_id}/state');
+    expect(opts.params.path.posting_id).toBe('a');
+    // The contract: action_type present; legacy ``kind`` MUST be absent.
+    expect(opts.body).toHaveProperty('action_type', 'applied');
+    expect(opts.body).not.toHaveProperty('kind');
+    // Nulls for unprovided optionals — keeps the schema happy.
+    expect(opts.body).toMatchObject({
+      action_type: 'applied',
+      reason: null,
+      snooze_until: null,
+      notes: null,
+    });
+  });
+
+  test('surfaces the FastAPI detail on the thrown error', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    seedListCache(client, [fakePosting('a')]);
+    postMock.mockResolvedValue({
+      data: null,
+      error: { detail: 'reason_required_for_not_interested' },
+      response: new Response(null, { status: 422 }),
+    });
+
+    const { result } = renderHook(() => useRecordAction(), { wrapper: wrap(client) });
+    act(() => {
+      result.current.mutate({ postingId: 'a', action_type: 'not_interested' });
+    });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    const err = result.current.error as unknown as {
+      name: string;
+      kind: string;
+      status: number | null;
+      detail: string | null;
+    };
+    expect(err.name).toBe('MutationError');
+    expect(err.kind).toBe('application');
+    expect(err.status).toBe(422);
+    expect(err.detail).toBe('reason_required_for_not_interested');
+  });
+});
+
+// ── toStateRequestBody — defensive serializer ──────────────────────────────
+
+describe('toStateRequestBody', () => {
+  test('canonical RecordActionVars → action_type wire shape', () => {
+    expect(toStateRequestBody({ postingId: 'p', action_type: 'applied', reason: null })).toEqual({
+      action_type: 'applied',
+      reason: null,
+      snooze_until: null,
+      notes: null,
+    });
+  });
+
+  test('legacy {kind, reason} shape is rewritten to action_type', () => {
+    // Belt-and-braces: if some future refactor accidentally hands the
+    // hook ``{kind, reason}`` again, the wire body still carries
+    // ``action_type`` so the API contract is preserved.
+    expect(toStateRequestBody({ kind: 'not_interested', reason: 'wrong_role' })).toEqual({
+      action_type: 'not_interested',
+      reason: 'wrong_role',
+      snooze_until: null,
+      notes: null,
+    });
+  });
+
+  test('preserves snooze_until and notes when provided', () => {
+    expect(
+      toStateRequestBody({
+        postingId: 'p',
+        action_type: 'snoozed',
+        reason: null,
+        snooze_until: '2026-06-01T00:00:00Z',
+        notes: 'check back in a week',
+      }),
+    ).toEqual({
+      action_type: 'snoozed',
+      reason: null,
+      snooze_until: '2026-06-01T00:00:00Z',
+      notes: 'check back in a week',
+    });
   });
 });

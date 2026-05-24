@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { api } from '@/lib/api/client';
+import { MutationError, extractDetail } from '@/lib/api/mutation-error';
 import type {
   ActionReason,
   ActionType,
@@ -119,26 +120,72 @@ export type RecordActionVars = {
 };
 
 /**
+ * Wire-body serializer for ``POST /postings/{id}/state``.
+ *
+ * **PR #58 root cause**: a production probe confirmed the deployed
+ * frontend was POSTing ``{kind, reason}``; the FastAPI ``ActionCreate``
+ * schema expects ``{action_type, reason}``. The 422 silently rolled
+ * back the optimistic UI to "phantom success" — historical pass /
+ * apply / reject actions never persisted server-side.
+ *
+ * This serializer exists so the wire shape is no longer implicit. It
+ * accepts either the canonical ``RecordActionVars`` (``action_type``)
+ * or a defensive ``{kind, ...}`` shape (the bug shape) and always
+ * emits the API contract. Consumers reach for ``RecordActionVars``;
+ * the ``kind`` branch is a belt-and-braces guard against the same
+ * footgun re-appearing in a future refactor.
+ *
+ * The unit test ``hooks.test.tsx > 'POST body always carries
+ * action_type'`` locks this contract — if the wire payload ever
+ * regresses to ``{kind, ...}`` again, that test fails before the bug
+ * reaches production.
+ */
+export function toStateRequestBody(
+  vars: RecordActionVars | { kind: ActionType; reason?: ActionReason | null },
+): {
+  action_type: ActionType;
+  reason: ActionReason | null;
+  snooze_until: string | null;
+  notes: string | null;
+} {
+  const action_type =
+    'action_type' in vars && vars.action_type
+      ? vars.action_type
+      : (vars as { kind: ActionType }).kind;
+  const reason = (vars as { reason?: ActionReason | null }).reason ?? null;
+  const snooze_until = (vars as RecordActionVars).snooze_until ?? null;
+  const notes = (vars as RecordActionVars).notes ?? null;
+  return { action_type, reason, snooze_until, notes };
+}
+
+/**
  * Record an operator action. Optimistically removes the posting from
  * any cached triage list (cards that just transitioned out of triage
  * should disappear instantly). On error, restores the snapshot. On
  * settle, invalidates calibration so the KPI card refreshes.
+ *
+ * Throws a ``MutationError`` carrying the structured ``detail`` from
+ * the API body so the page-level onError handler can surface it in
+ * the toast verbatim. No 5xx retry — the diagnosed Vanta failure was
+ * an application bug (wrong field name), not a transient cold-start.
  */
 export function useRecordAction() {
   const qc = useQueryClient();
 
   return useMutation({
     mutationFn: async (vars: RecordActionVars) => {
-      const { data, error } = await api.POST('/postings/{posting_id}/state', {
+      const { data, error, response } = await api.POST('/postings/{posting_id}/state', {
         params: { path: { posting_id: vars.postingId } },
-        body: {
-          action_type: vars.action_type,
-          reason: vars.reason ?? null,
-          snooze_until: vars.snooze_until ?? null,
-          notes: vars.notes ?? null,
-        },
+        body: toStateRequestBody(vars),
       });
-      if (error) throw error;
+      if (error || data === undefined) {
+        throw new MutationError({
+          kind: 'application',
+          status: response?.status ?? null,
+          detail: extractDetail(error),
+          message: extractDetail(error) ?? `Action failed (${response?.status ?? 'no status'})`,
+        });
+      }
       return data;
     },
     onMutate: async (vars) => {

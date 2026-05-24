@@ -132,8 +132,22 @@ function TriagePageInner() {
                       : 'Reset';
             toast.success(`✓ ${verb}`);
           },
-          onError: () => {
-            toast.error('Action failed — try again');
+          onError: (err) => {
+            // PR #58 post-mortem: the pre-fix toast was a generic
+            // "Action failed — try again", which buried the FastAPI
+            // ``detail`` body. That hid the wire-shape bug (sending
+            // ``kind`` instead of ``action_type``) for weeks because
+            // the 422 response was indistinguishable from any other
+            // failure. Now we surface ``detail`` verbatim so the next
+            // schema-shape regression announces itself.
+            const isMutationError =
+              err && typeof err === 'object' && 'detail' in err && 'status' in err;
+            if (isMutationError) {
+              const detail = (err as unknown as { detail: string | null }).detail;
+              toast.error(detail ?? 'Action couldn’t be completed.');
+              return;
+            }
+            toast.error('Action couldn’t be completed.');
           },
         },
       );

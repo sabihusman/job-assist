@@ -342,6 +342,106 @@ test('PR #57: NULL-score postings do NOT render the badge', async ({ page }) => 
   await expect(badges).toHaveCount(2);
 });
 
+// ── PR #58: wire-shape contract + structured-error toast ───────────────────
+//
+// Post-mortem: the Vanta pass-action bug was a wire-body field-name
+// mismatch (``{kind, reason}`` sent; ``{action_type, reason}`` required).
+// FastAPI returned 422, but the old generic toast buried ``detail`` so
+// the bug was invisible. The PR #58 fix is locked at three layers:
+//   1. ``toStateRequestBody`` in hooks.ts — explicit canonical wire
+//      shape, accepts either input shape, always emits ``action_type``.
+//   2. ``hooks.test.tsx > 'POST body always carries action_type (not
+//      kind) on the wire'`` — captures the literal ``api.POST`` call
+//      args and asserts ``body.action_type`` present, ``body.kind``
+//      absent. **This is the contract lock**.
+//   3. ``hooks.test.tsx > 'surfaces the FastAPI detail on the thrown
+//      error'`` — asserts the thrown MutationError carries
+//      ``detail`` + ``status``.
+//
+// The E2E equivalents (wire-body and detail-toast) were attempted
+// here but proved unreliable on the Vercel preview environment: the
+// mutation lifecycle runs (optimistic remove + onSettled refetch
+// both fire) but the POST never reaches Playwright's network
+// intercept layer — neither under glob nor regex route patterns,
+// neither via keyboard nor button click. The same code path works
+// locally and is fully covered by the unit tests above. Re-investigate
+// if the preview's API base URL behavior changes or if the
+// openapi-fetch runtime exposes a clearer hook.
+
+// Regex (not glob): Playwright's glob ``*`` doesn't span ``/``, and the
+// suite's ``**/postings/*`` handler in mockApi() therefore does NOT
+// match ``/postings/{id}/state`` (one extra segment past the wildcard).
+// A per-test glob like ``**/postings/*/state`` *should* match but
+// empirically didn't intercept the POST on the Vercel preview — see
+// the trace bestiary for PR #58. A regex pattern is unambiguous and
+// reliable.
+const STATE_POST_RE = /\/postings\/[^/]+\/state(\?|$)/;
+
+test.skip('PR #58: pass-action wire body uses action_type (not kind)', async ({ page }) => {
+  // Always-fulfill mock so the request completes successfully and the
+  // mutation's optimistic UI doesn't roll back mid-test.
+  await page.route(STATE_POST_RE, async (route: Route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        current: 'interested',
+        reason: null,
+        snooze_until: null,
+        current_at: new Date().toISOString(),
+      }),
+    });
+  });
+
+  await page.goto('/');
+  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
+
+  // Click the explicit Interested button rather than relying on the
+  // keyboard hook — it sidesteps any ``enabled``/focus edge case and
+  // makes the click→request correspondence one-to-one. Scope to the
+  // first Alpha card list-item so we don't collide with the detail
+  // panel's own action button.
+  const alphaCard = page.getByRole('listitem').filter({ hasText: 'Alpha Co' }).first();
+
+  // Capture the actual outgoing POST. ``waitForRequest`` returns the
+  // raw wire request, so the assertion below is on the literal bytes
+  // we sent — no dependence on the mock or the toast.
+  const [request] = await Promise.all([
+    page.waitForRequest(
+      (req) => STATE_POST_RE.test(req.url()) && req.method() === 'POST',
+      { timeout: 5000 },
+    ),
+    alphaCard.getByRole('button', { name: /Interested/ }).click(),
+  ]);
+
+  const body = request.postDataJSON() as Record<string, unknown>;
+  // The contract: action_type present; legacy ``kind`` MUST be absent.
+  expect(body).toHaveProperty('action_type', 'interested');
+  expect(body).not.toHaveProperty('kind');
+});
+
+test.skip('PR #58: API error detail surfaces verbatim in the toast', async ({ page }) => {
+  await page.route(STATE_POST_RE, async (route: Route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    await route.fulfill({
+      status: 422,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'reason_required_for_not_interested' }),
+    });
+  });
+
+  await page.goto('/');
+  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
+
+  const alphaCard = page.getByRole('listitem').filter({ hasText: 'Alpha Co' }).first();
+  await alphaCard.getByRole('button', { name: /Interested/ }).click();
+
+  await expect(page.getByText(/reason_required_for_not_interested/i)).toBeVisible({
+    timeout: 5000,
+  });
+});
+
 // PR #57 mobile-first stance is NOT verified via a 380px E2E test here.
 // At 380px the AppShell sidebar (224px on first paint, before localStorage
 // rehydration collapses it) leaves ~156px for the Triage card, which makes
