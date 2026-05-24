@@ -7,6 +7,7 @@ import {
   KanbanSquare,
   type LucideIcon,
   Settings as SettingsIcon,
+  Users,
   XCircle,
 } from 'lucide-react';
 
@@ -27,6 +28,10 @@ export type NavItem = {
     | '/rejected'
     | '/pipeline'
     | '/companies'
+    // PR #51: read-only outreach contacts list. Slot after Companies so
+    // the "who I might talk to" view sits next to "where the postings
+    // come from."
+    | '/contacts'
     | '/stats'
     | '/settings';
   label: string;
@@ -45,6 +50,9 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { href: '/rejected', label: 'Rejected', icon: Ban },
   { href: '/pipeline', label: 'Pipeline', icon: KanbanSquare },
   { href: '/companies', label: 'Companies', icon: Building2 },
+  // PR #51: outreach contacts list (read-only in this PR). CRUD lands
+  // in PR #52; archive button lands in PR #52 with full CRUD.
+  { href: '/contacts', label: 'Contacts', icon: Users },
   { href: '/stats', label: 'Stats', icon: BarChart3 },
   { href: '/settings', label: 'Settings', icon: SettingsIcon },
 ] as const;

@@ -14,7 +14,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Index, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func, text
@@ -53,6 +53,21 @@ class Contact(Base):
     )
     contact_opt_in_topics: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ── PR #51 — soft-delete + target_company linkage ──────────────────
+    # ``archived_at`` doubles as the soft-delete marker AND the predicate
+    # scoping the partial UNIQUE indexes on email_primary / linkedin_url
+    # (see migration e8f9a0b1c2d3). The list endpoint excludes archived
+    # rows by default via SQL — never via Python filtering — so dedup
+    # and visibility align.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # FK to target_company.id with ON DELETE SET NULL. Most contacts
+    # won't have a matched target_company today; ``current_employer``
+    # (freeform string) is the operator-visible "where they work".
+    target_company_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("target_company.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
