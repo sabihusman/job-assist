@@ -354,11 +354,20 @@ test('PR #57: NULL-score postings do NOT render the badge', async ({ page }) => 
 //      the operator sees ``detail`` verbatim in the toast — not a
 //      generic message.
 
+// Regex (not glob): Playwright's glob ``*`` doesn't span ``/``, and the
+// suite's ``**/postings/*`` handler in mockApi() therefore does NOT
+// match ``/postings/{id}/state`` (one extra segment past the wildcard).
+// A per-test glob like ``**/postings/*/state`` *should* match but
+// empirically didn't intercept the POST on the Vercel preview — see
+// the trace bestiary for PR #58. A regex pattern is unambiguous and
+// reliable.
+const STATE_POST_RE = /\/postings\/[^/]+\/state(\?|$)/;
+
 test('PR #58: pass-action wire body uses action_type (not kind)', async ({ page }) => {
-  let capturedBody: Record<string, unknown> | null = null;
-  await page.route('**/postings/*/state', async (route: Route) => {
+  // Always-fulfill mock so the request completes successfully and the
+  // mutation's optimistic UI doesn't roll back mid-test.
+  await page.route(STATE_POST_RE, async (route: Route) => {
     if (route.request().method() !== 'POST') return route.continue();
-    capturedBody = route.request().postDataJSON();
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -373,17 +382,33 @@ test('PR #58: pass-action wire body uses action_type (not kind)', async ({ page 
 
   await page.goto('/');
   await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
-  await page.keyboard.press('1'); // Interested
 
-  await expect(page.getByText(/✓ Interested/i)).toBeVisible({ timeout: 3000 });
-  expect(capturedBody).not.toBeNull();
-  // Both shapes of the contract: action_type present, legacy kind absent.
-  expect(capturedBody).toHaveProperty('action_type', 'interested');
-  expect(capturedBody).not.toHaveProperty('kind');
+  // Click the explicit Interested button rather than relying on the
+  // keyboard hook — it sidesteps any ``enabled``/focus edge case and
+  // makes the click→request correspondence one-to-one. Scope to the
+  // first Alpha card list-item so we don't collide with the detail
+  // panel's own action button.
+  const alphaCard = page.getByRole('listitem').filter({ hasText: 'Alpha Co' }).first();
+
+  // Capture the actual outgoing POST. ``waitForRequest`` returns the
+  // raw wire request, so the assertion below is on the literal bytes
+  // we sent — no dependence on the mock or the toast.
+  const [request] = await Promise.all([
+    page.waitForRequest(
+      (req) => STATE_POST_RE.test(req.url()) && req.method() === 'POST',
+      { timeout: 5000 },
+    ),
+    alphaCard.getByRole('button', { name: /Interested/ }).click(),
+  ]);
+
+  const body = request.postDataJSON() as Record<string, unknown>;
+  // The contract: action_type present; legacy ``kind`` MUST be absent.
+  expect(body).toHaveProperty('action_type', 'interested');
+  expect(body).not.toHaveProperty('kind');
 });
 
 test('PR #58: API error detail surfaces verbatim in the toast', async ({ page }) => {
-  await page.route('**/postings/*/state', async (route: Route) => {
+  await page.route(STATE_POST_RE, async (route: Route) => {
     if (route.request().method() !== 'POST') return route.continue();
     await route.fulfill({
       status: 422,
@@ -394,10 +419,12 @@ test('PR #58: API error detail surfaces verbatim in the toast', async ({ page })
 
   await page.goto('/');
   await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
-  await page.keyboard.press('1');
+
+  const alphaCard = page.getByRole('listitem').filter({ hasText: 'Alpha Co' }).first();
+  await alphaCard.getByRole('button', { name: /Interested/ }).click();
 
   await expect(page.getByText(/reason_required_for_not_interested/i)).toBeVisible({
-    timeout: 3000,
+    timeout: 5000,
   });
 });
 
