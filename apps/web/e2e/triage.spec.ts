@@ -28,7 +28,10 @@ const POSTINGS = [
     salary: null,
     source: { ats: 'greenhouse', url: 'https://example.test/jd/a' },
     first_seen_at: new Date().toISOString(),
-    score: null,
+    // PR #57: Alpha gets a "strong fit" score so the badge renders in the
+    // positive tone. Beta gets a mid-band score; Gamma stays NULL to
+    // exercise the "no badge" branch.
+    score: 88,
     state: { current: null, reason: null, snooze_until: null, current_at: null },
   },
   {
@@ -47,7 +50,7 @@ const POSTINGS = [
     salary: null,
     source: { ats: 'lever', url: 'https://example.test/jd/b' },
     first_seen_at: new Date().toISOString(),
-    score: null,
+    score: 65,
     state: { current: null, reason: null, snooze_until: null, current_at: null },
   },
   {
@@ -304,3 +307,58 @@ test("keyboard '2' then '8' fires the chord end-to-end", async ({ page }) => {
   await page.keyboard.press('8');
   await expect(page.getByText(/why not\?/i)).toBeHidden();
 });
+
+// ── PR #57: Best fit sort + score badge ─────────────────────────────────────
+
+test('PR #57: Best fit option writes ?sort=best_fit to URL', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
+  const select = page.getByLabel('SORT', { exact: true });
+  await select.selectOption('best_fit');
+  await expect(page).toHaveURL(/sort=best_fit/);
+});
+
+test('PR #57: ?sort=best_fit reflects in dropdown on load', async ({ page }) => {
+  await page.goto('/?sort=best_fit');
+  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
+  const select = page.getByLabel('SORT', { exact: true });
+  await expect(select).toHaveValue('best_fit');
+});
+
+test('PR #57: score badge renders for non-NULL scores with aria-label', async ({ page }) => {
+  await page.goto('/');
+  // Alpha (score 88) and Beta (score 65) both render a badge.
+  // The aria-label is the canonical assertion — exact text + screen-reader friendly.
+  await expect(page.getByLabel('Fit score: 88 out of 100')).toBeVisible();
+  await expect(page.getByLabel('Fit score: 65 out of 100')).toBeVisible();
+});
+
+test('PR #57: NULL-score postings do NOT render the badge', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByLabel(/Open detail for Gamma Co/)).toBeVisible();
+  // Gamma's score is null in the fixture. There must be exactly 2 badges
+  // (Alpha + Beta) — Gamma's row contributes none.
+  const badges = page.getByTestId('fit-score-badge');
+  await expect(badges).toHaveCount(2);
+});
+
+// PR #57 mobile-first stance is NOT verified via a 380px E2E test here.
+// At 380px the AppShell sidebar (224px on first paint, before localStorage
+// rehydration collapses it) leaves ~156px for the Triage card, which makes
+// the card's main-column button collapse to hidden in Playwright's
+// visibility model. That's a pre-existing AppShell responsiveness gap —
+// explicitly out of scope per the PR brief ("Existing pages stay as-is —
+// this is forward-looking, not a retrofit").
+//
+// The badge's mobile-safe properties are provable without a full-page
+// render at 380px:
+//   - Number-only display (no "Fit:" prefix) — locked by
+//     FitScoreBadge.test.tsx "renders the numeric score with no prefix".
+//   - aria-label carries the semantic context — locked by
+//     FitScoreBadge.test.tsx "aria-label reads as a complete sentence".
+//   - Badge lives inside a flex-wrap container in TriageCard's meta row
+//     (line 4) — visible in TriageCard.tsx source.
+//
+// When the AppShell becomes responsive (future PR), the 380px E2E becomes
+// meaningful and can be added back at that time. For now the unit layer
+// is the honest measurement.

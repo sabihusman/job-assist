@@ -22,6 +22,10 @@ const SORT_OPTIONS: readonly { wire: SortKey; label: string }[] = [
   { wire: 'salary_high_to_low', label: 'Salary high to low' },
   { wire: 'tier', label: 'Tier' },
   { wire: 'recently_posted', label: 'Recently posted' },
+  // PR #57: "Best fit" reads fit_score DESC NULLS LAST. NULL-score
+  // postings sink to the bottom — operator scrolls until the score
+  // drops below their personal threshold (no explicit filter yet).
+  { wire: 'best_fit', label: 'Best fit' },
 ] as const;
 
 export function SortDropdown({

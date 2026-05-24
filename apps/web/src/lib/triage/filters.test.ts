@@ -58,6 +58,11 @@ describe('parseFilters', () => {
     const f = parseFilters(new URLSearchParams('sort=salary_low_to_high'));
     expect(f.sort).toBe('newest');
   });
+
+  test('PR #57: best_fit is a valid sort key', () => {
+    const f = parseFilters(new URLSearchParams('sort=best_fit'));
+    expect(f.sort).toBe('best_fit');
+  });
 });
 
 describe('encodeFilters', () => {

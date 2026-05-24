@@ -5,7 +5,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { SortDropdown } from '@/components/triage/SortDropdown';
 
 describe('SortDropdown', () => {
-  test('renders all 5 options with their operator-facing labels', () => {
+  test('renders all 6 options with their operator-facing labels', () => {
     render(<SortDropdown value="newest" onChange={() => {}} />);
     const select = screen.getByRole('combobox', { name: /sort/i });
     const options = Array.from(select.querySelectorAll('option')).map((o) => ({
@@ -18,7 +18,18 @@ describe('SortDropdown', () => {
       { value: 'salary_high_to_low', text: 'Salary high to low' },
       { value: 'tier', text: 'Tier' },
       { value: 'recently_posted', text: 'Recently posted' },
+      // PR #57: "Best fit" reads fit_score DESC NULLS LAST.
+      { value: 'best_fit', text: 'Best fit' },
     ]);
+  });
+
+  test('PR #57: best_fit option is selectable and fires onChange', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<SortDropdown value="newest" onChange={onChange} />);
+    const select = screen.getByRole('combobox', { name: /sort/i });
+    await user.selectOptions(select, 'best_fit');
+    expect(onChange).toHaveBeenCalledWith('best_fit');
   });
 
   test('selected value reflects the prop', () => {

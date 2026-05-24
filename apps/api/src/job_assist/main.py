@@ -1126,9 +1126,18 @@ async def list_postings(
             TargetCompany.tier.asc().nulls_last(),
             JobPosting.id.asc(),
         ]
-    else:  # sort == "recently_posted"
+    elif sort == "recently_posted":
         order_clauses = [
             JobPosting.posted_at.desc().nulls_last(),
+            JobPosting.id.asc(),
+        ]
+    else:  # sort == "best_fit" (PR #57)
+        # Index-backed by idx_job_posting_fit_score_desc_nulls_last
+        # (PR #56 migration). NULL scores — postings the score sweep
+        # hasn't visited yet — sink to the bottom, which is the right
+        # behavior: they're equally-uncertain across the corpus.
+        order_clauses = [
+            JobPosting.fit_score.desc().nulls_last(),
             JobPosting.id.asc(),
         ]
 
@@ -1201,7 +1210,9 @@ async def list_postings(
                     "url": ps_url,
                 },
                 "first_seen_at": jp.first_seen_at.isoformat() if jp.first_seen_at else None,
-                "score": None,
+                # PR #57: wired to ``fit_score`` (PR #56's heuristic 0-100).
+                # NULL on rows the score sweep hasn't visited yet.
+                "score": jp.fit_score,
                 "state": _state_block(pa_action_type, pa_reason, pa_snooze_until, pa_created_at),
             }
         )
@@ -1361,7 +1372,8 @@ async def get_posting(
             "url": ps_url,
         },
         "first_seen_at": jp.first_seen_at.isoformat() if jp.first_seen_at else None,
-        "score": None,
+        # PR #57: wired to ``fit_score`` (see PostingListItem schema comment).
+        "score": jp.fit_score,
         "state": _state_block(pa_action_type, pa_reason, pa_snooze_until, pa_created_at),
         "description_markdown": jp.jd_text or None,
         "jd_summary_markdown": jp.jd_summary_markdown,

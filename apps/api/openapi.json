@@ -649,7 +649,8 @@
                 "oldest",
                 "salary_high_to_low",
                 "tier",
-                "recently_posted"
+                "recently_posted",
+                "best_fit"
               ],
               "type": "string",
               "default": "newest",
