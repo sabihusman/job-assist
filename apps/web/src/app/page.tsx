@@ -132,8 +132,30 @@ function TriagePageInner() {
                       : 'Reset';
             toast.success(`✓ ${verb}`);
           },
-          onError: () => {
-            toast.error('Action failed — try again');
+          onError: (err) => {
+            // PR #58: distinguish transient (Railway cold-start / 5xx)
+            // from application (4xx with structured detail). The
+            // ``runWithTransientRetry`` helper has already retried once
+            // by the time we get here, so a "transient" error means
+            // the API really didn't respond — not just one missed packet.
+            const isMutationError =
+              err && typeof err === 'object' && 'kind' in err && 'status' in err;
+            if (isMutationError && (err as { kind: string }).kind === 'transient') {
+              toast.error(
+                'Server didn’t respond — the API may be waking up. Try again in a moment.',
+              );
+              return;
+            }
+            if (isMutationError) {
+              const detail = (err as unknown as { detail: string | null }).detail;
+              toast.error(detail ?? 'Action couldn’t be completed.');
+              return;
+            }
+            // Defensive fallback: the helper should always throw a
+            // MutationError, but if a non-typed error slips through
+            // (e.g. a synchronous TypeError in a future refactor),
+            // surface a clear generic message rather than hiding it.
+            toast.error('Action couldn’t be completed.');
           },
         },
       );

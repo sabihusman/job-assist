@@ -942,6 +942,7 @@ async def list_postings(
     include_snoozed_past_only: bool = False,
     target_company_id: uuid.UUID | None = None,
     sort: SortKey = DEFAULT_SORT,
+    per_company_cap: int = 3,
     limit: int = 20,
     offset: int = 0,
 ) -> dict[str, Any]:
@@ -974,6 +975,11 @@ async def list_postings(
         raise HTTPException(status_code=422, detail="limit must be 1..100")
     if offset < 0:
         raise HTTPException(status_code=422, detail="offset must be >= 0")
+    if per_company_cap < 0:
+        raise HTTPException(
+            status_code=422,
+            detail="per_company_cap must be >= 0 (0 disables the cap entirely)",
+        )
     ats = _validate_ats_filter(ats)
     remote_type = _validate_remote_type_filter(remote_type)
     state = _validate_state_filter(state)
@@ -1081,6 +1087,48 @@ async def list_postings(
         JobPosting.target_company_id == TargetCompany.id,
     )
 
+    # PR #58: per-company cap. When ``per_company_cap > 0`` we build a CTE
+    # that ranks postings WITHIN each ``target_company_id`` bucket by
+    # ``fit_score DESC NULLS LAST, first_seen_at DESC, id ASC``, then both
+    # the COUNT and the main SELECT filter on ``id IN (capped_ids)``.
+    #
+    # NULL ``target_company_id`` rows are exempt — each one is its own
+    # bucket via ``COALESCE(target_company_id::text, id::text)``, so
+    # ``row_number = 1`` always and they pass the cap unconditionally.
+    #
+    # Ranking inside each bucket is FIXED to score → first_seen → id ASC
+    # regardless of the operator-selected outer sort. The outer sort
+    # then orders the surviving rows. So ``sort=oldest&per_company_cap=3``
+    # surfaces "oldest of each company's top-3 by score", not "oldest 3
+    # per company."
+    #
+    # 2-query budget preserved: CTE inlines into both COUNT and SELECT
+    # as ``IN (subquery)`` — Postgres materializes the CTE once per
+    # query, no additional wire round-trip.
+    capped_ids = None
+    if per_company_cap > 0:
+        ranked_from = base_join.outerjoin(recent_pa, true()) if state else base_join
+        ranked_select = select(
+            JobPosting.id.label("posting_id"),
+            func.row_number()
+            .over(
+                partition_by=func.coalesce(
+                    cast(JobPosting.target_company_id, Text),
+                    cast(JobPosting.id, Text),
+                ),
+                order_by=[
+                    JobPosting.fit_score.desc().nulls_last(),
+                    JobPosting.first_seen_at.desc(),
+                    JobPosting.id.asc(),
+                ],
+            )
+            .label("rn"),
+        ).select_from(ranked_from)
+        for clause in where_clauses:
+            ranked_select = ranked_select.where(clause)
+        ranked_cte = ranked_select.cte("ranked_postings")
+        capped_ids = select(ranked_cte.c.posting_id).where(ranked_cte.c.rn <= per_company_cap)
+
     # COUNT query — joins the state LATERAL only when a state filter is
     # active. Skipping the join in the no-filter case keeps the COUNT
     # plan trivial.
@@ -1089,6 +1137,11 @@ async def list_postings(
         count_select = count_select.select_from(base_join.outerjoin(recent_pa, true()))
     for clause in where_clauses:
         count_select = count_select.where(clause)
+    if capped_ids is not None:
+        # The cap reduces the visible row count — pagination math must
+        # reflect what the operator actually sees. Otherwise "showing 27
+        # of 142" lies because only 27 are reachable.
+        count_select = count_select.where(JobPosting.id.in_(capped_ids))
     total: int = (await db.execute(count_select)).scalar_one() or 0
 
     # LATERAL subquery picks the most-recent posting_source per posting in
@@ -1161,6 +1214,8 @@ async def list_postings(
     )
     for clause in where_clauses:
         rows_stmt = rows_stmt.where(clause)
+    if capped_ids is not None:
+        rows_stmt = rows_stmt.where(JobPosting.id.in_(capped_ids))
 
     rows = (await db.execute(rows_stmt)).all()
 

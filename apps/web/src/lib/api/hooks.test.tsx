@@ -98,7 +98,14 @@ describe('useRecordAction', () => {
   test('rolls back to the snapshot on POST error', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const key = seedListCache(client, [fakePosting('a'), fakePosting('b')]);
-    postMock.mockResolvedValue({ data: null, error: { detail: 'boom' } });
+    // PR #58: the retry helper inspects ``response.status`` to decide
+    // whether to retry. Tag this as a 400 so it bails immediately as an
+    // application error rather than waiting through the 2s retry path.
+    postMock.mockResolvedValue({
+      data: null,
+      error: { detail: 'boom' },
+      response: new Response(null, { status: 400 }),
+    });
 
     const { result } = renderHook(() => useRecordAction(), { wrapper: wrap(client) });
     act(() => {

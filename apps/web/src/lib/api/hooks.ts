@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { api } from '@/lib/api/client';
+import { runWithTransientRetry } from '@/lib/api/mutation-error';
 import type {
   ActionReason,
   ActionType,
@@ -129,17 +130,22 @@ export function useRecordAction() {
 
   return useMutation({
     mutationFn: async (vars: RecordActionVars) => {
-      const { data, error } = await api.POST('/postings/{posting_id}/state', {
-        params: { path: { posting_id: vars.postingId } },
-        body: {
-          action_type: vars.action_type,
-          reason: vars.reason ?? null,
-          snooze_until: vars.snooze_until ?? null,
-          notes: vars.notes ?? null,
-        },
-      });
-      if (error) throw error;
-      return data;
+      // PR #58: wrap the POST in a one-shot retry so a Railway cold-start
+      // 503 doesn't surface as a user-visible "Action failed" toast. The
+      // helper throws a typed ``MutationError`` (kind=transient vs
+      // application) that the page-level onError handler inspects to
+      // pick the right toast copy.
+      return await runWithTransientRetry(() =>
+        api.POST('/postings/{posting_id}/state', {
+          params: { path: { posting_id: vars.postingId } },
+          body: {
+            action_type: vars.action_type,
+            reason: vars.reason ?? null,
+            snooze_until: vars.snooze_until ?? null,
+            notes: vars.notes ?? null,
+          },
+        }),
+      );
     },
     onMutate: async (vars) => {
       // Pause any in-flight list refetches so they don't clobber our

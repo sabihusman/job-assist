@@ -342,6 +342,98 @@ test('PR #57: NULL-score postings do NOT render the badge', async ({ page }) => 
   await expect(badges).toHaveCount(2);
 });
 
+// ── PR #58: transient-retry + error toast variants ──────────────────────────
+//
+// The Vanta pass-action bug (PR #58 Part A) was a Railway cold-start 503,
+// not an application defect. ``runWithTransientRetry`` retries 5xx once
+// after a short delay so cold starts are invisible to the operator;
+// genuine 4xx errors surface immediately with the structured detail.
+//
+// Each test below registers its own POST /postings/*/state handler BEFORE
+// navigation so it takes priority over the suite-wide ``mockApi`` POST
+// handler (Playwright matches routes LIFO).
+
+test('PR #58: 503 then 200 — operator sees no error toast, card disappears', async ({ page }) => {
+  let postCalls = 0;
+  await page.route('**/postings/*/state', async (route: Route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    postCalls += 1;
+    if (postCalls === 1) {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'cold start' }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        current: 'interested',
+        reason: null,
+        snooze_until: null,
+        current_at: new Date().toISOString(),
+      }),
+    });
+  });
+
+  await page.goto('/');
+  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
+  await page.keyboard.press('1');
+
+  // Success toast surfaces after the retry lands. Allow ~3s for the
+  // 2-second default retry delay plus React Query bookkeeping.
+  await expect(page.getByText(/✓ Interested/i)).toBeVisible({ timeout: 5000 });
+  // No transient-error or application-error toast surfaced.
+  await expect(page.getByText(/Server.{1,3}didn.{1,3}t respond/i)).toBeHidden();
+  await expect(page.getByText(/couldn't be completed/i)).toBeHidden();
+  expect(postCalls).toBe(2);
+});
+
+test('PR #58: both 503 — operator sees the transient-error toast', async ({ page }) => {
+  await page.route('**/postings/*/state', async (route: Route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'service unavailable' }),
+    });
+  });
+
+  await page.goto('/');
+  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
+  await page.keyboard.press('1');
+
+  await expect(page.getByText(/Server.{1,3}didn.{1,3}t respond/i)).toBeVisible({ timeout: 5000 });
+});
+
+test('PR #58: 400 with detail — operator sees the application-error toast with detail', async ({
+  page,
+}) => {
+  let postCalls = 0;
+  await page.route('**/postings/*/state', async (route: Route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    postCalls += 1;
+    await route.fulfill({
+      status: 400,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'reason_required_for_not_interested' }),
+    });
+  });
+
+  await page.goto('/');
+  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
+  await page.keyboard.press('1');
+
+  // Detail surfaces verbatim in the toast.
+  await expect(page.getByText(/reason_required_for_not_interested/i)).toBeVisible({
+    timeout: 3000,
+  });
+  // Critical: no retry on 4xx — exactly one POST.
+  expect(postCalls).toBe(1);
+});
+
 // PR #57 mobile-first stance is NOT verified via a 380px E2E test here.
 // At 380px the AppShell sidebar (224px on first paint, before localStorage
 // rehydration collapses it) leaves ~156px for the Triage card, which makes

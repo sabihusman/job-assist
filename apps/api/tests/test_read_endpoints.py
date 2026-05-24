@@ -512,7 +512,15 @@ async def test_postings_response_shape(db_session: Any) -> None:
 
 @_NEEDS_DB
 async def test_postings_no_n_plus_one(db_session: Any) -> None:
-    """20 postings across 5 companies → 2 SQL statements total."""
+    """20 postings across 5 companies → 2 SQL statements total.
+
+    PR #58: the default ``per_company_cap=3`` would clip this fixture
+    from 20 to 15 (each company has 4 postings; cap takes 3). The
+    no-N+1 test predates the cap and wants to count ALL 20 rows to
+    prove the lateral joins don't multiply queries — we explicitly
+    disable the cap here so the test's invariant survives the new
+    default. The cap itself is covered by tests/test_per_company_cap.py.
+    """
     companies = [_company(name=f"NPlusOne{i}", tier=i % 4 + 1) for i in range(5)]
     db_session.add_all(companies)
     await db_session.flush()
@@ -528,7 +536,7 @@ async def test_postings_no_n_plus_one(db_session: Any) -> None:
     ac = await _client(db_session)
     try:
         async with ac, counter:
-            resp = await ac.get("/postings")
+            resp = await ac.get("/postings?per_company_cap=0")
     finally:
         await _drop_override()
 
