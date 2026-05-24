@@ -80,6 +80,15 @@ async function mockContactsApi(
   capturedUrls: string[] = [],
 ) {
   await page.route('**/contacts*', async (route: Route) => {
+    // The glob ``**/contacts*`` matches both the API call and the
+    // page-navigation URL (``/contacts``) on the same origin. Without
+    // this guard, ``page.goto('/contacts')`` is intercepted by the mock
+    // and the browser renders the raw JSON body instead of the React
+    // app. Only intercept actual fetch/XHR API requests.
+    const resourceType = route.request().resourceType();
+    if (resourceType !== 'fetch' && resourceType !== 'xhr') {
+      return route.continue();
+    }
     const url = route.request().url();
     capturedUrls.push(url);
     // Honor include_archived + source_type filters in the mock so the
@@ -131,6 +140,13 @@ test('renders contacts table from the API', async ({ page }) => {
 
 test('empty state renders when API returns no contacts', async ({ page }) => {
   await page.route('**/contacts*', async (route: Route) => {
+    // See ``mockContactsApi`` for why this resourceType guard exists —
+    // without it, the page navigation to ``/contacts`` is itself
+    // intercepted and the browser renders the JSON body as text.
+    const resourceType = route.request().resourceType();
+    if (resourceType !== 'fetch' && resourceType !== 'xhr') {
+      return route.continue();
+    }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',

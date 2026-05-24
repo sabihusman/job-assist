@@ -59,9 +59,7 @@ class Contact(Base):
     # (see migration e8f9a0b1c2d3). The list endpoint excludes archived
     # rows by default via SQL — never via Python filtering — so dedup
     # and visibility align.
-    archived_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # FK to target_company.id with ON DELETE SET NULL. Most contacts
     # won't have a matched target_company today; ``current_employer``
     # (freeform string) is the operator-visible "where they work".
