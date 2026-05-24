@@ -96,7 +96,7 @@ async def test_invalid_sort_returns_422() -> None:
 
 
 def test_sort_key_literal_membership() -> None:
-    """Schema-level check that all 5 documented sort keys are in the
+    """Schema-level check that all 6 documented sort keys are in the
     SortKey Literal. Catches accidental enum drift between
     schemas/public.py and the SortDropdown frontend component."""
     from typing import get_args
@@ -110,6 +110,8 @@ def test_sort_key_literal_membership() -> None:
         "salary_high_to_low",
         "tier",
         "recently_posted",
+        # PR #57: best_fit reads from job_posting.fit_score.
+        "best_fit",
     }
     assert DEFAULT_SORT == "newest"
 
@@ -132,6 +134,7 @@ def _posting(
     first_seen_at: datetime,
     posted_at: datetime | None = None,
     salary_max: int | None = None,
+    fit_score: int | None = None,
     title: str = "Senior Product Manager",
 ) -> JobPosting:
     suffix = uuid.uuid4().hex[:10]
@@ -147,20 +150,24 @@ def _posting(
         last_seen_at=first_seen_at,
         posted_at=posted_at,
         salary_max=salary_max,
+        fit_score=fit_score,
     )
 
 
 async def _seed_sort_fixture(db_session: Any) -> dict[str, uuid.UUID]:
     """Six postings + four companies designed to disambiguate every sort.
 
-    Layout (id → tier / first_seen_at / posted_at / salary_max):
+    Layout (id → tier / first_seen_at / posted_at / salary_max / fit_score):
 
-      p_t1_new   → tier=1, first_seen=now,        posted=now-2h,  salary=300_000
-      p_t2_mid   → tier=2, first_seen=now-1d,     posted=now-1d,  salary=200_000
-      p_t3_old   → tier=3, first_seen=now-7d,     posted=now-7d,  salary=NULL
-      p_t4_new   → tier=4, first_seen=now-5m,     posted=NULL,    salary=150_000
-      p_no_tc    → no company,  first_seen=now-2d, posted=now-3d, salary=400_000
-      p_no_dates → tier=2, first_seen=now-3d,     posted=NULL,    salary=NULL
+      p_t1_new   → tier=1, first_seen=now,        posted=now-2h,  salary=300k, fit=90
+      p_t2_mid   → tier=2, first_seen=now-1d,     posted=now-1d,  salary=200k, fit=75
+      p_t3_old   → tier=3, first_seen=now-7d,     posted=now-7d,  salary=NULL, fit=NULL
+      p_t4_new   → tier=4, first_seen=now-5m,     posted=NULL,    salary=150k, fit=40
+      p_no_tc    → no company,  first_seen=now-2d, posted=now-3d, salary=400k, fit=60
+      p_no_dates → tier=2, first_seen=now-3d,     posted=NULL,    salary=NULL, fit=NULL
+
+    PR #57 added the fit_score column; two rows are NULL so the
+    ``best_fit`` sort exercises the NULLS LAST contract.
     """
     now = datetime.now(tz=UTC)
 
@@ -179,36 +186,42 @@ async def _seed_sort_fixture(db_session: Any) -> dict[str, uuid.UUID]:
             first_seen_at=now,
             posted_at=now - timedelta(hours=2),
             salary_max=300_000,
+            fit_score=90,
         ),
         "p_t2_mid": _posting(
             target_company_id=c2.id,
             first_seen_at=now - timedelta(days=1),
             posted_at=now - timedelta(days=1),
             salary_max=200_000,
+            fit_score=75,
         ),
         "p_t3_old": _posting(
             target_company_id=c3.id,
             first_seen_at=now - timedelta(days=7),
             posted_at=now - timedelta(days=7),
             salary_max=None,
+            fit_score=None,
         ),
         "p_t4_new": _posting(
             target_company_id=c4.id,
             first_seen_at=now - timedelta(minutes=5),
             posted_at=None,
             salary_max=150_000,
+            fit_score=40,
         ),
         "p_no_tc": _posting(
             target_company_id=None,
             first_seen_at=now - timedelta(days=2),
             posted_at=now - timedelta(days=3),
             salary_max=400_000,
+            fit_score=60,
         ),
         "p_no_dates": _posting(
             target_company_id=c2.id,
             first_seen_at=now - timedelta(days=3),
             posted_at=None,
             salary_max=None,
+            fit_score=None,
         ),
     }
     for jp in postings.values():
@@ -391,6 +404,39 @@ async def test_sort_recently_posted_nulls_last(db_session: Any) -> None:
     assert set(order[4:]) == null_rows
 
 
+# ── best_fit (PR #57) ───────────────────────────────────────────────────────
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_sort_best_fit_descending_nulls_last(db_session: Any) -> None:
+    """``best_fit`` orders by ``fit_score DESC NULLS LAST, id ASC``.
+
+    Fixture scores: p_t1_new=90, p_t2_mid=75, p_no_tc=60, p_t4_new=40,
+    p_t3_old=NULL, p_no_dates=NULL. The two NULL rows trail.
+    """
+    ids = await _seed_sort_fixture(db_session)
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            order = await _fetch_ids(ac, "best_fit")
+    finally:
+        await _drop_override()
+
+    # Non-NULL scores, descending:
+    non_null = [
+        ids["p_t1_new"],  # 90
+        ids["p_t2_mid"],  # 75
+        ids["p_no_tc"],  # 60
+        ids["p_t4_new"],  # 40
+    ]
+    # NULL-score rows trail, sorted by id ASC. Don't pin their internal
+    # order (uuids are random) — just that both are in the tail.
+    null_rows = {str(ids["p_t3_old"]), str(ids["p_no_dates"])}
+    assert order[:4] == [str(x) for x in non_null]
+    assert set(order[4:]) == null_rows
+
+
 # ── Query budget — sort must not add a third query ──────────────────────────
 
 
@@ -398,7 +444,15 @@ async def test_sort_recently_posted_nulls_last(db_session: Any) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "sort_key",
-    ["newest", "oldest", "salary_high_to_low", "tier", "recently_posted"],
+    [
+        "newest",
+        "oldest",
+        "salary_high_to_low",
+        "tier",
+        "recently_posted",
+        # PR #57: best_fit index-backed by idx_job_posting_fit_score_desc_nulls_last.
+        "best_fit",
+    ],
 )
 async def test_sort_preserves_two_query_budget(db_session: Any, sort_key: str) -> None:
     """Every sort key still emits ≤2 SQL statements (COUNT + SELECT)."""

@@ -28,7 +28,10 @@ const POSTINGS = [
     salary: null,
     source: { ats: 'greenhouse', url: 'https://example.test/jd/a' },
     first_seen_at: new Date().toISOString(),
-    score: null,
+    // PR #57: Alpha gets a "strong fit" score so the badge renders in the
+    // positive tone. Beta gets a mid-band score; Gamma stays NULL to
+    // exercise the "no badge" branch.
+    score: 88,
     state: { current: null, reason: null, snooze_until: null, current_at: null },
   },
   {
@@ -47,7 +50,7 @@ const POSTINGS = [
     salary: null,
     source: { ats: 'lever', url: 'https://example.test/jd/b' },
     first_seen_at: new Date().toISOString(),
-    score: null,
+    score: 65,
     state: { current: null, reason: null, snooze_until: null, current_at: null },
   },
   {
@@ -303,4 +306,55 @@ test("keyboard '2' then '8' fires the chord end-to-end", async ({ page }) => {
   await expect(page.getByText(/why not\?/i)).toBeVisible();
   await page.keyboard.press('8');
   await expect(page.getByText(/why not\?/i)).toBeHidden();
+});
+
+// ── PR #57: Best fit sort + score badge ─────────────────────────────────────
+
+test('PR #57: Best fit option writes ?sort=best_fit to URL', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
+  const select = page.getByLabel('SORT', { exact: true });
+  await select.selectOption('best_fit');
+  await expect(page).toHaveURL(/sort=best_fit/);
+});
+
+test('PR #57: ?sort=best_fit reflects in dropdown on load', async ({ page }) => {
+  await page.goto('/?sort=best_fit');
+  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
+  const select = page.getByLabel('SORT', { exact: true });
+  await expect(select).toHaveValue('best_fit');
+});
+
+test('PR #57: score badge renders for non-NULL scores with aria-label', async ({ page }) => {
+  await page.goto('/');
+  // Alpha (score 88) and Beta (score 65) both render a badge.
+  // The aria-label is the canonical assertion — exact text + screen-reader friendly.
+  await expect(page.getByLabel('Fit score: 88 out of 100')).toBeVisible();
+  await expect(page.getByLabel('Fit score: 65 out of 100')).toBeVisible();
+});
+
+test('PR #57: NULL-score postings do NOT render the badge', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByLabel(/Open detail for Gamma Co/)).toBeVisible();
+  // Gamma's score is null in the fixture. There must be exactly 2 badges
+  // (Alpha + Beta) — Gamma's row contributes none.
+  const badges = page.getByTestId('fit-score-badge');
+  await expect(badges).toHaveCount(2);
+});
+
+test('PR #57: score badge is visible at 380px mobile viewport', async ({ page }) => {
+  // Mobile-first convention check. The badge lives in the meta row
+  // (line 4 of the card body) which is `flex-wrap`-enabled, so a narrow
+  // viewport wraps the badge to a new line rather than overlapping.
+  await page.setViewportSize({ width: 380, height: 800 });
+  await page.goto('/');
+  await expect(page.getByLabel(/Open detail for Alpha Co/)).toBeVisible();
+  const badge = page.getByLabel('Fit score: 88 out of 100');
+  await expect(badge).toBeVisible();
+  // Confirm the badge box lands inside the viewport (no horizontal overflow).
+  const box = await badge.boundingBox();
+  expect(box).not.toBeNull();
+  if (box) {
+    expect(box.x + box.width).toBeLessThanOrEqual(380);
+  }
 });

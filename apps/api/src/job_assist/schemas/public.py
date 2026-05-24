@@ -33,16 +33,19 @@ from job_assist.db.enums import ActionReason, ActionType
 #   salary_high_to_low → job_posting.salary_max DESC NULLS LAST
 #   tier               → target_company.tier ASC NULLS LAST (T1 = best)
 #   recently_posted    → job_posting.posted_at DESC NULLS LAST
+#   best_fit (PR #57)  → job_posting.fit_score DESC NULLS LAST
+#                        (index-backed by idx_job_posting_fit_score_desc_nulls_last)
 #
 # Every sort gets ``job_posting.id ASC`` as a tiebreaker so pagination
 # stays stable when many rows share a same-second timestamp or a NULL
-# salary / tier.
+# salary / tier / score.
 SortKey = Literal[
     "newest",
     "oldest",
     "salary_high_to_low",
     "tier",
     "recently_posted",
+    "best_fit",
 ]
 DEFAULT_SORT: SortKey = "newest"
 
@@ -154,8 +157,18 @@ class PostingListItem(BaseModel):
     salary: SalaryEmbedded | None
     source: SourceEmbedded
     first_seen_at: datetime
-    # Placeholder for the future scoring feature. Always null today; kept
-    # in the contract so the frontend can render the slot from day one.
+    # PR #57: wired to ``job_posting.fit_score`` (PR #56's heuristic). The
+    # column is INTEGER 0-100, exposed here as ``float`` because the
+    # original placeholder was typed that way and changing it would be a
+    # gratuitous wire-contract churn. Postings ingested before PR #56's
+    # backfill landed will have NULL until the sweep visits them.
+    #
+    # Bestiary: when adding a new field to a response shape, grep for
+    # the field name across the codebase before declaring it shipped.
+    # PR #56 added the column + this schema line but left the response
+    # serializer in main.py pinned at ``"score": None`` — the field
+    # looked plumbed but was hidden behind a placeholder for an entire
+    # release cycle. The grep-before-ship habit is the antidote.
     score: float | None = None
     # Operator's current triage state. Always present; the nested fields
     # are null for postings the operator hasn't touched yet (PR #31).

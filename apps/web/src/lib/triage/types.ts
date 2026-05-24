@@ -53,7 +53,15 @@ export type StateFilter =
 // PR #49: sort options for the Triage list. Wire vocabulary mirrors the
 // SortKey Literal in `apps/api/src/job_assist/schemas/public.py`. The
 // operator-facing labels live on SortDropdown.tsx.
-export type SortKey = 'newest' | 'oldest' | 'salary_high_to_low' | 'tier' | 'recently_posted';
+// PR #57: ``best_fit`` reads job_posting.fit_score (PR #56's heuristic
+// 0-100). NULL scores sink to the bottom via ORDER BY NULLS LAST.
+export type SortKey =
+  | 'newest'
+  | 'oldest'
+  | 'salary_high_to_low'
+  | 'tier'
+  | 'recently_posted'
+  | 'best_fit';
 
 export const DEFAULT_SORT: SortKey = 'newest';
 

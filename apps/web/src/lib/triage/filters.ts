@@ -58,6 +58,8 @@ const VALID_SORT = new Set<SortKey>([
   'salary_high_to_low',
   'tier',
   'recently_posted',
+  // PR #57: index-backed sort by fit_score DESC NULLS LAST.
+  'best_fit',
 ]);
 
 function intsFrom(values: string[]): number[] {

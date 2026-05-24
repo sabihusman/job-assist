@@ -4,6 +4,7 @@ import { Clock, MapPin } from 'lucide-react';
 
 import { ActionButton } from '@/components/shared/ActionButton';
 import { CompanyAvatar } from '@/components/shared/CompanyAvatar';
+import { FitScoreBadge } from '@/components/triage/FitScoreBadge';
 import { ReasonPicker } from '@/components/triage/ReasonPicker';
 import type { ActionReason, ActionType, PostingListItem } from '@/lib/triage/types';
 import { cn } from '@/lib/utils';
@@ -129,7 +130,11 @@ export function TriageCard({
             {posting.location_raw && posting.salary && <span aria-hidden="true">·</span>}
             {posting.salary && <SalaryChip salary={posting.salary} />}
             {remote && <RemoteBadge remote={String(remote)} />}
-            <span className="font-mono text-[11px] text-muted-foreground/70">score —</span>
+            {/* PR #57: fit-score badge replaces the legacy ``score —``
+                placeholder. Renders nothing when ``posting.score`` is
+                null — postings the score sweep hasn't visited yet stay
+                un-decorated rather than showing a zero. */}
+            <FitScoreBadge score={posting.score} />
           </div>
         </div>
       </button>
