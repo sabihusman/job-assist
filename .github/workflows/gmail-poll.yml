@@ -52,7 +52,10 @@ jobs:
 
           if [ "$status" != "200" ]; then
             echo "Poll failed with HTTP $status"
-            cat /tmp/gmail_poll.json
+            # The endpoint surfaces a structured ``detail`` body on 5xx
+            # (exc_type, exc_message, hint) — pretty-print so the CI log
+            # reveals the failure mode without needing Railway logs.
+            python3 -m json.tool < /tmp/gmail_poll.json || cat /tmp/gmail_poll.json
             exit 1
           fi
 
