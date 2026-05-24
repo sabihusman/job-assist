@@ -18,6 +18,8 @@ endpoint and CLI log success/skip messages from these counts too.
 from __future__ import annotations
 
 import re
+import uuid
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
@@ -196,3 +198,49 @@ class ContactSeedResponse(BaseModel):
     skipped_duplicate_linkedin: int
     skipped_invalid: int
     total: int
+
+
+# ── PR #51 — list endpoint shapes ─────────────────────────────────────────────
+
+
+class ContactListItem(BaseModel):
+    """Row shape for ``GET /contacts``.
+
+    Surfaces only the fields the read-only Contacts list page needs. The
+    seed endpoint's richer write-side schema (``ContactSeedRow``) stays
+    separate — different concerns, different validators.
+
+    PII note: this DOES carry names + email + LinkedIn URL by design —
+    those are exactly what the operator needs to act. The endpoint
+    paginates (caller-supplied ``limit`` capped at 100) so a single
+    response can't dump the full directory.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    first_name: str
+    last_name: str
+    preferred_first_name: str | None
+    email_primary: str | None
+    email_secondary: str | None
+    linkedin_url: str | None
+    current_employer: str | None
+    current_position: str | None
+    location_city: str | None
+    location_state: str | None
+    location_country: str | None
+    location_metro: str | None
+    source_type: str
+    target_company_id: uuid.UUID | None
+    archived_at: datetime | None
+    created_at: datetime
+
+
+class ContactsListResponse(BaseModel):
+    """Paginated envelope for ``GET /contacts``."""
+
+    total: int
+    offset: int
+    limit: int
+    items: list[ContactListItem]
