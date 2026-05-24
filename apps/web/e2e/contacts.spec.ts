@@ -89,7 +89,11 @@ async function mockContactsApi(
     const sources = u.searchParams.getAll('source_type');
     const search = u.searchParams.get('search')?.toLowerCase() ?? '';
 
-    let items = [...CONTACTS];
+    // Widen the union so the archived fixture's null-bearing optional
+    // fields (linkedin_url, current_employer, current_position) don't
+    // narrow against CONTACTS's string-typed fields.
+    type ContactFixture = (typeof CONTACTS)[number] | typeof ARCHIVED_CONTACT;
+    let items: ContactFixture[] = [...CONTACTS];
     if (includeArchived) items.push(ARCHIVED_CONTACT);
     if (sources.length) items = items.filter((c) => sources.includes(c.source_type));
     if (search) {
