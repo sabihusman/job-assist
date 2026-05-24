@@ -232,7 +232,10 @@ async def test_postings_default_pagination_and_total(db_session: Any) -> None:
     ac = await _client(db_session)
     try:
         async with ac:
-            resp = await ac.get("/postings")
+            # Disable per-company cap — all 30 rows belong to PaginateCo
+            # and the cap (default 3, PR #58) would collapse them.
+            # This test's invariant is pagination math.
+            resp = await ac.get("/postings?per_company_cap=0")
     finally:
         await _drop_override()
 
@@ -259,7 +262,10 @@ async def test_postings_offset_pagination(db_session: Any) -> None:
     ac = await _client(db_session)
     try:
         async with ac:
-            resp = await ac.get("/postings?limit=5&offset=10")
+            # Disable per-company cap (PR #58 default=3) — fixture is
+            # 15 postings from one company and the cap would mask
+            # the pagination math under test.
+            resp = await ac.get("/postings?limit=5&offset=10&per_company_cap=0")
     finally:
         await _drop_override()
 
