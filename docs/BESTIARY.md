@@ -1,0 +1,433 @@
+# Job Assist Bestiary
+
+A living catalog of recurring bugs, anti-patterns, and operational gotchas discovered while building Job Assist. Each entry is a lesson paid for in a CI red — write it down so the same lesson doesn't get paid twice.
+
+## How to use this document
+
+**For Claude Code (and human contributors):** read this file as part of any Read-First audit before writing code. The relevant entries are the ones that touch your PR's surface area (database, mutations, tests, etc.). When in doubt, skim the section headers.
+
+**For the operator:** add a new entry at the end of any session that surfaced a non-obvious bug. Each entry needs: title, what happened, the lesson, the PR or session where it was discovered, and (if useful) a small example. Keep entries tight — this is reference material, not narrative.
+
+**Discovered-in tags** reference PR numbers from the internal tracker (e.g. PR #48 = classifier improvement). GitHub PR numbers differ; the internal numbers are the canonical source.
+
+---
+
+## 1. Test Convention Bestiary
+
+### 1.1 NOT NULL columns are silently load-bearing
+
+When duplicating a test fixture for a related table, copy the full factory body from the canonical test file. If no factory exists, read the model file (`posting_source.py`, `contact.py`, etc.) and enumerate every `nullable=False` column before writing the fixture. Memory-driven field lists ping-pong: missing fields surface one at a time on CI, requiring two or three red-then-green cycles to converge.
+
+**Discovered in:** PR #55 (iCIMS adapter — `posting_source` fixture missed `source_job_id`, then `raw_payload`, then `parser_version` across successive CI runs).
+
+**Rule:** read the model first, enumerate NOT NULL columns once, write the fixture once.
+
+### 1.2 Migration-seeded singleton rows are shared session invariants
+
+Tables seeded by an Alembic migration at session start (today: `operator_profile`) are intentionally absent from conftest's truncate-between-tests list. The seed row is shared session state — every test in the suite assumes it exists.
+
+Two corollaries:
+
+- **Don't mutate or delete migration-seeded rows in a test.** Even with try/finally restoration, the window between delete and restore is visible to any concurrently-running test, and a mid-flight test failure leaves the suite poisoned.
+- **Don't write integration tests for one-line endpoint guards.** Guards like `if x is None: raise HTTPException(...)` are exhaustively covered by unit-level mocking of the dependency. The integration test adds coverage of FastAPI's routing layer that's already covered elsewhere, at the cost of breaking a shared invariant.
+
+**Discovered in:** PR #56 (heuristic scoring — a test deleted the `operator_profile` seed row to exercise an unseeded path; broke 8 other tests across the suite).
+
+### 1.3 When a test setup requires breaking a convention the suite relies on, the test is wrong
+
+This is the meta-rule that covers 1.2 and several others. If exercising a code path requires breaking a shared invariant (deleting seed rows, scoping outside the surface under test, mutating singleton state), the test is wrong, not the convention. The behavior is verifiable other ways — usually via unit-level mocking.
+
+### 1.4 Mobile-viewport E2E tests scope to the surface under test
+
+A 380px full-page render tests AppShell + Sidebar + Banner responsiveness, not the new component. If the chrome isn't responsive yet (and at time of writing, it isn't), mobile-safe properties of a new component get proven at the unit layer — rendered class, aria attributes, parent container behavior — not via a full-page E2E that depends on chrome we haven't fixed.
+
+Three corollaries:
+
+- **Unit-layer proofs of mobile-safe rendering count.** Asserting that a badge sits inside a `flex-wrap` container is a valid mobile-safety contract — the runtime viewport doesn't change that fact.
+- **Failed E2E at viewport boundaries should ask "what broke?" before being treated as the feature's failure.** PR #57's badge didn't fail at 380px; AppShell did, and AppShell wasn't in scope.
+- **The deferred test is real future work, not abandoned work.** When AppShell becomes responsive (V2 mobile retrofit), the full-page mobile E2E gets enabled, not rewritten.
+
+**Discovered in:** PR #57 (FitScoreBadge — full-page 380px E2E failed because AppShell's 224px sidebar left only 156px for the card, collapsing the layout. Badge itself rendered correctly).
+
+### 1.5 Hand-authored fixture banner pattern
+
+When tests cannot reach real upstream data (e.g. an ATS adapter has no production handle yet), the fixtures are an *assumption test*, not a *contract test*. Mark them explicitly and document the post-merge verification step.
+
+Every fixture file carries a banner comment:
+
+```
+# HAND-AUTHORED FIXTURE — VERIFY AGAINST FIRST REAL <upstream> PAGE AFTER MERGE
+```
+
+The adapter docstring carries a matching note explaining why "tests pass + ingest produces zero rows" is a possible first-run outcome. The real contract test runs the first time the adapter points at a real upstream.
+
+**Discovered in:** PR #55 (iCIMS adapter — no production iCIMS-flagged companies existed at merge time; fixtures were authored from documented HTML+JSON-LD structure rather than captured from real pages).
+
+### 1.6 Positive equality assertions only
+
+Never assert "X is NOT in supported set" — use positive equality assertions instead. The former breaks every time the set is expanded by a sibling PR; the latter survives.
+
+Example:
+
+```python
+# Wrong — breaks when new sort options are added
+assert sort_key not in {"alphabetical", "random", "made_up"}
+
+# Right
+assert sort_key in {"newest", "oldest", "salary_high_to_low", "tier", "recently_posted"}
+```
+
+**Discovered in:** PR #49 onward (broke 3 times before being formalized).
+
+### 1.7 OpenAPI snapshot regen on Windows requires LF + trailing newline
+
+Default Windows text-mode `open(path, "w").write()` writes CRLF line endings. Linux CI's `app.openapi()` writes LF + trailing `\n`. The byte-level snapshot diff fails the drift check even when JSON content is semantically identical.
+
+Two paths:
+
+- Regenerate the snapshot only inside WSL/Linux container.
+- Ship a `scripts/regen_openapi.py` wrapper that opens binary mode (`"wb"`) and writes `json.dumps(...).encode() + b"\n"`.
+
+The wrapper is the more durable fix.
+
+**Discovered in:** Hotfix PR (incident: dynamic CTE prepared-statement collision — required a one-line `main.py` change but the OpenAPI snapshot regen on Windows produced a diff that failed CI three times before the CRLF gremlin was caught).
+
+---
+
+## 2. Backend / Database Bestiary
+
+### 2.1 Every paginated ORDER BY needs a stable secondary key
+
+`id ASC` (or another deterministic field) as the universal tiebreaker on every paginated read endpoint. Without it, rows with identical primary-sort values shuffle between pages.
+
+**Discovered in:** PR #49 (sort options — first endpoint where this mattered, then promoted to repo-wide convention).
+
+**Rule:** every `ORDER BY` ends with `id ASC` (or equivalent stable key).
+
+### 2.2 Explicit IN lists over LIKE patterns in SQL filters
+
+`outcome_type IN ('rejection_pre_screen', 'rejection_post_screen', 'rejection_post_interview')` over `outcome_type LIKE 'rejection_%'`. LIKE patterns drift silently when new enum values are added; the IN list forces a code change at the right surface (the filter), where the conversation about whether the new value belongs in the set is most useful.
+
+**Discovered in:** PR #50 (`/rejected` page — choice of how to scope rejection outcomes).
+
+### 2.3 Append-only event tables — current state = latest row
+
+`posting_action` and `outreach_message` are append-only. Current state is computed via a LATERAL subquery picking the most-recent row per parent:
+
+```python
+latest_action = (
+    select(...)
+    .where(pa_alias.parent_id == ParentModel.id)
+    .order_by(pa_alias.created_at.desc())
+    .limit(1)
+    .lateral("latest")
+)
+```
+
+No "edit" or "delete" UI on event rows. Corrections are logged as new rows. Same pattern propagates to any future event table.
+
+**Discovered in:** PR #25 (initial `posting_action` schema); reinforced in PR #52 (`outreach_message` follows same shape).
+
+### 2.4 2-query budget on read endpoints
+
+Read endpoints fold into 2 SQL queries max: one COUNT and one SELECT with LATERAL joins. Enforced in tests via `_ExecuteCounter`. CTEs that filter the SELECT also filter the COUNT — they don't add a third query.
+
+**Discovered in:** PR #28 (read-endpoint refactor); enforced ever since.
+
+### 2.5 State as a frontend concept can derive from multiple backend tables
+
+When `state=rejected` on `/postings` derives from `outcome_event` (Gmail-parsed rejection emails) while `state=not_interested` derives from `posting_action` (operator passes), the endpoint's `state` filter spans two tables. Leave a comment block in the endpoint explaining the dual-table semantics so the next reader doesn't assume `state` is 1:1 with one source table.
+
+**Discovered in:** PR #50 (`/rejected` page — first time a frontend-vocabulary state crossed table boundaries).
+
+### 2.6 Postgres ENUM extension requires Alembic `autocommit_block`
+
+`ALTER TYPE <type> ADD VALUE <value>` cannot run inside a transaction in Postgres. Alembic's standard auto-transaction wraps every migration in one, so plain `op.execute("ALTER TYPE...")` fails.
+
+The correct pattern:
+
+```python
+def upgrade() -> None:
+    with op.get_context().autocommit_block():
+        op.execute("ALTER TYPE ats_type ADD VALUE IF NOT EXISTS 'icims'")
+```
+
+Downgrade is a no-op — Postgres doesn't support removing enum values without recreating the type.
+
+**Discovered in:** PR #55 (iCIMS adapter — adding `'icims'` to `ats_type` enum).
+
+### 2.7 Dynamic CTEs + asyncpg + Supabase Pooler = prepared statement collisions
+
+Any query path that generates per-call SQL variants asyncpg will cache by sequential statement name (`__asyncpg_stmt_2__`, etc.) will fail when Supabase's Transaction-mode pooler rotates connections. The stale prepared statement on a recycled connection collides with the new request's attempt to prepare under the same name.
+
+Two fixes:
+
+- Disable asyncpg's statement cache (`statement_cache_size=0` on the engine).
+- Rewrite the query to use stable parameterized SQL (no dynamic CTE shape per call).
+
+**Discovered in:** PR #58 hotfix (per-company cap CTE on `/postings` returned 500 in production while passing all local tests — local Postgres has no pooler).
+
+**Rule:** load-test dynamic-query-shape features against the deployed pooler before merge, or default them to OFF.
+
+### 2.8 Default values on dynamic-query-shape features should default to OFF
+
+PR #58's per-company cap defaulted to 3. Every UI call hit the broken code path. If the default had been 0 (opt-in cap), the bug would have affected only operator-flag-set requests instead of all production traffic.
+
+**Discovered in:** PR #58 hotfix.
+
+**Rule:** new query-shape-altering parameters default to disabled / no-op until proven safe at production scale.
+
+### 2.9 Named constants over magic numbers
+
+`ANNUAL_HOURS = 2080` (used to convert hourly salaries to annual) sits at the top of the scoring service, not inline in a multiplication. One-place edit if the assumption ever changes.
+
+**Discovered in:** PR #56 (heuristic scoring — salary feature extractor).
+
+### 2.10 Migration-seeded singletons can't be tested by deletion
+
+(Cross-reference 1.2 — same lesson stated from the schema side.) Tables with exactly-one seeded row are shared session state. Tests that need to assert "unseeded behavior" either roll the seed back at end (brittle if the test fails mid-flight) or accept they can't be expressed safely.
+
+---
+
+## 3. Frontend / Mutation Bestiary
+
+### 3.1 Wire-shape contract tests for mutations
+
+Every mutation hook (`useRecordAction`, `useContactUpdate`, `useOutreachLog`, etc.) needs a unit test asserting the literal request body shape. Two assertions per test:
+
+- **Present:** canonical API field names are in the request body (`action_type`, not `kind`).
+- **Absent:** legacy or wrong field names are NOT in the request body.
+
+Example:
+
+```typescript
+expect(opts.body).toHaveProperty('action_type', 'applied');
+expect(opts.body).not.toHaveProperty('kind');
+```
+
+**Discovered in:** PR #58 (Vanta pass-action bug — the deployed frontend POSTed `{kind, reason}`; FastAPI demanded `{action_type, reason}`. The 422 silently rolled back optimistic UI to "phantom success." Zero pass / apply / reject / snooze actions persisted from the UI for weeks).
+
+**Rule:** never ship a new mutation without the wire-shape contract test.
+
+### 3.2 Silent placeholder fields are landmines
+
+When adding a new field to a response shape, grep for the field name across the codebase before considering it shipped. If the ORM model has it but the serializer pins it to `None` as a placeholder, the field looks plumbed but is actually returning empty — and no one notices until something tries to consume it.
+
+**Discovered in:** PR #57 (FitScoreBadge wiring — PR #56 added `fit_score` to model + Pydantic schema, but the response serializer in `main.py` hardcoded `"score": None` as a placeholder).
+
+**Rule:** new response field → grep the codebase for the field name → confirm serializer references it.
+
+### 3.3 Structured error responses surfaced inline in toasts
+
+When a mutation fails, the API returns a structured body like `{"detail": "reason_required_for_not_interested"}` or `{"detail": [{"msg": "field required", ...}]}`. The frontend's onError handler reads the `detail` field via `extractDetail()` and shows it in the toast.
+
+Generic toasts like "Action failed — try again" mask the real error. PR #58's bug hid for weeks because the toast didn't surface the 422 detail.
+
+The canonical implementation lives in `apps/web/src/lib/api/mutation-error.ts` (typed `MutationError` + `extractDetail` helper).
+
+**Discovered in:** PR #58 post-mortem.
+
+**Rule:** every mutation hook throws a `MutationError` carrying `{kind, status, detail, message}`; the page-level `onError` handler surfaces `detail` verbatim.
+
+### 3.4 Mobile-first is a forward-looking convention
+
+From PR #57 onward, every new frontend surface is designed for mobile (~380px viewport) first, then expands at larger viewports. Existing pages stay as-is; this is *not* a retrofit. The chrome (AppShell + Sidebar + Banner) remains desktop-only until a dedicated retrofit pass.
+
+**Discovered in:** PR #57 (FitScoreBadge — first surface where the convention was applied).
+
+**Rule:** new surface → mobile-first. Old surface → leave it alone unless explicitly scoped for retrofit.
+
+### 3.5 AppShell title lives in `<Banner>`, not `<main>`
+
+Page-title E2E assertions must scope to `page.getByRole('banner')`, not `mainContent(page)`. Plus: every new sidebar entry retroactively breaks unscoped title queries on its own page — the title string now appears in both the banner and the sidebar nav.
+
+Two rules:
+
+- Don't assert page title inside `mainContent(page)` — it's never there.
+- Don't assert page title with an unscoped query when the string also appears in sidebar nav (true for every nav-registered page).
+
+Row content (company name, role title, reason chip, empty-state testid) is the canonical "page rendered" proof.
+
+**Discovered in:** PR #50 (`/passed` and `/rejected` pages — adding sidebar entries collided with title queries that worked on Triage but no longer worked on the new pages).
+
+### 3.6 `prefers-reduced-motion` guard on any animation
+
+Forward-looking convention: any animated transition needs a CSS media-query fallback that disables motion entirely. One-line CSS per animation. Must be present in every PR that adds motion.
+
+**Discovered in:** PR #57 + anime.js audit (not yet enforced — first animation lands in a post-V1 polish PR).
+
+---
+
+## 4. Operating / Process Bestiary
+
+### 4.1 Read-First's first job is "does this already exist?"
+
+Before asking "what's the schema shape?", ask "is this already built?" A brief is operator memory of intent, not a ground-truth source. The codebase wins on disputes.
+
+If the brief proposes a schema and a richer schema already exists in the codebase, honor the existing schema. The brief's wording reflected a clean-slate design assumption that didn't match reality.
+
+**Discovered in:** PR #52 (Contacts CRUD — brief assumed `email` and `phone` columns; PR #39 had already shipped `email_primary` / `email_secondary` and intentionally omitted `phone`).
+
+### 4.2 Adapter dispatch lives in three places — flagged with TODO
+
+Every new ATS adapter (Workday, iCIMS) requires edits in three sites: `_INGESTABLE_ATS` whitelist, `_SUPPORTED` validator, CLI validator. The copy-paste cost compounds with each adapter. Flagged with `TODO(adapter-dispatch-drift)` for a future registry refactor.
+
+**Discovered in:** PR #55 (iCIMS adapter — second adapter exposed the drift).
+
+**Rule:** don't refactor on the second instance. Note it. Refactor on the third or fourth, when the shared shape is obvious.
+
+### 4.3 Tooling false-positives are noted, not silenced
+
+Vercel-related lint or skill warnings firing on backend files (FastAPI on Railway) are known artifacts of a mixed-stack monorepo. Ignored without ceremony. Do not disable the tooling — it's correct for the frontend half. Just don't act on its backend hits.
+
+**Discovered in:** several PRs; first formalized in PR #48.
+
+### 4.4 Operator-side tasks stay with the operator
+
+Some tasks cannot be delegated to Claude Code, regardless of how repetitive they feel:
+
+- Production curl loops against Railway (no outbound network from sandbox; no auth context)
+- Vercel/Railway env var changes
+- OAuth bootstrap flows (require physical browser consent click)
+- Git pushes to main
+- Downloading credentials from third-party consoles
+
+Claude Code can write scripts that make these tasks faster (e.g. `refresh_gmail_oauth.py`), but cannot execute them.
+
+**Discovered in:** repeatedly across the session — score sweep, Gmail OAuth refresh, Railway env var updates.
+
+**Rule:** Claude Code writes the script. Operator runs it.
+
+### 4.5 Gmail OAuth refresh tokens expire weekly under Testing status
+
+Google revokes refresh tokens after 7 days when the OAuth client is in Testing publishing status (the default for unverified apps). The Gmail poll cron fails with `RefreshError: invalid_grant` on the next scheduled tick. Fix path: local OAuth bootstrap → copy new refresh token into Railway `GMAIL_REFRESH_TOKEN` env var → cron self-heals on next 15-min tick.
+
+Two paths:
+
+- **(a)** Accept weekly refresh as operator ops cost. Calendar reminder for ~Day 6.
+- **(b)** Invest in Google's OAuth verification flow to move client to Production status. Multiple weeks of back-and-forth with Google's review team.
+
+Path (a) is the working answer until the app has many users.
+
+**Discovered in:** PR #56 deploy + first 7-day cycle.
+
+**Operator script:** `apps/api/scripts/refresh_gmail_oauth.py` (committed; runs `InstalledAppFlow` against `apps/api/credentials/google_oauth_client.json`).
+
+### 4.6 Diagnostic instrumentation pays compound interest
+
+When a recurring failure mode is known (Gmail OAuth weekly revocation, classifier prompt drift, etc.), invest in instrumentation BEFORE the failure surfaces, not after. The PR #56 patch wrapping `/admin/gmail/*` 500s in structured `{exc_type, exc_message, hint}` saved a Railway-log spelunking session on the first refresh-token revocation.
+
+Pattern to copy to other cron workflows: structured error body with `exc_type` + `hint` + workflow that pretty-prints the body on failure.
+
+**Discovered in:** PR #56 deploy.
+
+### 4.7 Strip philosophy
+
+When UI / data shape mismatches the API or the current sprint, strip the feature from v1 rather than ship lying UI. Applied across: Companies notes, Add Company, Stats source-effectiveness panel, hard-rule live preview, closed channels editing, Outreach page.
+
+**Rule:** if it's half-built or ambiguous, strip it. Add back when it's earned.
+
+### 4.8 Two pass attempts before declaring cause-4
+
+When a candidate bug has 3 hypothesized causes, run the diagnostic for all 3 before accepting "it's cause 4, something unknown." Cause 4 is real and reasonable, but only after the first three are decisively ruled out via production probes — not by code inspection alone.
+
+**Discovered in:** PR #58 Vanta pass-action bug (initial diagnosis said cause-4-unknown after code inspection; production POST probe immediately revealed cause-3-equivalent: field-name mismatch between frontend and backend).
+
+---
+
+## 5. Test Infrastructure Bestiary
+
+### 5.1 NullPool on the app's module-level engine
+
+Async tests each run in their own event loop. The app's database connection, created once at module load, is bound to whatever loop happened to be active at the time. When the next test gets a different loop, the connection is effectively orphaned and queries hang or fail.
+
+Fix: tell SQLAlchemy to use `NullPool` so every test gets a fresh connection. The fix must be applied to the app's module-level engine, not just the test fixture's engine — the previous four fix attempts patched test fixtures and missed the production engine bound to the wrong loop.
+
+**Discovered in:** PR #48 (classifier improvement — five fix commits to get green; the actually-effective fix patched the app's module-level engine).
+
+### 5.2 `cast(col, Text)` not `cast(col, text("text"))`
+
+`TextClause` (from `text("text")`) is not a `TypeEngine`. SQLAlchemy raises a confusing error if you pass it where a column type is expected.
+
+Right: `cast(JobPosting.target_company_id, Text)`.
+Wrong: `cast(JobPosting.target_company_id, text("text"))`.
+
+**Discovered in:** PR #48.
+
+### 5.3 `asyncio_default_fixture_loop_scope = "session"` in pytest config
+
+When async fixtures share state, set the fixture loop scope to `"session"` in `pyproject.toml` / `pytest.ini`. Per-function scope (the default) is the source of obscure "the test that ran 30s ago left state visible" failures.
+
+**Discovered in:** PR #48.
+
+### 5.4 Real LLM calls prohibited in CI
+
+Every test that touches a service calling an LLM (classifier, scoring, JD summary) uses mocked clients. Real Gemini calls in CI are explicitly prohibited — both for cost reasons and because they introduce non-determinism into the test suite.
+
+Standard mock seam: top-level callable (e.g. `classify_posting()`, `score_posting()`) monkeypatched via `monkeypatch.setattr("job_assist.services.<module>.<callable>", stub)`.
+
+**Discovered in:** PR #48, formalized in PR #56.
+
+---
+
+## 6. Privacy / Safety Bestiary
+
+### 6.1 xlsx files containing real PII never committed
+
+Source files (Tippie alumni xlsx, LinkedIn exports, recruiter data) must NEVER be committed. `.gitignore` enforces this before any work that touches such a file:
+
+```
+*.xlsx
+*alumni*.xlsx
+/mnt/user-data/uploads/*
+apps/api/credentials/
+```
+
+Verify with `git status` before every commit that touches PII-adjacent code.
+
+**Discovered in:** PR #51 (Tippie alumni seed).
+
+### 6.2 Ingestion code enforces opted-in filter at the parser
+
+Filtering by `opted_in=True` must be enforced in code, not as a comment. The line `if not row.opted_in: continue` lives in the parser before any row reaches the writer. Comments saying "remember to filter" are not sufficient.
+
+**Discovered in:** PR #51.
+
+### 6.3 Test fixtures use fake names only
+
+No real PII appears in any test fixture, log line, or chat-visible output. Test data uses obviously-fake names like `Test Person 1`, `test1@example.com`, `Alpha Co`, etc.
+
+The xlsx parser logs row counts only — never individual row contents. The API endpoint never returns full contact lists in a single response; paginated with `limit` capped at 100.
+
+**Discovered in:** PR #51.
+
+### 6.4 Logs never include contact PII
+
+No log line — backend or frontend — includes names, emails, phone numbers, or LinkedIn URLs of real people. Logging is for counts, IDs (UUIDs), and event types. Anything else is a privacy leak.
+
+**Discovered in:** PR #51.
+
+### 6.5 OAuth client secrets are not refresh tokens
+
+Two different credentials with different sensitivity:
+
+- **OAuth client secret** (in `apps/api/credentials/google_oauth_client.json`): identifies the *app* to Google. Sensitive but not user-tied. Gitignored.
+- **Refresh token** (in Railway `GMAIL_REFRESH_TOKEN` env var): identifies *the user's grant of access*. More sensitive — never in repo, never in chat, only in Railway secrets storage.
+
+Conflating them leads to either (a) committing the wrong file thinking it's safe or (b) reissuing the wrong credential when the cron fails.
+
+**Discovered in:** PR #56 + first 7-day Gmail OAuth refresh cycle.
+
+---
+
+## Maintenance
+
+When you add an entry:
+
+1. Pick the right section. Create a new section only if no existing one fits — most entries land in 1-6.
+2. Use the format: `### N.X Title (short)`, then problem, lesson, and `**Discovered in:** PR #NN`.
+3. Add a code example only when the prose isn't precise enough on its own.
+4. Cross-reference related entries with `(see N.X)` rather than restating.
+5. Keep entries tight. This is reference material, not narrative.
+
+Entries from before this document existed (PR #1-47) live only in chat history and commit messages. They'll get backfilled if they cause new bugs.
