@@ -74,3 +74,6 @@ Connecting_With_Classmates_Directory.xlsx
 *alumni*.xlsx
 apps/api/seeds/contacts.json
 /tmp/contacts.json
+
+# OAuth client secrets - never commit
+apps/api/credentials/
