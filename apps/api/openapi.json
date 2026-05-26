@@ -1,8 +1,1470 @@
 {
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Job Assist API",
+    "description": "Personal job-search aggregation and triage system",
+    "version": "0.0.1"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "description": "Liveness check.",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/": {
+      "get": {
+        "summary": "Root",
+        "description": "Root endpoint.",
+        "operationId": "root__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Root  Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/ingest/plan": {
+      "get": {
+        "summary": "Get Ingest Plan",
+        "description": "List ``(ats, handle)`` pairs the daily cron should ingest.\n\nFilters to rows where:\n  * ``ats`` is one of the three currently-supported adapters\n  * ``ats_handle IS NOT NULL`` (we can't ingest without a handle)\n  * No active ``closed_channel`` row exists for the target_company\n    (``unsealed_at IS NULL`` denotes \"currently sealed\")\n\nOrdered by ``tier ASC, name ASC`` so Tier-1 companies ingest first\nand the most-important data lands even if later runs in the same\ncron invocation fail.\n\nSchema note: spec sketched ``target_company.is_closed_channel`` as a\nboolean column. Closed-channel state already lives in its own table\n(single source of truth, with an ``unsealed_at`` audit field) \u2014\ndenormalising it onto ``target_company`` would create drift between\ntwo stores. Same pattern as PR #23's hard-rule filter.",
+        "operationId": "get_ingest_plan_admin_ingest_plan_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response Get Ingest Plan Admin Ingest Plan Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/ingest/{ats}/{handle}": {
+      "post": {
+        "summary": "Trigger Ingest",
+        "description": "Trigger an ingestion run for one ATS / handle combination.\n\nReturns the IngestRun ID and initial status.  The run executes\nsynchronously within the request; a background-task variant can be\nadded later when latency matters.\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
+        "operationId": "trigger_ingest_admin_ingest__ats___handle__post",
+        "parameters": [
+          {
+            "name": "ats",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ats"
+            }
+          },
+          {
+            "name": "handle",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Handle"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Trigger Ingest Admin Ingest  Ats   Handle  Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/discover-ats/run": {
+      "post": {
+        "summary": "Discover Ats Run",
+        "description": "Probe every ``target_company`` where ``ats='unknown'`` and report matches.\n\nDry-run by default.  Pass ``?commit=true`` to also write the detected\n``ats`` and ``ats_handle`` back to the matched rows.\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
+        "operationId": "discover_ats_run_admin_discover_ats_run_post",
+        "parameters": [
+          {
+            "name": "commit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Commit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Discover Ats Run Admin Discover Ats Run Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/seed/target-companies": {
+      "post": {
+        "summary": "Seed Target Companies",
+        "description": "Seed target_company rows from a JSON body.\n\nIdempotent: each row's ``name`` is checked first; existing rows are\nskipped rather than updated. The body is the seed JSON itself, so the\nprivate seed file (``apps/api/seeds/target_companies.json``) never\nneeds to be uploaded to the Railway container \u2014 the operator runs::\n\n    curl -X POST -H 'Content-Type: application/json' \\\n         -d @apps/api/seeds/target_companies.json \\\n         https://<host>/admin/seed/target-companies\n\nReturns the insert / skip counts so the operator can verify the\nexpected number of rows landed.\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
+        "operationId": "seed_target_companies_admin_seed_target_companies_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array",
+                "title": "Rows"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "type": "object",
+                  "title": "Response Seed Target Companies Admin Seed Target Companies Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/seed/contacts": {
+      "post": {
+        "summary": "Seed Contacts",
+        "description": "Seed ``contact`` rows from a JSON body (PR #39).\n\nSame shape as ``/admin/seed/target-companies``: the body IS the seed\npayload, so the operator's private Tippie alumni JSON never has to\nland on the Railway container::\n\n    curl -X POST -H 'Content-Type: application/json' \\\n         -d @/tmp/contacts.json \\\n         https://<host>/admin/seed/contacts\n\nIdempotent. Re-running with the same payload returns ``inserted=0``\nand ``skipped_duplicate_*`` matching the prior insert count, because\ndedup uses ``LOWER(email_primary)`` / ``LOWER(linkedin_url)`` \u2014\ncase-insensitive, matches the partial unique indexes.\n\nPrivacy: response shape contains no names, emails, or LinkedIn URLs;\nsame for the structlog line emitted by the seed service.\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
+        "operationId": "seed_contacts_admin_seed_contacts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array",
+                "title": "Rows"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "type": "object",
+                  "title": "Response Seed Contacts Admin Seed Contacts Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/contacts": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "List Contacts",
+        "description": "Paginated list of contacts for the Contacts page (PR #51).\n\nDefault behaviour:\n  * Excludes archived rows (``archived_at IS NULL``). Pass\n    ``include_archived=true`` to include them. The exclusion happens\n    in SQL \u2014 never in Python \u2014 so it matches the partial-UNIQUE-index\n    scope on email/LinkedIn (re-ingesting an archived contact's\n    email is allowed because their old row no longer occupies the\n    unique slot; see migration ``e8f9a0b1c2d3``).\n  * ``ORDER BY created_at DESC, id ASC`` \u2014 newest contacts first,\n    stable ``id ASC`` tiebreaker on same-second creates.\n  * Two queries total: one COUNT(*), one SELECT.\n\nFilter: ``source_type`` repeating param (``?source_type=tippie_alumni\n&source_type=linkedin_outreach``) ORs the matches.\n\nSearch: ``?search=foo`` runs a case-insensitive substring match on\n``first_name``, ``last_name``, and the concatenation. ILIKE is the\nright call here \u2014 it's a free-form search, not enum membership.\n\nTODO: add authentication before exposing publicly. The list returns\nreal PII; the single-operator trust model is the only thing holding\nuntil proper auth lands.",
+        "operationId": "list_contacts_contacts_get",
+        "parameters": [
+          {
+            "name": "source_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Type"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "name": "include_archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Archived"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Contacts Contacts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/gmail/backfill": {
+      "post": {
+        "summary": "Gmail Backfill",
+        "description": "Pull the last ``days`` days of mail, classify each, write outcome_event rows.\n\nLong-running (~5-10 minutes for a 60-day window on the Gemini free tier\nbecause of the 15 RPM throttle). Idempotent: re-running over the same\nwindow skips messages whose ``email_message_id`` is already in the table.\n\nReturns 503 with a clear hint when any of the required env vars\n(``GMAIL_CREDENTIALS_JSON``, ``GMAIL_REFRESH_TOKEN``, ``GEMINI_API_KEY``)\nare missing \u2014 preferable to a 500 stack trace.\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
+        "operationId": "gmail_backfill_admin_gmail_backfill_post",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 60,
+              "title": "Days"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Gmail Backfill Admin Gmail Backfill Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/gmail/poll": {
+      "post": {
+        "summary": "Gmail Poll",
+        "description": "Poll Gmail for messages received since the most recent outcome_event.\n\nDesigned to be called every 15 minutes by the ``gmail-poll`` workflow.\nIdempotent at the message level (same ``email_message_id`` pre-check\nas the backfill). The watermark is derived from\n``MAX(outcome_event.received_at)`` on every call \u2014 no separate state\ntable to drift out of sync.\n\nReturns 503 with a clear hint when any required env var is missing\n(same contract as ``/admin/gmail/backfill``).\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
+        "operationId": "gmail_poll_admin_gmail_poll_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Gmail Poll Admin Gmail Poll Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/operator/profile": {
+      "get": {
+        "tags": [
+          "operator"
+        ],
+        "summary": "Get Operator Profile",
+        "description": "Return the singleton operator profile (id=1).\n\n500 if the row is missing \u2014 that would mean the seeding migration\ndidn't run, which is a deployment bug rather than a runtime case.",
+        "operationId": "get_operator_profile_operator_profile_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Operator Profile Operator Profile Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "operator"
+        ],
+        "summary": "Update Operator Profile",
+        "description": "Partial update of the singleton operator profile (id=1).\n\nOnly fields present in the request body are touched. Validators on\n``OperatorProfileUpdate`` strip / dedupe list fields and reject\nnegative thresholds before the SQL UPDATE fires.\n\nFastAPI does the body validation itself \u2014 a 422 with a clean JSON\nerror array fires automatically when a field validator raises.",
+        "operationId": "update_operator_profile_operator_profile_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorProfileUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Update Operator Profile Operator Profile Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/reclassify/sweep": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Reclassify Sweep Endpoint",
+        "description": "Reclassify up to ``limit`` postings using the Gemini LLM classifier.\n\nReplaces the ingest-time regex heuristic (``adapters/normalization.py``)\nfor existing rows.  Idempotent \u2014 re-running with the same LLM response\nproduces the same values; ``changed`` will be 0.\n\nSelection order: oldest ``classified_at`` first (NULLs first so\nnever-classified rows are processed before already-classified ones).\n\nOn per-row LLM failure: log + skip + continue.  The row's original\n``role_family`` / ``seniority_level`` is preserved.\n\n``distribution`` in the response is a full-table snapshot taken AFTER\nthe sweep so the operator can see the cumulative effect.\n\nTODO: add authentication before exposing publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
+        "operationId": "reclassify_sweep_endpoint_admin_reclassify_sweep_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReclassifySweepRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReclassifySweepResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/score/sweep": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Score Sweep Endpoint",
+        "description": "Score up to ``limit`` postings using the heuristic fit-scoring model.\n\nSelection order (PR #56):\n  * ``only_unscored=True`` (default) \u2014 postings with ``fit_score IS NULL``,\n    ordered ``first_seen_at ASC, id ASC`` (stable tiebreaker per the\n    bestiary \u2014 postings sharing a same-second first_seen_at land in a\n    deterministic order across runs).\n  * ``only_unscored=False`` \u2014 all postings, ordered\n    ``scored_at NULLS FIRST, first_seen_at ASC, id ASC`` so previously\n    scored rows get refreshed in oldest-first order.\n\nOn per-row scoring failure: log + skip + continue. The row's previous\n``fit_score`` is preserved (the score is decoration; the sweep must\nnever wipe data on a transient failure).\n\n``distribution`` in the response is a coarse-bucket snapshot of the\nFULL table (not just the rows this sweep touched) taken AFTER the\nsweep, so the operator sees the cumulative effect.\n\nTODO: add authentication before exposing publicly. Dev-mode only today.",
+        "operationId": "score_sweep_endpoint_admin_score_sweep_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScoreSweepRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoreSweepResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/backfill/department-team": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Backfill Department Team Endpoint",
+        "description": "Promote ``department`` / ``team`` from raw_payload to typed columns.\n\nIdempotent \u2014 only rows where both columns are NULL get touched. Safe\nto call repeatedly; the daily-ingest self-heal in IngestionService\nalso fills these columns naturally on each re-ingest, so the one-shot\nbackfill is mostly useful right after PR #28a's migration lands.\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
+        "operationId": "backfill_department_team_endpoint_admin_backfill_department_team_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "type": "object",
+                  "title": "Response Backfill Department Team Endpoint Admin Backfill Department Team Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/postings": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "List Postings",
+        "description": "Paginated list of postings with the company/role/source/state nested.\n\nDefault sort: ``newest`` \u2192 ``first_seen_at DESC``. See\n``schemas/public.py::SortKey`` for the full enum and column mapping.\nEvery sort key gets ``job_posting.id ASC`` as a tiebreaker so\npagination stays stable across same-second timestamps or NULL\nsalary / tier rows. Two queries total:\n  1. COUNT(*) over the same WHERE (joined onto the state LATERAL too,\n     so state filters narrow the total the same way they narrow rows).\n  2. SELECT with TWO LATERALs \u2014 most-recent posting_source and\n     most-recent posting_action \u2014 folded into the main page query.\n\nState filter values: ``triage`` (no action OR latest = reset),\n``interested``, ``not_interested``, ``applied``, ``snoozed``. Repeating\n``?state=...&state=...`` ORs them. ``include_snoozed_past_only=true``\nfurther restricts the snoozed bucket to past-due / open >7d entries.\n\nTODO: add authentication before exposing publicly.",
+        "operationId": "list_postings_postings_get",
+        "parameters": [
+          {
+            "name": "tier",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tier"
+            }
+          },
+          {
+            "name": "ats",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ats"
+            }
+          },
+          {
+            "name": "remote_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Remote Type"
+            }
+          },
+          {
+            "name": "role_family",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Role Family"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "include_snoozed_past_only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Snoozed Past Only"
+            }
+          },
+          {
+            "name": "target_company_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Company Id"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "newest",
+                "oldest",
+                "salary_high_to_low",
+                "tier",
+                "recently_posted",
+                "best_fit"
+              ],
+              "type": "string",
+              "default": "newest",
+              "title": "Sort"
+            }
+          },
+          {
+            "name": "per_company_cap",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Per Company Cap"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Postings Postings Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/postings/{posting_id}": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Get Posting",
+        "description": "Full detail for one posting, including matched division if any.\n\nDivision match uses ``IS NOT DISTINCT FROM`` so a posting and a\ndivision with ``team IS NULL`` both join correctly \u2014 matches the\nsemantics of the ``UNIQUE NULLS NOT DISTINCT`` constraint that\npopulates the table in PR #28b.\n\n404 when the posting id doesn't exist.\n\nTODO: add authentication before exposing publicly.",
+        "operationId": "get_posting_postings__posting_id__get",
+        "parameters": [
+          {
+            "name": "posting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Posting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Posting Postings  Posting Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/postings/{posting_id}/state": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Post Posting State",
+        "description": "Record one operator action against a posting (PR #31).\n\nReturns the resulting :class:`StateEmbedded` so the frontend can\nupdate its row without re-fetching the list.\n\nError mapping:\n  - Unknown ``action_type`` / ``reason``  \u2192 422 (Pydantic enum coercion)\n  - Cross-field rule violation             \u2192 422 (ValueError from service)\n  - Unknown ``posting_id``                 \u2192 404 (LookupError from service)\n\nLives under ``tags=[\"public\"]`` because it's the same trust model as\nthe rest of the public surface \u2014 single-user dev mode, TODO to lock\ndown before any wider deployment.",
+        "operationId": "post_posting_state_postings__posting_id__state_post",
+        "parameters": [
+          {
+            "name": "posting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Posting Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostingStateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Posting State Postings  Posting Id  State Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/companies": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "List Companies",
+        "description": "Paginated list of target_company rows with per-row posting counts.\n\nSingle SELECT with three correlated scalar subqueries\n(total_postings, active_postings, ats_set) so we don't N+1 the\ncounts. Plus one COUNT(*) for the pagination total = 2 queries.\n\nDefault sort: ``tier ASC NULLS LAST, name ASC``.\n\nTODO: add authentication before exposing publicly.",
+        "operationId": "list_companies_companies_get",
+        "parameters": [
+          {
+            "name": "tier",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tier"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Companies Companies Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/outcomes": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "List Outcomes",
+        "description": "Paginated list of outcome events, sorted chronologically (ASC).\n\nOptionally narrows to one posting via ``?posting_id=...``. Feeds the\nApplied-page timeline UI.\n\nTODO: add authentication before exposing publicly.",
+        "operationId": "list_outcomes_outcomes_get",
+        "parameters": [
+          {
+            "name": "posting_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Posting Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Outcomes Outcomes Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stats/calibration": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Get Stats Calibration",
+        "description": "KPIs + top rejected role families over a time window.\n\nSee ``services/stats.py`` for the stage-counting rules. Issues 2\nSQL queries: one multi-FILTER aggregation row, one GROUP BY for\nthe top role families.",
+        "operationId": "get_stats_calibration_stats_calibration_get",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Stats Calibration Stats Calibration Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stats/funnel": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Get Stats Funnel",
+        "description": "Funnel stages + conversion rates over a time window.\n\nStages always returned in the order ``[surfaced, interested,\napplied]``; rates are pairwise across adjacent stages with ``null``\nwhen the upstream count is 0. Issues 1 SQL query.",
+        "operationId": "get_stats_funnel_stats_funnel_get",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Stats Funnel Stats Funnel Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/cron-status": {
+      "get": {
+        "summary": "Cron Status",
+        "description": "Cron health-check endpoint.  Returns ok when the API is reachable.",
+        "operationId": "cron_status_admin_cron_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Cron Status Admin Cron Status Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/enrichment/companies/sweep": {
+      "post": {
+        "tags": [
+          "enrichment"
+        ],
+        "summary": "Sweep Companies Endpoint",
+        "description": "Run ``sweep_companies`` over every ``target_company`` row.\n\nCalled by the daily ``enrich-companies`` GitHub Actions cron at\n07:00 UTC (one hour after the daily ingest at 06:00 UTC, so newly\ndiscovered target_companies have time to land first).\n\nNo auth \u2014 same trust model as the rest of ``/admin/*`` and\n``/operator/*`` (single-user dev mode). Add a shared-secret guard\nacross the whole admin surface in a future PR.",
+        "operationId": "sweep_companies_endpoint_enrichment_companies_sweep_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Sweep Companies Endpoint Enrichment Companies Sweep Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/enrichment/companies/{company_id}/retry": {
+      "post": {
+        "tags": [
+          "enrichment"
+        ],
+        "summary": "Retry Company Enrichment Endpoint",
+        "description": "Reset ``enrichment_attempt_count`` for one company and re-run enrichment.\n\nFor manual recovery from the ``exhausted`` state. Also clears any\ncached description / enriched_at so the next call is a fresh attempt.",
+        "operationId": "retry_company_enrichment_endpoint_enrichment_companies__company_id__retry_post",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Company Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Retry Company Enrichment Endpoint Enrichment Companies  Company Id  Retry Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/enrichment/divisions/sweep": {
+      "post": {
+        "tags": [
+          "enrichment"
+        ],
+        "summary": "Sweep Divisions Endpoint",
+        "description": "Discover (company, dept, team) tuples + enrich each division.\n\nCalled by the daily ``enrich-divisions`` GitHub Actions cron at\n08:00 UTC (one hour after enrich-companies). Discovery is idempotent\nvia the ``uq_division_company_dept_team`` UNIQUE NULLS NOT DISTINCT\nconstraint; enrichment is idempotent via the per-row ``description\nIS NOT NULL`` skip.\n\nNo auth \u2014 same trust model as the rest of /admin and /enrichment.\nTODO: tighten before public exposure.",
+        "operationId": "sweep_divisions_endpoint_enrichment_divisions_sweep_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Sweep Divisions Endpoint Enrichment Divisions Sweep Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/enrichment/divisions/{division_id}/retry": {
+      "post": {
+        "tags": [
+          "enrichment"
+        ],
+        "summary": "Retry Division Enrichment Endpoint",
+        "description": "Reset ``enrichment_attempt_count`` for one division and re-run.",
+        "operationId": "retry_division_enrichment_endpoint_enrichment_divisions__division_id__retry_post",
+        "parameters": [
+          {
+            "name": "division_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Division Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Retry Division Enrichment Endpoint Enrichment Divisions  Division Id  Retry Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/enrichment/jd-summaries/sweep": {
+      "post": {
+        "tags": [
+          "enrichment"
+        ],
+        "summary": "Sweep Jd Summaries Endpoint",
+        "description": "Run the JD-summary sweep over eligible ``job_posting`` rows.\n\nCalled by the daily ``enrich-jd-summaries`` GitHub Actions cron at\n08:30 UTC (after ingest + company + division enrichment). The sweep\ncaps at ``limit`` rows per call so a Gemini RPM hit doesn't drag the\nworkflow past its 15-minute timeout. Idempotent \u2014 each row's\n``jd_summary_markdown IS NOT NULL`` short-circuits the LLM call.\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
+        "operationId": "sweep_jd_summaries_endpoint_enrichment_jd_summaries_sweep_post",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Sweep Jd Summaries Endpoint Enrichment Jd Summaries Sweep Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/enrichment/jd-summaries/{posting_id}/retry": {
+      "post": {
+        "tags": [
+          "enrichment"
+        ],
+        "summary": "Retry Jd Summary Enrichment Endpoint",
+        "description": "Reset ``jd_summary_enrichment_attempt_count`` and re-run.\n\nMirrors the company / division retry endpoints. Clears any cached\nsummary so the next call is a fresh attempt.",
+        "operationId": "retry_jd_summary_enrichment_endpoint_enrichment_jd_summaries__posting_id__retry_post",
+        "parameters": [
+          {
+            "name": "posting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Posting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Retry Jd Summary Enrichment Endpoint Enrichment Jd Summaries  Posting Id  Retry Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
   "components": {
     "schemas": {
       "ActionReason": {
-        "description": "Operator's reason for ``not_interested`` (PR #31).\n\nRequired when ``action_type = not_interested``; forbidden otherwise.",
+        "type": "string",
         "enum": [
           "wrong_role",
           "wrong_location",
@@ -15,10 +1477,10 @@
           "too_junior"
         ],
         "title": "ActionReason",
-        "type": "string"
+        "description": "Operator's reason for ``not_interested`` (PR #31).\n\nRequired when ``action_type = not_interested``; forbidden otherwise."
       },
       "ActionType": {
-        "description": "Operator's action on a job posting (PR #31).\n\nStored as plain TEXT in posting_action.action_type (CHECK-constrained),\nnot a PG enum \u2014 keeps the vocabulary evolvable without schema migrations.",
+        "type": "string",
         "enum": [
           "interested",
           "not_interested",
@@ -27,7 +1489,7 @@
           "reset"
         ],
         "title": "ActionType",
-        "type": "string"
+        "description": "Operator's action on a job posting (PR #31).\n\nStored as plain TEXT in posting_action.action_type (CHECK-constrained),\nnot a PG enum \u2014 keeps the vocabulary evolvable without schema migrations."
       },
       "HTTPValidationError": {
         "properties": {
@@ -35,42 +1497,15 @@
             "items": {
               "$ref": "#/components/schemas/ValidationError"
             },
-            "title": "Detail",
-            "type": "array"
+            "type": "array",
+            "title": "Detail"
           }
         },
-        "title": "HTTPValidationError",
-        "type": "object"
+        "type": "object",
+        "title": "HTTPValidationError"
       },
       "OperatorProfileUpdate": {
-        "additionalProperties": false,
-        "description": "Partial update body for ``PUT /operator/profile``.\n\nEvery field is optional. Fields omitted from the body leave the\ncorresponding column untouched (``exclude_unset=True`` on the way\ninto SQLAlchemy). Fields that ARE present run the validators below\nbefore they reach the DB.",
         "properties": {
-          "applicant_cap": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Applicant Cap"
-          },
-          "geo_whitelist": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Geo Whitelist"
-          },
           "looking_for_text": {
             "anyOf": [
               {
@@ -96,16 +1531,19 @@
             ],
             "title": "Role Keywords"
           },
-          "salary_ceiling_usd": {
+          "geo_whitelist": {
             "anyOf": [
               {
-                "type": "integer"
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Salary Ceiling Usd"
+            "title": "Geo Whitelist"
           },
           "salary_floor_usd": {
             "anyOf": [
@@ -118,19 +1556,27 @@
             ],
             "title": "Salary Floor Usd"
           },
-          "seniority_levels_included": {
+          "salary_ceiling_usd": {
             "anyOf": [
               {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
+                "type": "integer"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Seniority Levels Included"
+            "title": "Salary Ceiling Usd"
+          },
+          "applicant_cap": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applicant Cap"
           },
           "staffing_firm_blocklist": {
             "anyOf": [
@@ -145,27 +1591,31 @@
               }
             ],
             "title": "Staffing Firm Blocklist"
-          }
-        },
-        "title": "OperatorProfileUpdate",
-        "type": "object"
-      },
-      "PostingStateRequest": {
-        "description": "Body for ``POST /postings/{id}/state``.\n\nThe full cross-field rule set (reason required iff not_interested,\nsnooze_until only with snoozed, no past timestamps) lives in the\nservice layer so the validation errors include posting context and\nso the DB CHECK constraints catch any drift.",
-        "properties": {
-          "action_type": {
-            "$ref": "#/components/schemas/ActionType"
           },
-          "notes": {
+          "seniority_levels_included": {
             "anyOf": [
               {
-                "type": "string"
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Notes"
+            "title": "Seniority Levels Included"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "OperatorProfileUpdate",
+        "description": "Partial update body for ``PUT /operator/profile``.\n\nEvery field is optional. Fields omitted from the body leave the\ncorresponding column untouched (``exclude_unset=True`` on the way\ninto SQLAlchemy). Fields that ARE present run the validators below\nbefore they reach the DB."
+      },
+      "PostingStateRequest": {
+        "properties": {
+          "action_type": {
+            "$ref": "#/components/schemas/ActionType"
           },
           "reason": {
             "anyOf": [
@@ -180,93 +1630,105 @@
           "snooze_until": {
             "anyOf": [
               {
-                "format": "date-time",
-                "type": "string"
+                "type": "string",
+                "format": "date-time"
               },
               {
                 "type": "null"
               }
             ],
             "title": "Snooze Until"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
           }
         },
+        "type": "object",
         "required": [
           "action_type"
         ],
         "title": "PostingStateRequest",
-        "type": "object"
+        "description": "Body for ``POST /postings/{id}/state``.\n\nThe full cross-field rule set (reason required iff not_interested,\nsnooze_until only with snoozed, no past timestamps) lives in the\nservice layer so the validation errors include posting context and\nso the DB CHECK constraints catch any drift."
       },
       "ReclassifyDistribution": {
-        "description": "Per-enum distribution counts taken after the sweep.",
         "properties": {
           "role_family": {
             "additionalProperties": {
               "type": "integer"
             },
-            "description": "role_family \u2192 count across ALL job_posting rows.",
+            "type": "object",
             "title": "Role Family",
-            "type": "object"
+            "description": "role_family \u2192 count across ALL job_posting rows."
           },
           "seniority": {
             "additionalProperties": {
               "type": "integer"
             },
-            "description": "seniority_level \u2192 count across ALL job_posting rows.",
+            "type": "object",
             "title": "Seniority",
-            "type": "object"
+            "description": "seniority_level \u2192 count across ALL job_posting rows."
           }
         },
+        "type": "object",
         "required": [
           "role_family",
           "seniority"
         ],
         "title": "ReclassifyDistribution",
-        "type": "object"
+        "description": "Per-enum distribution counts taken after the sweep."
       },
       "ReclassifySweepRequest": {
-        "description": "Body for POST /admin/reclassify/sweep.",
         "properties": {
           "limit": {
-            "default": 50,
-            "description": "Maximum number of postings to process in this call. Capped at 500 to keep the request within a reasonable timeout window.",
+            "type": "integer",
             "maximum": 500.0,
             "minimum": 1.0,
             "title": "Limit",
-            "type": "integer"
+            "description": "Maximum number of postings to process in this call. Capped at 500 to keep the request within a reasonable timeout window.",
+            "default": 50
           },
           "only_unclassified": {
-            "default": true,
-            "description": "When True (default), only touch postings where role_family='other' OR seniority_level='unknown' (the buckets the regex assigns when it can't determine a value). When False, reclassify ALL postings regardless of current values \u2014 useful for a full re-sweep after a prompt upgrade.",
+            "type": "boolean",
             "title": "Only Unclassified",
-            "type": "boolean"
+            "description": "When True (default), only touch postings where role_family='other' OR seniority_level='unknown' (the buckets the regex assigns when it can't determine a value). When False, reclassify ALL postings regardless of current values \u2014 useful for a full re-sweep after a prompt upgrade.",
+            "default": true
           }
         },
+        "type": "object",
         "title": "ReclassifySweepRequest",
-        "type": "object"
+        "description": "Body for POST /admin/reclassify/sweep."
       },
       "ReclassifySweepResponse": {
-        "description": "Response body for POST /admin/reclassify/sweep.",
         "properties": {
+          "processed": {
+            "type": "integer",
+            "title": "Processed",
+            "description": "Number of postings the sweep attempted to classify."
+          },
           "changed": {
-            "description": "Postings where at least one field changed.",
+            "type": "integer",
             "title": "Changed",
-            "type": "integer"
+            "description": "Postings where at least one field changed."
+          },
+          "skipped": {
+            "type": "integer",
+            "title": "Skipped",
+            "description": "Postings where the LLM call failed; original values preserved."
           },
           "distribution": {
             "$ref": "#/components/schemas/ReclassifyDistribution",
             "description": "Full-table distribution snapshot taken after the sweep."
-          },
-          "processed": {
-            "description": "Number of postings the sweep attempted to classify.",
-            "title": "Processed",
-            "type": "integer"
-          },
-          "skipped": {
-            "description": "Postings where the LLM call failed; original values preserved.",
-            "title": "Skipped",
-            "type": "integer"
           }
         },
+        "type": "object",
         "required": [
           "processed",
           "changed",
@@ -274,70 +1736,70 @@
           "distribution"
         ],
         "title": "ReclassifySweepResponse",
-        "type": "object"
+        "description": "Response body for POST /admin/reclassify/sweep."
       },
       "ScoreDistribution": {
-        "description": "Per-bucket distribution counts taken after the sweep.",
         "properties": {
           "by_bucket": {
             "additionalProperties": {
               "type": "integer"
             },
-            "description": "fit_score bucket -> count across ALL job_posting rows. Buckets: ``0-19``, ``20-39``, ``40-59``, ``60-79``, ``80-100``, ``unscored``.",
+            "type": "object",
             "title": "By Bucket",
-            "type": "object"
+            "description": "fit_score bucket -> count across ALL job_posting rows. Buckets: ``0-19``, ``20-39``, ``40-59``, ``60-79``, ``80-100``, ``unscored``."
           }
         },
+        "type": "object",
         "required": [
           "by_bucket"
         ],
         "title": "ScoreDistribution",
-        "type": "object"
+        "description": "Per-bucket distribution counts taken after the sweep."
       },
       "ScoreSweepRequest": {
-        "description": "Body for POST /admin/score/sweep.",
         "properties": {
           "limit": {
-            "default": 50,
-            "description": "Maximum number of postings to score in this call. Capped at 500 to keep the request within a reasonable timeout window.",
+            "type": "integer",
             "maximum": 500.0,
             "minimum": 1.0,
             "title": "Limit",
-            "type": "integer"
+            "description": "Maximum number of postings to score in this call. Capped at 500 to keep the request within a reasonable timeout window.",
+            "default": 50
           },
           "only_unscored": {
-            "default": true,
-            "description": "When True (default), only score postings where fit_score IS NULL. When False, rescore ALL postings regardless \u2014 useful after a weight or extractor change.",
+            "type": "boolean",
             "title": "Only Unscored",
-            "type": "boolean"
+            "description": "When True (default), only score postings where fit_score IS NULL. When False, rescore ALL postings regardless \u2014 useful after a weight or extractor change.",
+            "default": true
           }
         },
+        "type": "object",
         "title": "ScoreSweepRequest",
-        "type": "object"
+        "description": "Body for POST /admin/score/sweep."
       },
       "ScoreSweepResponse": {
-        "description": "Response body for POST /admin/score/sweep.",
         "properties": {
+          "processed": {
+            "type": "integer",
+            "title": "Processed",
+            "description": "Number of postings the sweep attempted to score."
+          },
           "changed": {
-            "description": "Postings whose fit_score changed.",
+            "type": "integer",
             "title": "Changed",
-            "type": "integer"
+            "description": "Postings whose fit_score changed."
+          },
+          "skipped": {
+            "type": "integer",
+            "title": "Skipped",
+            "description": "Postings where the scoring function raised; previous score preserved."
           },
           "distribution": {
             "$ref": "#/components/schemas/ScoreDistribution",
             "description": "Full-table fit_score-bucket snapshot taken after the sweep."
-          },
-          "processed": {
-            "description": "Number of postings the sweep attempted to score.",
-            "title": "Processed",
-            "type": "integer"
-          },
-          "skipped": {
-            "description": "Postings where the scoring function raised; previous score preserved.",
-            "title": "Skipped",
-            "type": "integer"
           }
         },
+        "type": "object",
         "required": [
           "processed",
           "changed",
@@ -345,17 +1807,10 @@
           "distribution"
         ],
         "title": "ScoreSweepResponse",
-        "type": "object"
+        "description": "Response body for POST /admin/score/sweep."
       },
       "ValidationError": {
         "properties": {
-          "ctx": {
-            "title": "Context",
-            "type": "object"
-          },
-          "input": {
-            "title": "Input"
-          },
           "loc": {
             "items": {
               "anyOf": [
@@ -367,1487 +1822,32 @@
                 }
               ]
             },
-            "title": "Location",
-            "type": "array"
+            "type": "array",
+            "title": "Location"
           },
           "msg": {
-            "title": "Message",
-            "type": "string"
+            "type": "string",
+            "title": "Message"
           },
           "type": {
-            "title": "Error Type",
-            "type": "string"
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
           }
         },
+        "type": "object",
         "required": [
           "loc",
           "msg",
           "type"
         ],
-        "title": "ValidationError",
-        "type": "object"
-      }
-    }
-  },
-  "info": {
-    "description": "Personal job-search aggregation and triage system",
-    "title": "Job Assist API",
-    "version": "0.0.1"
-  },
-  "openapi": "3.1.0",
-  "paths": {
-    "/": {
-      "get": {
-        "description": "Root endpoint.",
-        "operationId": "root__get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "title": "Response Root  Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Root"
-      }
-    },
-    "/admin/backfill/department-team": {
-      "post": {
-        "description": "Promote ``department`` / ``team`` from raw_payload to typed columns.\n\nIdempotent \u2014 only rows where both columns are NULL get touched. Safe\nto call repeatedly; the daily-ingest self-heal in IngestionService\nalso fills these columns naturally on each re-ingest, so the one-shot\nbackfill is mostly useful right after PR #28a's migration lands.\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
-        "operationId": "backfill_department_team_endpoint_admin_backfill_department_team_post",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": {
-                    "type": "integer"
-                  },
-                  "title": "Response Backfill Department Team Endpoint Admin Backfill Department Team Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Backfill Department Team Endpoint",
-        "tags": [
-          "admin"
-        ]
-      }
-    },
-    "/admin/cron-status": {
-      "get": {
-        "description": "Cron health-check endpoint.  Returns ok when the API is reachable.",
-        "operationId": "cron_status_admin_cron_status_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "title": "Response Cron Status Admin Cron Status Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Cron Status"
-      }
-    },
-    "/admin/discover-ats/run": {
-      "post": {
-        "description": "Probe every ``target_company`` where ``ats='unknown'`` and report matches.\n\nDry-run by default.  Pass ``?commit=true`` to also write the detected\n``ats`` and ``ats_handle`` back to the matched rows.\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
-        "operationId": "discover_ats_run_admin_discover_ats_run_post",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "commit",
-            "required": false,
-            "schema": {
-              "default": false,
-              "title": "Commit",
-              "type": "boolean"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Discover Ats Run Admin Discover Ats Run Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Discover Ats Run"
-      }
-    },
-    "/admin/gmail/backfill": {
-      "post": {
-        "description": "Pull the last ``days`` days of mail, classify each, write outcome_event rows.\n\nLong-running (~5-10 minutes for a 60-day window on the Gemini free tier\nbecause of the 15 RPM throttle). Idempotent: re-running over the same\nwindow skips messages whose ``email_message_id`` is already in the table.\n\nReturns 503 with a clear hint when any of the required env vars\n(``GMAIL_CREDENTIALS_JSON``, ``GMAIL_REFRESH_TOKEN``, ``GEMINI_API_KEY``)\nare missing \u2014 preferable to a 500 stack trace.\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
-        "operationId": "gmail_backfill_admin_gmail_backfill_post",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "days",
-            "required": false,
-            "schema": {
-              "default": 60,
-              "title": "Days",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Gmail Backfill Admin Gmail Backfill Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Gmail Backfill"
-      }
-    },
-    "/admin/gmail/poll": {
-      "post": {
-        "description": "Poll Gmail for messages received since the most recent outcome_event.\n\nDesigned to be called every 15 minutes by the ``gmail-poll`` workflow.\nIdempotent at the message level (same ``email_message_id`` pre-check\nas the backfill). The watermark is derived from\n``MAX(outcome_event.received_at)`` on every call \u2014 no separate state\ntable to drift out of sync.\n\nReturns 503 with a clear hint when any required env var is missing\n(same contract as ``/admin/gmail/backfill``).\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
-        "operationId": "gmail_poll_admin_gmail_poll_post",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Gmail Poll Admin Gmail Poll Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Gmail Poll"
-      }
-    },
-    "/admin/ingest/plan": {
-      "get": {
-        "description": "List ``(ats, handle)`` pairs the daily cron should ingest.\n\nFilters to rows where:\n  * ``ats`` is one of the three currently-supported adapters\n  * ``ats_handle IS NOT NULL`` (we can't ingest without a handle)\n  * No active ``closed_channel`` row exists for the target_company\n    (``unsealed_at IS NULL`` denotes \"currently sealed\")\n\nOrdered by ``tier ASC, name ASC`` so Tier-1 companies ingest first\nand the most-important data lands even if later runs in the same\ncron invocation fail.\n\nSchema note: spec sketched ``target_company.is_closed_channel`` as a\nboolean column. Closed-channel state already lives in its own table\n(single source of truth, with an ``unsealed_at`` audit field) \u2014\ndenormalising it onto ``target_company`` would create drift between\ntwo stores. Same pattern as PR #23's hard-rule filter.",
-        "operationId": "get_ingest_plan_admin_ingest_plan_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "additionalProperties": {
-                      "type": "string"
-                    },
-                    "type": "object"
-                  },
-                  "title": "Response Get Ingest Plan Admin Ingest Plan Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Get Ingest Plan"
-      }
-    },
-    "/admin/ingest/{ats}/{handle}": {
-      "post": {
-        "description": "Trigger an ingestion run for one ATS / handle combination.\n\nReturns the IngestRun ID and initial status.  The run executes\nsynchronously within the request; a background-task variant can be\nadded later when latency matters.\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
-        "operationId": "trigger_ingest_admin_ingest__ats___handle__post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "ats",
-            "required": true,
-            "schema": {
-              "title": "Ats",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "handle",
-            "required": true,
-            "schema": {
-              "title": "Handle",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Trigger Ingest Admin Ingest  Ats   Handle  Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Trigger Ingest"
-      }
-    },
-    "/admin/reclassify/sweep": {
-      "post": {
-        "description": "Reclassify up to ``limit`` postings using the Gemini LLM classifier.\n\nReplaces the ingest-time regex heuristic (``adapters/normalization.py``)\nfor existing rows.  Idempotent \u2014 re-running with the same LLM response\nproduces the same values; ``changed`` will be 0.\n\nSelection order: oldest ``classified_at`` first (NULLs first so\nnever-classified rows are processed before already-classified ones).\n\nOn per-row LLM failure: log + skip + continue.  The row's original\n``role_family`` / ``seniority_level`` is preserved.\n\n``distribution`` in the response is a full-table snapshot taken AFTER\nthe sweep so the operator can see the cumulative effect.\n\nTODO: add authentication before exposing publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
-        "operationId": "reclassify_sweep_endpoint_admin_reclassify_sweep_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReclassifySweepRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReclassifySweepResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Reclassify Sweep Endpoint",
-        "tags": [
-          "admin"
-        ]
-      }
-    },
-    "/admin/score/sweep": {
-      "post": {
-        "description": "Score up to ``limit`` postings using the heuristic fit-scoring model.\n\nSelection order (PR #56):\n  * ``only_unscored=True`` (default) \u2014 postings with ``fit_score IS NULL``,\n    ordered ``first_seen_at ASC, id ASC`` (stable tiebreaker per the\n    bestiary \u2014 postings sharing a same-second first_seen_at land in a\n    deterministic order across runs).\n  * ``only_unscored=False`` \u2014 all postings, ordered\n    ``scored_at NULLS FIRST, first_seen_at ASC, id ASC`` so previously\n    scored rows get refreshed in oldest-first order.\n\nOn per-row scoring failure: log + skip + continue. The row's previous\n``fit_score`` is preserved (the score is decoration; the sweep must\nnever wipe data on a transient failure).\n\n``distribution`` in the response is a coarse-bucket snapshot of the\nFULL table (not just the rows this sweep touched) taken AFTER the\nsweep, so the operator sees the cumulative effect.\n\nTODO: add authentication before exposing publicly. Dev-mode only today.",
-        "operationId": "score_sweep_endpoint_admin_score_sweep_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ScoreSweepRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ScoreSweepResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Score Sweep Endpoint",
-        "tags": [
-          "admin"
-        ]
-      }
-    },
-    "/admin/seed/contacts": {
-      "post": {
-        "description": "Seed ``contact`` rows from a JSON body (PR #39).\n\nSame shape as ``/admin/seed/target-companies``: the body IS the seed\npayload, so the operator's private Tippie alumni JSON never has to\nland on the Railway container::\n\n    curl -X POST -H 'Content-Type: application/json' \\\n         -d @/tmp/contacts.json \\\n         https://<host>/admin/seed/contacts\n\nIdempotent. Re-running with the same payload returns ``inserted=0``\nand ``skipped_duplicate_*`` matching the prior insert count, because\ndedup uses ``LOWER(email_primary)`` / ``LOWER(linkedin_url)`` \u2014\ncase-insensitive, matches the partial unique indexes.\n\nPrivacy: response shape contains no names, emails, or LinkedIn URLs;\nsame for the structlog line emitted by the seed service.\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
-        "operationId": "seed_contacts_admin_seed_contacts_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "items": {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                "title": "Rows",
-                "type": "array"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": {
-                    "type": "integer"
-                  },
-                  "title": "Response Seed Contacts Admin Seed Contacts Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Seed Contacts"
-      }
-    },
-    "/admin/seed/target-companies": {
-      "post": {
-        "description": "Seed target_company rows from a JSON body.\n\nIdempotent: each row's ``name`` is checked first; existing rows are\nskipped rather than updated. The body is the seed JSON itself, so the\nprivate seed file (``apps/api/seeds/target_companies.json``) never\nneeds to be uploaded to the Railway container \u2014 the operator runs::\n\n    curl -X POST -H 'Content-Type: application/json' \\\n         -d @apps/api/seeds/target_companies.json \\\n         https://<host>/admin/seed/target-companies\n\nReturns the insert / skip counts so the operator can verify the\nexpected number of rows landed.\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
-        "operationId": "seed_target_companies_admin_seed_target_companies_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "items": {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                "title": "Rows",
-                "type": "array"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": {
-                    "type": "integer"
-                  },
-                  "title": "Response Seed Target Companies Admin Seed Target Companies Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Seed Target Companies"
-      }
-    },
-    "/companies": {
-      "get": {
-        "description": "Paginated list of target_company rows with per-row posting counts.\n\nSingle SELECT with three correlated scalar subqueries\n(total_postings, active_postings, ats_set) so we don't N+1 the\ncounts. Plus one COUNT(*) for the pagination total = 2 queries.\n\nDefault sort: ``tier ASC NULLS LAST, name ASC``.\n\nTODO: add authentication before exposing publicly.",
-        "operationId": "list_companies_companies_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "tier",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "items": {
-                    "type": "integer"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Tier"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 50,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "offset",
-            "required": false,
-            "schema": {
-              "default": 0,
-              "title": "Offset",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response List Companies Companies Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Companies",
-        "tags": [
-          "public"
-        ]
-      }
-    },
-    "/contacts": {
-      "get": {
-        "description": "Paginated list of contacts for the Contacts page (PR #51).\n\nDefault behaviour:\n  * Excludes archived rows (``archived_at IS NULL``). Pass\n    ``include_archived=true`` to include them. The exclusion happens\n    in SQL \u2014 never in Python \u2014 so it matches the partial-UNIQUE-index\n    scope on email/LinkedIn (re-ingesting an archived contact's\n    email is allowed because their old row no longer occupies the\n    unique slot; see migration ``e8f9a0b1c2d3``).\n  * ``ORDER BY created_at DESC, id ASC`` \u2014 newest contacts first,\n    stable ``id ASC`` tiebreaker on same-second creates.\n  * Two queries total: one COUNT(*), one SELECT.\n\nFilter: ``source_type`` repeating param (``?source_type=tippie_alumni\n&source_type=linkedin_outreach``) ORs the matches.\n\nSearch: ``?search=foo`` runs a case-insensitive substring match on\n``first_name``, ``last_name``, and the concatenation. ILIKE is the\nright call here \u2014 it's a free-form search, not enum membership.\n\nTODO: add authentication before exposing publicly. The list returns\nreal PII; the single-operator trust model is the only thing holding\nuntil proper auth lands.",
-        "operationId": "list_contacts_contacts_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "source_type",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Source Type"
-            }
-          },
-          {
-            "in": "query",
-            "name": "search",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Search"
-            }
-          },
-          {
-            "in": "query",
-            "name": "include_archived",
-            "required": false,
-            "schema": {
-              "default": false,
-              "title": "Include Archived",
-              "type": "boolean"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 50,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "offset",
-            "required": false,
-            "schema": {
-              "default": 0,
-              "title": "Offset",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response List Contacts Contacts Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Contacts",
-        "tags": [
-          "public"
-        ]
-      }
-    },
-    "/enrichment/companies/sweep": {
-      "post": {
-        "description": "Run ``sweep_companies`` over every ``target_company`` row.\n\nCalled by the daily ``enrich-companies`` GitHub Actions cron at\n07:00 UTC (one hour after the daily ingest at 06:00 UTC, so newly\ndiscovered target_companies have time to land first).\n\nNo auth \u2014 same trust model as the rest of ``/admin/*`` and\n``/operator/*`` (single-user dev mode). Add a shared-secret guard\nacross the whole admin surface in a future PR.",
-        "operationId": "sweep_companies_endpoint_enrichment_companies_sweep_post",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Sweep Companies Endpoint Enrichment Companies Sweep Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Sweep Companies Endpoint",
-        "tags": [
-          "enrichment"
-        ]
-      }
-    },
-    "/enrichment/companies/{company_id}/retry": {
-      "post": {
-        "description": "Reset ``enrichment_attempt_count`` for one company and re-run enrichment.\n\nFor manual recovery from the ``exhausted`` state. Also clears any\ncached description / enriched_at so the next call is a fresh attempt.",
-        "operationId": "retry_company_enrichment_endpoint_enrichment_companies__company_id__retry_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "company_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Company Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Retry Company Enrichment Endpoint Enrichment Companies  Company Id  Retry Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Retry Company Enrichment Endpoint",
-        "tags": [
-          "enrichment"
-        ]
-      }
-    },
-    "/enrichment/divisions/sweep": {
-      "post": {
-        "description": "Discover (company, dept, team) tuples + enrich each division.\n\nCalled by the daily ``enrich-divisions`` GitHub Actions cron at\n08:00 UTC (one hour after enrich-companies). Discovery is idempotent\nvia the ``uq_division_company_dept_team`` UNIQUE NULLS NOT DISTINCT\nconstraint; enrichment is idempotent via the per-row ``description\nIS NOT NULL`` skip.\n\nNo auth \u2014 same trust model as the rest of /admin and /enrichment.\nTODO: tighten before public exposure.",
-        "operationId": "sweep_divisions_endpoint_enrichment_divisions_sweep_post",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Sweep Divisions Endpoint Enrichment Divisions Sweep Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Sweep Divisions Endpoint",
-        "tags": [
-          "enrichment"
-        ]
-      }
-    },
-    "/enrichment/divisions/{division_id}/retry": {
-      "post": {
-        "description": "Reset ``enrichment_attempt_count`` for one division and re-run.",
-        "operationId": "retry_division_enrichment_endpoint_enrichment_divisions__division_id__retry_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "division_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Division Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Retry Division Enrichment Endpoint Enrichment Divisions  Division Id  Retry Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Retry Division Enrichment Endpoint",
-        "tags": [
-          "enrichment"
-        ]
-      }
-    },
-    "/enrichment/jd-summaries/sweep": {
-      "post": {
-        "description": "Run the JD-summary sweep over eligible ``job_posting`` rows.\n\nCalled by the daily ``enrich-jd-summaries`` GitHub Actions cron at\n08:30 UTC (after ingest + company + division enrichment). The sweep\ncaps at ``limit`` rows per call so a Gemini RPM hit doesn't drag the\nworkflow past its 15-minute timeout. Idempotent \u2014 each row's\n``jd_summary_markdown IS NOT NULL`` short-circuits the LLM call.\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
-        "operationId": "sweep_jd_summaries_endpoint_enrichment_jd_summaries_sweep_post",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 100,
-              "title": "Limit",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Sweep Jd Summaries Endpoint Enrichment Jd Summaries Sweep Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Sweep Jd Summaries Endpoint",
-        "tags": [
-          "enrichment"
-        ]
-      }
-    },
-    "/enrichment/jd-summaries/{posting_id}/retry": {
-      "post": {
-        "description": "Reset ``jd_summary_enrichment_attempt_count`` and re-run.\n\nMirrors the company / division retry endpoints. Clears any cached\nsummary so the next call is a fresh attempt.",
-        "operationId": "retry_jd_summary_enrichment_endpoint_enrichment_jd_summaries__posting_id__retry_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "posting_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Posting Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Retry Jd Summary Enrichment Endpoint Enrichment Jd Summaries  Posting Id  Retry Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Retry Jd Summary Enrichment Endpoint",
-        "tags": [
-          "enrichment"
-        ]
-      }
-    },
-    "/health": {
-      "get": {
-        "description": "Liveness check.",
-        "operationId": "health_health_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "title": "Response Health Health Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Health"
-      }
-    },
-    "/operator/profile": {
-      "get": {
-        "description": "Return the singleton operator profile (id=1).\n\n500 if the row is missing \u2014 that would mean the seeding migration\ndidn't run, which is a deployment bug rather than a runtime case.",
-        "operationId": "get_operator_profile_operator_profile_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Get Operator Profile Operator Profile Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Get Operator Profile",
-        "tags": [
-          "operator"
-        ]
-      },
-      "put": {
-        "description": "Partial update of the singleton operator profile (id=1).\n\nOnly fields present in the request body are touched. Validators on\n``OperatorProfileUpdate`` strip / dedupe list fields and reject\nnegative thresholds before the SQL UPDATE fires.\n\nFastAPI does the body validation itself \u2014 a 422 with a clean JSON\nerror array fires automatically when a field validator raises.",
-        "operationId": "update_operator_profile_operator_profile_put",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OperatorProfileUpdate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Update Operator Profile Operator Profile Put",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Update Operator Profile",
-        "tags": [
-          "operator"
-        ]
-      }
-    },
-    "/outcomes": {
-      "get": {
-        "description": "Paginated list of outcome events, sorted chronologically (ASC).\n\nOptionally narrows to one posting via ``?posting_id=...``. Feeds the\nApplied-page timeline UI.\n\nTODO: add authentication before exposing publicly.",
-        "operationId": "list_outcomes_outcomes_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "posting_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Posting Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 100,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "offset",
-            "required": false,
-            "schema": {
-              "default": 0,
-              "title": "Offset",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response List Outcomes Outcomes Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Outcomes",
-        "tags": [
-          "public"
-        ]
-      }
-    },
-    "/postings": {
-      "get": {
-        "description": "Paginated list of postings with the company/role/source/state nested.\n\nDefault sort: ``newest`` \u2192 ``first_seen_at DESC``. See\n``schemas/public.py::SortKey`` for the full enum and column mapping.\nEvery sort key gets ``job_posting.id ASC`` as a tiebreaker so\npagination stays stable across same-second timestamps or NULL\nsalary / tier rows. Two queries total:\n  1. COUNT(*) over the same WHERE (joined onto the state LATERAL too,\n     so state filters narrow the total the same way they narrow rows).\n  2. SELECT with TWO LATERALs \u2014 most-recent posting_source and\n     most-recent posting_action \u2014 folded into the main page query.\n\nState filter values: ``triage`` (no action OR latest = reset),\n``interested``, ``not_interested``, ``applied``, ``snoozed``. Repeating\n``?state=...&state=...`` ORs them. ``include_snoozed_past_only=true``\nfurther restricts the snoozed bucket to past-due / open >7d entries.\n\nTODO: add authentication before exposing publicly.",
-        "operationId": "list_postings_postings_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "tier",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "items": {
-                    "type": "integer"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Tier"
-            }
-          },
-          {
-            "in": "query",
-            "name": "ats",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Ats"
-            }
-          },
-          {
-            "in": "query",
-            "name": "remote_type",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Remote Type"
-            }
-          },
-          {
-            "in": "query",
-            "name": "role_family",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Role Family"
-            }
-          },
-          {
-            "in": "query",
-            "name": "state",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "State"
-            }
-          },
-          {
-            "in": "query",
-            "name": "include_snoozed_past_only",
-            "required": false,
-            "schema": {
-              "default": false,
-              "title": "Include Snoozed Past Only",
-              "type": "boolean"
-            }
-          },
-          {
-            "in": "query",
-            "name": "target_company_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Target Company Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "sort",
-            "required": false,
-            "schema": {
-              "default": "newest",
-              "enum": [
-                "newest",
-                "oldest",
-                "salary_high_to_low",
-                "tier",
-                "recently_posted",
-                "best_fit"
-              ],
-              "title": "Sort",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "per_company_cap",
-            "required": false,
-            "schema": {
-              "default": 0,
-              "title": "Per Company Cap",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 20,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "offset",
-            "required": false,
-            "schema": {
-              "default": 0,
-              "title": "Offset",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response List Postings Postings Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Postings",
-        "tags": [
-          "public"
-        ]
-      }
-    },
-    "/postings/{posting_id}": {
-      "get": {
-        "description": "Full detail for one posting, including matched division if any.\n\nDivision match uses ``IS NOT DISTINCT FROM`` so a posting and a\ndivision with ``team IS NULL`` both join correctly \u2014 matches the\nsemantics of the ``UNIQUE NULLS NOT DISTINCT`` constraint that\npopulates the table in PR #28b.\n\n404 when the posting id doesn't exist.\n\nTODO: add authentication before exposing publicly.",
-        "operationId": "get_posting_postings__posting_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "posting_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Posting Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Get Posting Postings  Posting Id  Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Posting",
-        "tags": [
-          "public"
-        ]
-      }
-    },
-    "/postings/{posting_id}/state": {
-      "post": {
-        "description": "Record one operator action against a posting (PR #31).\n\nReturns the resulting :class:`StateEmbedded` so the frontend can\nupdate its row without re-fetching the list.\n\nError mapping:\n  - Unknown ``action_type`` / ``reason``  \u2192 422 (Pydantic enum coercion)\n  - Cross-field rule violation             \u2192 422 (ValueError from service)\n  - Unknown ``posting_id``                 \u2192 404 (LookupError from service)\n\nLives under ``tags=[\"public\"]`` because it's the same trust model as\nthe rest of the public surface \u2014 single-user dev mode, TODO to lock\ndown before any wider deployment.",
-        "operationId": "post_posting_state_postings__posting_id__state_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "posting_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Posting Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PostingStateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Post Posting State Postings  Posting Id  State Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Post Posting State",
-        "tags": [
-          "public"
-        ]
-      }
-    },
-    "/stats/calibration": {
-      "get": {
-        "description": "KPIs + top rejected role families over a time window.\n\nSee ``services/stats.py`` for the stage-counting rules. Issues 2\nSQL queries: one multi-FILTER aggregation row, one GROUP BY for\nthe top role families.",
-        "operationId": "get_stats_calibration_stats_calibration_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "since",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Since"
-            }
-          },
-          {
-            "in": "query",
-            "name": "until",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Until"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Get Stats Calibration Stats Calibration Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Stats Calibration",
-        "tags": [
-          "public"
-        ]
-      }
-    },
-    "/stats/funnel": {
-      "get": {
-        "description": "Funnel stages + conversion rates over a time window.\n\nStages always returned in the order ``[surfaced, interested,\napplied]``; rates are pairwise across adjacent stages with ``null``\nwhen the upstream count is 0. Issues 1 SQL query.",
-        "operationId": "get_stats_funnel_stats_funnel_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "since",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Since"
-            }
-          },
-          {
-            "in": "query",
-            "name": "until",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Until"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Get Stats Funnel Stats Funnel Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Stats Funnel",
-        "tags": [
-          "public"
-        ]
+        "title": "ValidationError"
       }
     }
   }
