@@ -160,7 +160,7 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
                 value={field.value}
                 onChange={field.onChange}
                 min={50}
-                max={500}
+                max={1000}
                 step={10}
                 inputAriaLabel="Maximum applicant count"
               />

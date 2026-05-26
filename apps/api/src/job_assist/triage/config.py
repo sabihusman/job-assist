@@ -55,8 +55,12 @@ class HardRuleConfig:
 
     # Postings with more than this many declared applicants are dropped.
     # No ATS adapter populates ``applicant_count`` today; the rule is a
-    # no-op for those rows.
-    applicant_cap: int = 150
+    # no-op for those rows. Raised from 150 → 500 in May 2026 ahead of
+    # the LinkedIn adapter — competitive enterprise PM roles regularly
+    # show 200-800 applicants, so 150 would have surfaced as a
+    # near-universal drop on day one of LinkedIn ingestion. See
+    # ``DECISIONS.md`` ADR-008 for the full history note.
+    applicant_cap: int = 500
 
     # Substring blocklist for staffing-firm / agency canonical company
     # names. Match is case-insensitive substring against

@@ -150,9 +150,11 @@ Defaults (the values that seed `HardRuleConfig`):
 | Threshold | Default |
 |---|---|
 | `salary_floor_usd` | `85_000` |
-| `applicant_cap` | `150` |
+| `applicant_cap` | `500` |
 | `geo_whitelist` | `Remote`, `Des Moines`, `NYC`, `New York`, `Austin`, `San Francisco`, `Bay Area`, `Seattle`, `Minneapolis`, `Chicago` |
 | `staffing_firm_blocklist` | Robert Half, Aerotek, Insight Global, Apex Systems, Beacon Hill, TEKsystems, Modis, Randstad, Kforce, Adecco |
+
+**History note (`applicant_cap`):** Raised from 150 → 500 in May 2026 ahead of the LinkedIn adapter. Competitive enterprise PM roles on LinkedIn regularly surface 200–800 applicant counts, so the original 150 would have triggered a near-universal drop on day one of LinkedIn ingestion. The migration (`a1b2c3d4e5f6`) updates the column server default and the seeded singleton row (only if still on the old default — operator-customized values are preserved). The Settings slider's `max` was widened 500 → 1000 in the same PR to give 2× headroom for operator tuning.
 
 **Rationale (priority order):**
 - `closed_channel` and `role_filter` are operator-set company-level signals; cheapest checks, run first.

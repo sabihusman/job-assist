@@ -54,8 +54,10 @@ class OperatorProfile(Base):
     # salary_min exceeds this value are dropped.
     salary_ceiling_usd: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    # Mirrors HardRuleConfig.applicant_cap.
-    applicant_cap: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("150"))
+    # Mirrors HardRuleConfig.applicant_cap. Default raised 150 → 500
+    # in May 2026 — see ``DECISIONS.md`` ADR-008 history note. The
+    # existing seeded singleton row was migrated by the same change.
+    applicant_cap: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("500"))
 
     # PR #43: explicit list of ``SeniorityLevel`` enum values to include.
     # NULL or empty = include all levels (filter disabled). A posting with

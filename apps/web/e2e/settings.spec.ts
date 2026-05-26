@@ -21,7 +21,7 @@ const DEFAULT_PROFILE = {
   role_keywords: ['product manager', 'senior pm'],
   geo_whitelist: ['Remote US', 'NYC'],
   salary_floor_usd: 85000,
-  applicant_cap: 150,
+  applicant_cap: 500,
   staffing_firm_blocklist: ['Robert Half', 'Aerotek'],
   created_at: '2026-04-01T00:00:00Z',
   updated_at: '2026-04-01T00:00:00Z',

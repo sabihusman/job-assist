@@ -4,7 +4,7 @@ import { describe, expect, test, vi } from 'vitest';
 
 import { ConfirmRulesModal, type RuleChange } from '@/components/settings/ConfirmRulesModal';
 
-const ONE_CHANGE: RuleChange[] = [{ label: 'Maximum applicant count', from: '150', to: '200' }];
+const ONE_CHANGE: RuleChange[] = [{ label: 'Maximum applicant count', from: '500', to: '550' }];
 const TWO_CHANGES: RuleChange[] = [
   ...ONE_CHANGE,
   { label: 'Salary floor', from: '$85K', to: '$100K' },
@@ -50,8 +50,8 @@ describe('ConfirmRulesModal', () => {
       />,
     );
     expect(screen.getByText('Maximum applicant count')).toBeInTheDocument();
-    expect(screen.getByText('150')).toBeInTheDocument();
-    expect(screen.getByText('200')).toBeInTheDocument();
+    expect(screen.getByText('500')).toBeInTheDocument();
+    expect(screen.getByText('550')).toBeInTheDocument();
     expect(screen.getByText('Salary floor')).toBeInTheDocument();
   });
 
