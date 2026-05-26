@@ -167,10 +167,7 @@ type OpenapiResult<T> = {
   response?: Response | undefined;
 };
 
-function throwIfError<T>(
-  result: OpenapiResult<T>,
-  fallbackLabel: string,
-): T {
+function throwIfError<T>(result: OpenapiResult<T>, fallbackLabel: string): T {
   if (result.error || result.data === undefined) {
     throw new MutationError({
       kind: 'application',

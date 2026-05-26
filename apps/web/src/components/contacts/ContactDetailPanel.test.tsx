@@ -83,7 +83,11 @@ beforeEach(() => {
         response: new Response(null, { status: 200 }),
       };
     }
-    return { data: null, error: { detail: 'unmocked' }, response: new Response(null, { status: 500 }) };
+    return {
+      data: null,
+      error: { detail: 'unmocked' },
+      response: new Response(null, { status: 500 }),
+    };
   });
 });
 
@@ -116,7 +120,10 @@ describe('ContactDetailPanel', () => {
 
     await user.click(screen.getByRole('button', { name: 'Archive' }));
     await waitFor(() => expect(postMock).toHaveBeenCalled());
-    const [path, opts] = postMock.mock.calls[0] as [string, { params: { path: { contact_id: string } } }];
+    const [path, opts] = postMock.mock.calls[0] as [
+      string,
+      { params: { path: { contact_id: string } } },
+    ];
     expect(path).toBe('/contacts/{contact_id}/archive');
     expect(opts.params.path.contact_id).toBe('c-1');
   });

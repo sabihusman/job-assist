@@ -16,7 +16,7 @@ export function PipelineColumn({
   // Stages display in the spec's casing (e.g. "Recruiter screen") —
   // map to short uppercase headers per UI_SPEC.md (RECRUITER, PHONE, …).
   const headerLabel =
-    stage === 'recruiter' ? 'RECRUITER' : STAGE_LABELS[stage].split(' ')[0]!.toUpperCase();
+    stage === 'recruiter' ? 'RECRUITER' : (STAGE_LABELS[stage].split(' ')[0] ?? '').toUpperCase();
 
   return (
     <section

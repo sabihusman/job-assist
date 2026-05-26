@@ -40,11 +40,7 @@ describe('OutreachTimeline', () => {
       makeMsg({ id: 'm-2', subject: 'Second' }),
       makeMsg({ id: 'm-3', subject: 'Third' }),
     ];
-    render(
-      wrap(
-        <OutreachTimeline contactId="c-1" items={items} total={3} isLoading={false} />,
-      ),
-    );
+    render(wrap(<OutreachTimeline contactId="c-1" items={items} total={3} isLoading={false} />));
 
     const rows = screen.getAllByTestId('outreach-row');
     expect(rows).toHaveLength(3);
@@ -81,9 +77,7 @@ describe('OutreachTimeline', () => {
     );
     expect(screen.getByRole('button', { name: /Load more/i })).toBeInTheDocument();
 
-    rerender(
-      wrap(<OutreachTimeline contactId="c-1" items={items} total={2} isLoading={false} />),
-    );
+    rerender(wrap(<OutreachTimeline contactId="c-1" items={items} total={2} isLoading={false} />));
     expect(screen.queryByRole('button', { name: /Load more/i })).not.toBeInTheDocument();
   });
 

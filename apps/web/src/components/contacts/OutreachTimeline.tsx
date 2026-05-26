@@ -24,7 +24,7 @@
  * UI is forward-compatible (renders the chip for any source value).
  */
 
-import { ArrowDownLeft, ArrowUpRight, Mail, Link2, MessageSquare } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, Link2, Mail, MessageSquare } from 'lucide-react';
 import { useState } from 'react';
 
 import { useContactOutreach } from '@/lib/api/contacts';
@@ -54,15 +54,13 @@ export function OutreachTimeline({
   // Operator-driven pagination layers on top: we fetch additional
   // pages via separate queries and concatenate locally.
   const [extraOffset, setExtraOffset] = useState<number | null>(null);
-  const extra = useContactOutreach(
-    extraOffset !== null ? contactId : null,
-    { limit: PAGE_SIZE, offset: extraOffset ?? 0 },
-  );
+  const extra = useContactOutreach(extraOffset !== null ? contactId : null, {
+    limit: PAGE_SIZE,
+    offset: extraOffset ?? 0,
+  });
 
   const allItems: readonly OutreachMessage[] =
-    extraOffset !== null && extra.data
-      ? [...items, ...extra.data.items]
-      : items;
+    extraOffset !== null && extra.data ? [...items, ...extra.data.items] : items;
 
   const hasMore = total > allItems.length;
 
@@ -70,7 +68,10 @@ export function OutreachTimeline({
     return (
       <div className="flex flex-col gap-2" data-testid="outreach-timeline-loading">
         {[0, 1, 2].map((i) => (
-          <div key={i} className="h-12 animate-pulse rounded-md border border-border bg-surface-2" />
+          <div
+            key={i}
+            className="h-12 animate-pulse rounded-md border border-border bg-surface-2"
+          />
         ))}
       </div>
     );
@@ -138,11 +139,14 @@ function OutreachRow({ message }: { message: OutreachMessage }) {
           }
         >
           <DirIcon className="h-3 w-3" aria-hidden="true" />
-          {(MESSAGE_DIRECTION_LABELS as Record<string, string>)[message.direction as MessageDirection] ?? message.direction}
+          {(MESSAGE_DIRECTION_LABELS as Record<string, string>)[
+            message.direction as MessageDirection
+          ] ?? message.direction}
         </span>
         <span className="inline-flex items-center gap-1 text-muted-foreground">
           <ChannelIcon className="h-3 w-3" aria-hidden="true" />
-          {(MESSAGE_CHANNEL_LABELS as Record<string, string>)[message.channel as MessageChannel] ?? message.channel}
+          {(MESSAGE_CHANNEL_LABELS as Record<string, string>)[message.channel as MessageChannel] ??
+            message.channel}
         </span>
         {message.source === 'gmail_auto' && (
           <span

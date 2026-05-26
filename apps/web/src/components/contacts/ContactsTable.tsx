@@ -146,10 +146,7 @@ function ContactRow({
           the keyboard surface, so the matching ``onKeyDown`` here is a
           no-op that exists only to satisfy a11y/useKeyWithClickEvents. */}
       {/* biome-ignore lint/a11y/useKeyWithClickEvents: cell forwards key events to the anchor children */}
-      <td
-        className="px-3 py-2 align-top"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <td className="px-3 py-2 align-top" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-2">
           {contact.email_primary && (
             <a

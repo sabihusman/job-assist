@@ -36,26 +36,34 @@ export default function StatsPage() {
 
     // Per-stage distinct posting counts. The deeper-stage rows count
     // each posting at most once even if it has multiple events.
-    const seen: Record<string, Set<string>> = {
+    //
+    // Use a strict object type rather than ``Record<string, Set<string>>``
+    // so TS knows every key is present — avoids the non-null assertions
+    // that biome's noNonNullAssertion rule flags.
+    type StageKey = 'recruiter' | 'phone' | 'video' | 'onsite' | 'offer';
+    const seen: Record<StageKey, Set<string>> = {
       recruiter: new Set(),
       phone: new Set(),
       video: new Set(),
       onsite: new Set(),
       offer: new Set(),
     };
+    const isStageKey = (s: string | null): s is StageKey =>
+      s === 'recruiter' || s === 'phone' || s === 'video' || s === 'onsite' || s === 'offer';
+
     for (const o of outcomes) {
       if (!o.posting_id) continue;
       const s = stageOf(o.stage);
-      if (s && s in seen) seen[s]!.add(o.posting_id);
+      if (isStageKey(s)) seen[s].add(o.posting_id);
     }
 
     return [
       { stage: 'Applied', count: applied.length },
-      { stage: 'Recruiter screen', count: seen.recruiter!.size },
-      { stage: 'Phone interview', count: seen.phone!.size },
-      { stage: 'Video interview', count: seen.video!.size },
-      { stage: 'Onsite', count: seen.onsite!.size },
-      { stage: 'Offer', count: seen.offer!.size },
+      { stage: 'Recruiter screen', count: seen.recruiter.size },
+      { stage: 'Phone interview', count: seen.phone.size },
+      { stage: 'Video interview', count: seen.video.size },
+      { stage: 'Onsite', count: seen.onsite.size },
+      { stage: 'Offer', count: seen.offer.size },
     ];
   }, [appliedQ.data, outcomesQ.data]);
 

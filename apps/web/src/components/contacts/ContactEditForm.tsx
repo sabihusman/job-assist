@@ -145,9 +145,7 @@ export function ContactEditForm({ contact }: { contact: ContactDetail }) {
           <input
             type="url"
             value={(value('linkedin_url') as string) ?? ''}
-            onChange={(e) =>
-              setEdits((s) => ({ ...s, linkedin_url: emptyToNull(e.target.value) }))
-            }
+            onChange={(e) => setEdits((s) => ({ ...s, linkedin_url: emptyToNull(e.target.value) }))}
             className={inputCls}
           />
         </Field>

@@ -29,9 +29,9 @@ import { useEffect } from 'react';
 import { toast } from 'sonner';
 
 import { ContactEditForm } from '@/components/contacts/ContactEditForm';
+import { CONTACT_SOURCE_LABELS } from '@/components/contacts/ContactsTable';
 import { LogOutreachForm } from '@/components/contacts/LogOutreachForm';
 import { OutreachTimeline } from '@/components/contacts/OutreachTimeline';
-import { CONTACT_SOURCE_LABELS } from '@/components/contacts/ContactsTable';
 import {
   useContactArchive,
   useContactDetail,
@@ -99,7 +99,9 @@ export function ContactDetailPanel({ contactId, onClose }: ContactDetailPanelPro
         // Max-height keeps the page underneath visible on small viewports.
         'max-h-[85vh] lg:max-h-none',
         // Slide direction differs per viewport (translate-y vs translate-x).
-        open ? 'translate-y-0 lg:translate-x-0' : 'translate-y-full lg:translate-y-0 lg:translate-x-full',
+        open
+          ? 'translate-y-0 lg:translate-x-0'
+          : 'translate-y-full lg:translate-y-0 lg:translate-x-full',
       )}
     >
       {/* Header */}
@@ -152,9 +154,16 @@ export function ContactDetailPanel({ contactId, onClose }: ContactDetailPanelPro
         </div>
       </header>
 
-      {/* Scroll region */}
+      {/* Scroll region. The panel is always mounted (closed via
+          ``translate-y-full`` for the slide animation), so we must
+          NOT render the loading skeleton when the panel is closed —
+          its three ``animate-pulse`` elements would otherwise be
+          present in the DOM whenever ``contactId === null`` and the
+          page-level E2E ``waitForDataReady`` would block forever
+          waiting for them to disappear. Gate the skeleton on ``open``
+          so the closed panel renders nothing in this region. */}
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
-        {isError ? (
+        {!open ? null : isError ? (
           <p className="text-[13px] text-negative">
             {(error as Error)?.message ?? 'Failed to load contact.'}
           </p>
