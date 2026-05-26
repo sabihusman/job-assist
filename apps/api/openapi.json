@@ -764,7 +764,7 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "default": 0,
+              "default": 3,
               "title": "Per Company Cap"
             }
           },
