@@ -1,18 +1,5 @@
 """Tests for ``GET /postings?per_company_cap=N`` (PR #58).
 
-HOTFIX NOTE (incident 2026-06-02 — see ``hotfix/postings-pooler-incident``):
-The endpoint's *default* value flipped from ``3`` to ``0`` because PR
-#58's CTE collided with asyncpg's prepared statement cache when
-Supabase's Transaction-mode pooler rotated connections, surfacing
-every UI call as a 500. The cap code path itself still works when
-``per_company_cap > 0`` is passed explicitly — these tests exercise
-that path. The "default cap is 3" test was renamed to
-``test_cap_3_when_explicitly_requested`` (pass ``per_company_cap=3``)
-and a new ``test_default_cap_0_returns_all_rows`` was added to lock
-the new default. Restore the original default in the follow-up PR
-that fixes the underlying statement-cache behaviour.
-
-
 The cap is the operator-facing version of "don't drown me in 14
 postings from the same Workday tenant." Implementation is a ROW_NUMBER
 CTE partitioned by ``COALESCE(target_company_id::text, id::text)`` so
@@ -391,20 +378,14 @@ async def test_cap_with_id_tiebreaker_on_same_score_and_first_seen(
 
 @_NEEDS_DB
 @pytest.mark.asyncio
-async def test_cap_3_when_explicitly_requested(db_session: Any) -> None:
-    """``?per_company_cap=3`` applies the cap (3+2+3 → 8 rows).
-
-    Renamed from ``test_default_cap_3_applied_when_param_omitted`` in
-    the hotfix branch — the default is now ``0``, so this assertion
-    only holds when the operator passes the param explicitly. The
-    intent (cap=3 surfaces A's top 3 by score; A's bottom 2 absent)
-    is preserved.
-    """
+async def test_default_cap_3_applied_when_param_omitted(db_session: Any) -> None:
+    """Brief: default ``per_company_cap=3``. Calling /postings without
+    the param applies the cap silently."""
     ids = await _seed_cap_fixture(db_session)
     ac = await _client(db_session)
     try:
         async with ac:
-            resp = await ac.get("/postings?limit=100&sort=best_fit&per_company_cap=3")
+            resp = await ac.get("/postings?limit=100&sort=best_fit")
     finally:
         await _drop_override()
 
@@ -415,20 +396,3 @@ async def test_cap_3_when_explicitly_requested(db_session: Any) -> None:
     surfaced = {item["id"] for item in body["items"]}
     assert str(ids["a"][3]) not in surfaced  # score 70
     assert str(ids["a"][4]) not in surfaced  # score 60
-
-
-@_NEEDS_DB
-@pytest.mark.asyncio
-async def test_default_cap_0_returns_all_rows(db_session: Any) -> None:
-    """Hotfix: default per_company_cap is now 0 (disabled). Calling
-    /postings with no cap param returns all rows from the fixture,
-    not capped to 3 per company."""
-    await _seed_cap_fixture(db_session)
-    ac = await _client(db_session)
-    try:
-        async with ac:
-            resp = await ac.get("/postings?limit=100")
-    finally:
-        await _drop_override()
-    body = resp.json()
-    assert body["total"] == 10  # All 10 fixture rows, not the 8 the cap would yield

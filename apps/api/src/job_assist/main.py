@@ -1106,18 +1106,7 @@ async def list_postings(
     include_snoozed_past_only: bool = False,
     target_company_id: uuid.UUID | None = None,
     sort: SortKey = DEFAULT_SORT,
-    # HOTFIX (incident 2026-06-02): default flipped from 3 → 0 because
-    # PR #58's per-company-cap CTE collides with asyncpg's prepared
-    # statement cache when Supabase's Transaction-mode pooler rotates
-    # connections (``prepared statement "__asyncpg_stmt_N__" already
-    # exists``). Every UI call hit the default and surfaced as a 500.
-    # The cap code path still works when called explicitly with
-    # ``per_company_cap > 0`` (and the existing PR #58 tests cover it),
-    # but every such call is currently broken in production. Restore a
-    # non-zero default once the follow-up PR fixes the statement-cache
-    # behaviour (statement_cache_size=0 on the engine, raw text() SQL,
-    # or a CTE rewrite — to be determined via Read-First).
-    per_company_cap: int = 0,
+    per_company_cap: int = 3,
     limit: int = 20,
     offset: int = 0,
 ) -> dict[str, Any]:
