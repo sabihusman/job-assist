@@ -410,6 +410,53 @@ The trade-off of disabling the cache is microscopic — slight query parsing ove
 
 ---
 
+### 5.6 Ruff's en-dash flags scope by file location
+
+`RUF002` fires on ambiguous Unicode dashes (`–`, U+2013) in docstrings and string literals; `RUF003` fires on the same characters in comments. Both are easy to trigger because the en-dash reflex for number ranges (e.g., `200–800`) feels natural in prose but lights up Ruff.
+
+The trap: locally running `ruff check src tests` skips `migrations/` and any other directory not explicitly named. CI runs `ruff check .` from `apps/api`, which catches everything including migration files. A local lint pass can be "clean" while CI fails on the same code.
+
+Three fixes, pick one:
+1. **Match CI scope locally:** always run `ruff check .` from `apps/api`, never narrow to `src tests`.
+2. **Stick to ASCII hyphens** in Python files. `200-800` is fine; `–` is a footgun.
+3. **Pre-commit hook** that runs `ruff check .` and blocks the commit on any failure. Higher friction but catches the bug before push.
+
+Pick 1 + 2. Pre-commit is overkill for a single-operator repo.
+
+**Discovered in:** PR #59 — en-dash in `config.py` comment, then again in the migration docstring on the same PR. Two strikes in one session.
+
+---
+
+### 5.7 OpenAPI snapshot regen must match CI's exact command including flags
+
+The drift-check compares the committed `apps/api/openapi.json` byte-for-byte against `app.openapi()` generated under CI's exact invocation. Small differences in regeneration flags produce snapshot diffs that fail CI even when the schema is semantically identical.
+
+Specifically: `json.dumps(..., sort_keys=True)` produces a different byte sequence than `json.dumps(...)` without `sort_keys`. If CI regenerates one way and the operator regenerates the other way, every PR touching the schema will fail the drift check.
+
+Mitigation: ship `apps/api/scripts/regen_openapi.py` that exactly mirrors the CI regeneration logic — same `sort_keys` setting, same indent, same newline behavior, same encoding. Reference the script from any PR that touches the OpenAPI surface.
+
+Open question worth a future small PR: lock CI's regeneration into a single shared helper imported by both the snapshot writer and the drift-check reader, so the two paths can't diverge.
+
+**Discovered in:** PR #59 — initial OpenAPI regen used `sort_keys=True`, CI's command did not; drift-check failed until the regen flag matched CI.
+
+---
+
+### 5.8 Migration UPDATE guards on the OLD value can no-op silently
+
+When a schema migration includes both `op.alter_column(server_default=NEW)` and `op.execute("UPDATE table SET col = NEW WHERE col = OLD")`, the UPDATE is intentionally guarded on the old default value. This pattern correctly preserves operator-customized values across deploys — if the operator already changed the value, the WHERE clause skips that row.
+
+The side effect: if any operator already manually set the value to NEW before the migration shipped, the UPDATE matches zero rows and runs as a true no-op. The schema default updates but no `updated_at` ticks on any existing row.
+
+To verify a migration actually ran the UPDATE you intended (vs. running but no-op'ing), check both:
+- **Schema-level effect:** column default changed (visible in `pg_attribute` or via SQLAlchemy reflection).
+- **Data-level effect:** at least one row's `updated_at` advanced past the migration timestamp.
+
+If the data-level signal is absent but the schema-level signal is present, the migration ran but updated zero rows. That's usually benign (the row already had the new value), but worth confirming the production state matches expectations before assuming the migration "worked."
+
+**Discovered in:** PR #59 (applicant_cap 150 → 500). The live `operator_profile.updated_at` predated the migration merge by 3 days; investigation confirmed an earlier manual PUT had set the value to 500, and the migration's `WHERE applicant_cap = 150` guard correctly skipped the row. Both schema and data ended up in the desired state via two independent paths, but the data path wasn't the migration.
+
+---
+
 ## 6. Privacy / Safety Bestiary
 
 ### 6.1 xlsx files containing real PII never committed
