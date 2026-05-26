@@ -130,6 +130,36 @@ class ActionReason(enum.StrEnum):
     too_junior = "too_junior"
 
 
+class MessageDirection(enum.StrEnum):
+    """Outreach message direction (PR #52).
+
+    ``outbound`` — operator initiated.
+    ``inbound``  — contact responded / reached out first.
+    """
+
+    outbound = "outbound"
+    inbound = "inbound"
+
+
+class MessageChannel(enum.StrEnum):
+    """Channel the outreach message was sent through (PR #52)."""
+
+    email = "email"
+    linkedin = "linkedin"
+    other = "other"
+
+
+class MessageSource(enum.StrEnum):
+    """Where the outreach_message row came from (PR #52).
+
+    ``manual``     — operator-logged from the Contacts page (PR #52).
+    ``gmail_auto`` — Gmail correspondence auto-detection (PR #53).
+    """
+
+    manual = "manual"
+    gmail_auto = "gmail_auto"
+
+
 class ClosedChannelReason(enum.StrEnum):
     multiple_rejections = "multiple_rejections"
     culture_concern = "culture_concern"

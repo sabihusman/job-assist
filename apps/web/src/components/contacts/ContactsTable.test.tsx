@@ -1,5 +1,6 @@
 import { render, screen, within } from '@testing-library/react';
-import { describe, expect, test } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, test, vi } from 'vitest';
 
 import { ContactsTable } from '@/components/contacts/ContactsTable';
 import type { ContactListItem } from '@/lib/contacts/types';
@@ -158,5 +159,76 @@ describe('ContactsTable', () => {
     );
     const row = screen.getByTestId('contact-row');
     expect(row.getAttribute('data-archived')).toBe('false');
+  });
+
+  // ── PR #52: click-to-open detail panel ─────────────────────────────────────
+
+  test('clicking a row calls onOpenDetail with the contact id', async () => {
+    const user = userEvent.setup();
+    const onOpenDetail = vi.fn();
+    render(
+      <ContactsTable
+        contacts={[makeContact({ id: 'c-target' })]}
+        showingArchived={false}
+        onOpenDetail={onOpenDetail}
+      />,
+    );
+    await user.click(screen.getByTestId('contact-row'));
+    expect(onOpenDetail).toHaveBeenCalledTimes(1);
+    expect(onOpenDetail).toHaveBeenCalledWith('c-target');
+  });
+
+  test('Enter key on focused row opens detail (keyboard accessibility)', async () => {
+    const user = userEvent.setup();
+    const onOpenDetail = vi.fn();
+    render(
+      <ContactsTable
+        contacts={[makeContact({ id: 'c-kb' })]}
+        showingArchived={false}
+        onOpenDetail={onOpenDetail}
+      />,
+    );
+    const row = screen.getByTestId('contact-row');
+    row.focus();
+    await user.keyboard('{Enter}');
+    expect(onOpenDetail).toHaveBeenCalledWith('c-kb');
+  });
+
+  test('clicking the email link does NOT trigger the row click', async () => {
+    const user = userEvent.setup();
+    const onOpenDetail = vi.fn();
+    render(
+      <ContactsTable
+        contacts={[makeContact({ email_primary: 'someone@example.test' })]}
+        showingArchived={false}
+        onOpenDetail={onOpenDetail}
+      />,
+    );
+    const link = screen.getByRole('link', { name: /Email Test Person/i });
+    await user.click(link);
+    // stopPropagation guard: the row open should NOT fire when the
+    // operator is using the email link affordance.
+    expect(onOpenDetail).not.toHaveBeenCalled();
+  });
+
+  test('selectedId highlights the matching row', () => {
+    render(
+      <ContactsTable
+        contacts={[makeContact({ id: 'c-1' }), makeContact({ id: 'c-2' })]}
+        showingArchived={false}
+        onOpenDetail={vi.fn()}
+        selectedId="c-2"
+      />,
+    );
+    const rows = screen.getAllByTestId('contact-row');
+    expect(rows[0]).toHaveAttribute('data-selected', 'false');
+    expect(rows[1]).toHaveAttribute('data-selected', 'true');
+  });
+
+  test('rows are not clickable when onOpenDetail is undefined (back-compat)', () => {
+    render(<ContactsTable contacts={[makeContact()]} showingArchived={false} />);
+    const row = screen.getByTestId('contact-row');
+    expect(row).not.toHaveAttribute('role', 'button');
+    expect(row).not.toHaveAttribute('tabindex');
   });
 });

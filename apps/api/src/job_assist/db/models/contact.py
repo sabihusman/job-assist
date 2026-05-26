@@ -53,6 +53,9 @@ class Contact(Base):
     )
     contact_opt_in_topics: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # PR #52 — operator-editable phone number. Nullable; the Tippie
+    # alumni source doesn't carry phone, so existing rows stay NULL.
+    phone: Mapped[str | None] = mapped_column(Text, nullable=True)
     # ── PR #51 — soft-delete + target_company linkage ──────────────────
     # ``archived_at`` doubles as the soft-delete marker AND the predicate
     # scoping the partial UNIQUE indexes on email_primary / linkedin_url

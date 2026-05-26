@@ -27,9 +27,15 @@ import { cn } from '@/lib/utils';
 export function ContactsTable({
   contacts,
   showingArchived,
+  onOpenDetail,
+  selectedId,
 }: {
   contacts: readonly ContactListItem[];
   showingArchived: boolean;
+  /** Optional — when provided, rows become clickable and open the detail panel. */
+  onOpenDetail?: (contactId: string) => void;
+  /** Optional — visually highlights the currently-open contact's row. */
+  selectedId?: string | null;
 }) {
   if (contacts.length === 0) {
     return (
@@ -65,7 +71,12 @@ export function ContactsTable({
         </thead>
         <tbody>
           {contacts.map((c) => (
-            <ContactRow key={c.id} contact={c} />
+            <ContactRow
+              key={c.id}
+              contact={c}
+              onOpenDetail={onOpenDetail}
+              isSelected={selectedId === c.id}
+            />
           ))}
         </tbody>
       </table>
@@ -81,14 +92,42 @@ function Th({ children }: { children: React.ReactNode }) {
   );
 }
 
-function ContactRow({ contact }: { contact: ContactListItem }) {
+function ContactRow({
+  contact,
+  onOpenDetail,
+  isSelected,
+}: {
+  contact: ContactListItem;
+  onOpenDetail?: (contactId: string) => void;
+  isSelected?: boolean;
+}) {
   const fullName = formatFullName(contact);
+  const openFn = onOpenDetail;
+  const clickable = openFn !== undefined;
+  // Keyboard: Enter / Space open the panel when the row has focus.
+  const handleKey = (e: React.KeyboardEvent<HTMLTableRowElement>) => {
+    if (!openFn) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      openFn(contact.id);
+    }
+  };
+  // The email/LinkedIn cell contains its own anchors. Use stopPropagation
+  // there so clicking those links opens the link, not the panel.
   return (
     <tr
       data-testid="contact-row"
       data-archived={contact.archived_at !== null}
+      data-selected={isSelected ? 'true' : 'false'}
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      aria-label={clickable ? `Open detail for ${fullName}` : undefined}
+      onClick={openFn ? () => openFn(contact.id) : undefined}
+      onKeyDown={openFn ? handleKey : undefined}
       className={cn(
         'border-b border-border/60 hover:bg-accent/30',
+        clickable && 'cursor-pointer',
+        isSelected && 'bg-accent/40',
         contact.archived_at !== null && 'opacity-60',
       )}
     >
@@ -101,7 +140,16 @@ function ContactRow({ contact }: { contact: ContactListItem }) {
       <td className="px-3 py-2 align-top">
         <SourceChip source={contact.source_type} />
       </td>
-      <td className="px-3 py-2 align-top">
+      {/* Channels cell: anchors call ``stopPropagation`` so clicking
+          mailto:/LinkedIn doesn't also open the detail panel. The cell
+          itself isn't keyboard-focusable — the anchors inside it are
+          the keyboard surface, so the matching ``onKeyDown`` here is a
+          no-op that exists only to satisfy a11y/useKeyWithClickEvents. */}
+      {/* biome-ignore lint/a11y/useKeyWithClickEvents: cell forwards key events to the anchor children */}
+      <td
+        className="px-3 py-2 align-top"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center gap-2">
           {contact.email_primary && (
             <a
