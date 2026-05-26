@@ -21,8 +21,14 @@ operator-customized rows aren't clobbered if someone manually fixed
 either record in the interim.
 
 Revision ID: c3d4e5f6a7b8
-Revises: f9a0b1c2d3e4
+Revises: b2c3d4e5f6a7
 Create Date: 2026-06-04 10:00:00.000000
+
+Rebase note: originally chained off ``f9a0b1c2d3e4`` (PR #63 head).
+PR #64 (``b2c3d4e5f6a7``, handle_not_found enum value) merged first,
+also chaining off ``f9a0b1c2d3e4`` — that produced two alembic heads
+and broke ``alembic upgrade head`` in CI. Rebased to chain off
+PR #64's migration so history is linear.
 """
 
 from collections.abc import Sequence
@@ -30,7 +36,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "c3d4e5f6a7b8"
-down_revision: str | Sequence[str] | None = "f9a0b1c2d3e4"
+down_revision: str | Sequence[str] | None = "b2c3d4e5f6a7"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
