@@ -28,7 +28,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from job_assist.adapters.base import Adapter
+from job_assist.adapters.base import Adapter, HandleNotFoundError
 from job_assist.db.models.ingest_run import IngestRun
 from job_assist.db.models.job_posting import JobPosting
 from job_assist.db.models.operator_profile import OperatorProfile
@@ -204,6 +204,27 @@ class IngestionService:
                 new=postings_new,
                 updated=postings_updated,
                 fetched=postings_fetched,
+            )
+
+        except HandleNotFoundError as exc:
+            # Bestiary 5.9 — distinct status for "upstream 404 on listing"
+            # so the operator can tell a stale ATS config from a generic
+            # failure. The adapter raised this BEFORE returning any
+            # postings, so postings_fetched is 0 and the run carries no
+            # partial work to commit.
+            run.status = "handle_not_found"  # type: ignore[assignment]
+            run.finished_at = datetime.now(tz=UTC)
+            run.error_message = str(exc)
+            run.error_traceback = None  # not a stack-worthy failure
+            run.postings_fetched = 0
+            run.postings_new = 0
+            run.postings_updated = 0
+            await session.commit()
+            logger.warning(
+                "ingestion.handle_not_found",
+                handle=handle,
+                ats=adapter.ats,
+                url=exc.url,
             )
 
         except Exception as exc:

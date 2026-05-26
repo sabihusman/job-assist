@@ -152,6 +152,41 @@ class TestNormalizeHtmlStripping:
         assert "Lead the product roadmap" in result
 
 
+# ── HandleNotFoundError (Bestiary 5.9) ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_404_raises_handle_not_found() -> None:
+    """A 404 from the listing endpoint surfaces as HandleNotFoundError
+    so the orchestrator can record a distinct ``handle_not_found``
+    status instead of conflating with the generic "empty" success."""
+    from job_assist.adapters.base import HandleNotFoundError
+
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.status_code = 404
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.get = AsyncMock(return_value=mock_resp)
+    adapter = GreenhouseAdapter(client=mock_client)
+
+    with pytest.raises(HandleNotFoundError) as exc_info:
+        await adapter.fetch_postings("nonexistent")
+    assert exc_info.value.ats == "greenhouse"
+    assert exc_info.value.handle == "nonexistent"
+    assert "greenhouse.io" in exc_info.value.url
+
+
+@pytest.mark.asyncio
+async def test_non_200_non_404_still_returns_empty() -> None:
+    """Only 404 raises. Other 4xx (e.g. 418) keep the historical
+    silent-return path so unrelated upstream blips don't fail the run."""
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.status_code = 418
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.get = AsyncMock(return_value=mock_resp)
+    adapter = GreenhouseAdapter(client=mock_client)
+    assert await adapter.fetch_postings("teapot") == []
+
+
 # ── Integration tests ──────────────────────────────────────────────────────────
 
 

@@ -68,6 +68,11 @@ class IngestRunStatus(enum.StrEnum):
     success = "success"
     partial = "partial"
     failed = "failed"
+    # PR follow-up to PR #63: distinct status for "upstream returned 404
+    # for the listing call." Lets the operator distinguish a stale ATS
+    # handle (tenant migrated, slug wrong) from a generic failure
+    # (network, parsing, etc.). See Bestiary 5.9.
+    handle_not_found = "handle_not_found"
 
 
 class ApplicationStatus(enum.StrEnum):

@@ -1,4 +1,4 @@
-"""Adapter Protocol and shared data models for all ATS adapters."""
+"""Adapter Protocol, shared data models, and shared exceptions for all ATS adapters."""
 
 from __future__ import annotations
 
@@ -6,6 +6,34 @@ from datetime import datetime
 from typing import Any, ClassVar, Protocol
 
 from pydantic import BaseModel
+
+
+class HandleNotFoundError(Exception):
+    """Raised by an adapter when the upstream ATS returns 404 for the
+    configured handle's *listing* endpoint.
+
+    Bestiary 5.9: silent 404 swallow conflates "tenant has no postings
+    right now" with "tenant migrated off this ATS / handle is wrong."
+    The operator-facing impact is identical (``postings_fetched=0,
+    status="success"``) and the bug class can mask stale ATS configs
+    for months.
+
+    Adapters raise this only on the FIRST (listing-level) call's 404.
+    Per-job 404s during enumeration (a posting deleted between listing
+    and detail fetch) continue to use the silent-return pattern —
+    those are not handle-level failures.
+
+    The orchestrator (``services/ingestion.py``) catches this and sets
+    ``IngestRun.status = handle_not_found``, distinct from generic
+    ``failed`` (which still covers network errors, parsing failures,
+    etc.).
+    """
+
+    def __init__(self, *, ats: str, handle: str, url: str) -> None:
+        self.ats = ats
+        self.handle = handle
+        self.url = url
+        super().__init__(f"handle not found: ats={ats!r} handle={handle!r} url={url!r}")
 
 
 class RawPosting(BaseModel):

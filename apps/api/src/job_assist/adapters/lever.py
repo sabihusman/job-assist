@@ -39,7 +39,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from job_assist.adapters.base import NormalizedPosting, RawPosting
+from job_assist.adapters.base import HandleNotFoundError, NormalizedPosting, RawPosting
 from job_assist.adapters.normalization import (
     _sha256,
     compute_content_hash,
@@ -116,12 +116,21 @@ class LeverAdapter:
         return resp
 
     async def fetch_postings(self, handle: str) -> list[RawPosting]:
-        """Return all active postings for *handle*, or [] on 404 / error."""
+        """Return all active postings for *handle*.
+
+        Returns ``[]`` on network errors and non-200 / non-404 responses
+        (the historical silent-failure pattern is preserved for those).
+        Raises :class:`HandleNotFoundError` on 404 specifically — that's
+        an operator-actionable signal that the tenant left Lever or the
+        configured ``ats_handle`` is wrong. See Bestiary 5.9.
+        """
         url = _API_URL.format(handle=handle)
         try:
             resp = await self._get(url)
         except (httpx.HTTPError, httpx.TimeoutException):
             return []
+        if resp.status_code == 404:
+            raise HandleNotFoundError(ats=self.ats, handle=handle, url=url)
         if resp.status_code != 200:
             return []
         data: Any = resp.json()

@@ -95,3 +95,45 @@ async def test_counters_new_vs_updated(db_session: Any) -> None:
     assert rows_after_second == expected, (
         "Idempotency: row count must not change on re-ingest of identical data"
     )
+
+
+# ── HandleNotFoundError catch (Bestiary 5.9) ──────────────────────────────────
+
+
+@_NEEDS_DB
+async def test_handle_not_found_is_recorded_as_distinct_status(db_session: Any) -> None:
+    """A HandleNotFoundError from any adapter is caught by the
+    orchestrator and recorded as ``IngestRun.status='handle_not_found'``
+    — distinct from generic ``failed``. The run completes cleanly with
+    zero postings_fetched and no traceback.
+
+    Bestiary 5.9: lets the operator distinguish a stale ATS handle from
+    a transient network failure when scanning recent runs.
+    """
+    from job_assist.adapters.base import HandleNotFoundError
+    from job_assist.db.enums import IngestRunStatus
+
+    # Adapter stub that raises HandleNotFoundError on fetch_postings.
+    class _StubAdapter:
+        ats = "lever"
+        parser_version = "stub-v1"
+
+        async def fetch_postings(self, handle: str) -> list[Any]:
+            raise HandleNotFoundError(
+                ats=self.ats,
+                handle=handle,
+                url=f"https://api.lever.co/v0/postings/{handle}?mode=json",
+            )
+
+        def normalize(self, raw: Any, canonical_company_name: str) -> Any:
+            raise AssertionError("normalize should never be called when fetch raises")
+
+    service = IngestionService()
+    run = await service.ingest_source(_StubAdapter(), "ghost-handle", db_session)
+
+    assert run.status == IngestRunStatus.handle_not_found.value
+    assert run.postings_fetched == 0
+    assert run.postings_new == 0
+    assert run.postings_updated == 0
+    assert run.error_traceback is None  # not a stack-worthy failure
+    assert "ghost-handle" in (run.error_message or "")

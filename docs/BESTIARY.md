@@ -457,6 +457,25 @@ If the data-level signal is absent but the schema-level signal is present, the m
 
 ---
 
+### 5.9 Silent 404 swallow in ATS adapters masks operator-actionable failures
+
+ATS adapters that return `[]` on any non-200 response conflate three different upstream states into one observable outcome:
+
+1. *Tenant has no postings right now* — legitimate empty.
+2. *Tenant migrated off this ATS* — stale config, operator-actionable.
+3. *Configured ats_handle is wrong* — typo or rebrand, operator-actionable.
+
+All three surface to the operator identically: `postings_fetched=0`, `status="success"`, no warning. The operational consequence: `target_company` rows can carry stale ATS handles for months without anyone noticing. Discovered in PR #63 follow-up when Plaid (`lever/plaid`) returned `fetched=0` — Plaid had migrated to Ashby and the seed config was stale, but the ingest cron silently kept reporting success.
+
+**Fix:**
+- Each adapter raises `HandleNotFoundError` on 404 specifically for its *listing-level* call. Mid-pagination 404 (per-job-detail or page-2+) stays silent — those are not handle-level failures.
+- The orchestrator catches `HandleNotFoundError` and sets `IngestRun.status = "handle_not_found"`, distinct from generic `failed` (which still covers network errors, parsing failures, scoring exceptions, etc.).
+- Adding the enum value uses Alembic's `autocommit_block` pattern (see 2.6) since Postgres can't `ALTER TYPE ... ADD VALUE` inside a transaction.
+
+**Discovered in:** PR #63 follow-up — lever/plaid + lever/atlassian zero-fetch investigation, 2026-05-26. Plaid was on Ashby (not Lever); Atlassian's actual ATS couldn't be determined from public probes and was soft-paused with `ats_handle = NULL`.
+
+---
+
 ## 6. Privacy / Safety Bestiary
 
 ### 6.1 xlsx files containing real PII never committed

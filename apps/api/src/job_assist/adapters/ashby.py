@@ -44,7 +44,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from job_assist.adapters.base import NormalizedPosting, RawPosting
+from job_assist.adapters.base import HandleNotFoundError, NormalizedPosting, RawPosting
 from job_assist.adapters.normalization import (
     _sha256,
     compute_content_hash,
@@ -130,6 +130,9 @@ class AshbyAdapter:
             resp = await self._get(url)
         except (httpx.HTTPError, httpx.TimeoutException):
             return []
+        if resp.status_code == 404:
+            # Bestiary 5.9 — distinguish stale handle from generic empty.
+            raise HandleNotFoundError(ats=self.ats, handle=handle, url=url)
         if resp.status_code != 200:
             return []
         data: Any = resp.json()

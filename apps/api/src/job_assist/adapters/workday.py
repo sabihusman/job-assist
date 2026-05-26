@@ -79,7 +79,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from job_assist.adapters.base import NormalizedPosting, RawPosting
+from job_assist.adapters.base import HandleNotFoundError, NormalizedPosting, RawPosting
 from job_assist.adapters.normalization import (
     _sha256,
     compute_content_hash,
@@ -310,6 +310,14 @@ class WorkdayAdapter:
             resp = await self._post(url, body)
         except (httpx.HTTPError, httpx.TimeoutException):
             return []
+        if resp.status_code == 404 and offset == 0:
+            # Bestiary 5.9 — 404 on the listing's first page = stale
+            # handle / wrong tenant. Mid-pagination 404 is treated as
+            # an empty page and ends the walk normally; that's an
+            # unusual edge case (Workday tenant disappearing
+            # mid-fetch) and the silent-empty behaviour matches the
+            # existing pre-PR behaviour for that branch.
+            raise HandleNotFoundError(ats=self.ats, handle=handle, url=url)
         if resp.status_code != 200:
             return []
         data: Any = resp.json()

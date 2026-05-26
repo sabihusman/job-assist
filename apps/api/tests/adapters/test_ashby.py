@@ -159,9 +159,15 @@ class TestFetchPostings:
         assert _JOBS[_UNLISTED_IDX]["id"] not in ids
         assert len(raws) == len(_VISIBLE_JOBS)
 
-    async def test_handles_404_gracefully(self) -> None:
+    async def test_404_raises_handle_not_found(self) -> None:
+        """Bestiary 5.9 — 404 → HandleNotFoundError (distinct status)."""
+        from job_assist.adapters.base import HandleNotFoundError
+
         adapter = _make_adapter(status_code=404)
-        assert await adapter.fetch_postings("nonexistent") == []
+        with pytest.raises(HandleNotFoundError) as exc_info:
+            await adapter.fetch_postings("nonexistent")
+        assert exc_info.value.ats == "ashby"
+        assert exc_info.value.handle == "nonexistent"
 
     async def test_handles_non_dict_payload(self) -> None:
         adapter = _make_adapter(payload=["not", "a", "dict"])  # type: ignore[arg-type]
