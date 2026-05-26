@@ -476,6 +476,29 @@ All three surface to the operator identically: `postings_fetched=0`, `status="su
 
 ---
 
+### 5.10 CI failure screenshots can show stale runs after a force-push
+
+GitHub Actions workflow runs are immutable. When a branch gets force-pushed (e.g., after a rebase), the old workflow runs against the pre-push SHAs don't disappear — they sit in run history with their original failure status. A screenshot of a CI failure with a `/runs/<id>` URL pins to that specific historical run, not to the latest run on the branch.
+
+This creates a debugging trap when the operator pastes a screenshot mid-investigation:
+
+- The screenshot shows "CI failing"
+- The strategist tries to diagnose the failure
+- But the latest run (on the post-rebase HEAD) actually passed
+
+Fix: before diagnosing any "still failing" CI screenshot, confirm the run's `headSha` matches the branch's current HEAD:
+
+```bash
+gh run list --branch <branch> --json headSha,conclusion,url --limit 5
+git rev-parse HEAD
+```
+
+If the screenshot's SHA doesn't match HEAD, the screenshot is stale. Get fresh status via `gh pr checks <pr-num>` instead.
+
+**Discovered in:** PR #65 (Plaid + Atlassian data fix). The migration-check CI step appeared to fail in a screenshot, but the failure was pinned to a pre-rebase commit. The post-rebase run on the actual branch HEAD was green.
+
+---
+
 ## 6. Privacy / Safety Bestiary
 
 ### 6.1 xlsx files containing real PII never committed
