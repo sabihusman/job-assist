@@ -7,7 +7,8 @@ Unit tests (no DB, no network)
   test_normalize_on_site_alias          — "on-site" maps to "onsite"
   test_normalize_unspecified_falls_back — workplaceType="unspecified" → loc-derived
   test_fetch_postings_returns_all       — adapter.fetch_postings unwraps the list
-  test_fetch_postings_handles_404       — 404 → empty list, no raise
+  test_404_raises_handle_not_found      — 404 → HandleNotFoundError (Bestiary 5.9)
+  test_non_200_non_404_still_returns_empty — other 4xx falls through to []
   test_fetch_postings_handles_non_list  — malformed payload → empty list
   test_normalize_seniority_role_family  — heuristics carry over via shared module
 
@@ -148,9 +149,26 @@ class TestFetchPostings:
         assert all(isinstance(r, RawPosting) for r in raws)
         assert raws[0].source_job_id == _FIXTURE[0]["id"]
 
-    async def test_handles_404_gracefully(self) -> None:
+    async def test_404_raises_handle_not_found(self) -> None:
+        """Bestiary 5.9: 404 on the listing call surfaces as
+        HandleNotFoundError so the orchestrator can record a distinct
+        ingest_run_status instead of conflating with generic empty."""
+        from job_assist.adapters.base import HandleNotFoundError
+
         adapter = _make_adapter(status_code=404)
-        assert await adapter.fetch_postings("nonexistent") == []
+        with pytest.raises(HandleNotFoundError) as exc_info:
+            await adapter.fetch_postings("nonexistent")
+        assert exc_info.value.ats == "lever"
+        assert exc_info.value.handle == "nonexistent"
+        assert "lever.co" in exc_info.value.url
+
+    async def test_non_200_non_404_still_returns_empty(self) -> None:
+        """Only 404 raises; other non-200 keeps the historical silent
+        return so transient upstream errors don't fail the whole batch.
+        (5xx is retried at the tenacity-wrapped ``_get`` layer; this
+        test covers the 4xx-non-404 branch.)"""
+        adapter = _make_adapter(status_code=418)
+        assert await adapter.fetch_postings("teapot") == []
 
     async def test_handles_non_list_payload(self) -> None:
         """If the response is not a list (e.g. error envelope), return []."""

@@ -49,7 +49,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from job_assist.adapters.base import NormalizedPosting, RawPosting
+from job_assist.adapters.base import HandleNotFoundError, NormalizedPosting, RawPosting
 from job_assist.adapters.normalization import (
     _sha256,
     compute_content_hash,
@@ -361,12 +361,27 @@ class ICIMSAdapter:
             resp.raise_for_status()
         return resp
 
-    async def _fetch_listing(self, careers_url: str, offset: int) -> list[dict[str, str]]:
+    async def _fetch_listing(
+        self,
+        careers_url: str,
+        offset: int,
+        *,
+        handle: str,
+    ) -> list[dict[str, str]]:
+        """Fetch one page of listing rows.
+
+        Raises :class:`HandleNotFoundError` on 404 when ``offset == 0``
+        — the careers URL doesn't resolve to a tenant. Mid-pagination
+        404 is treated as an empty page (rare; tenant disappearing).
+        See Bestiary 5.9.
+        """
         url = _build_listing_url(careers_url, offset)
         try:
             resp = await self._get(url)
         except (httpx.HTTPError, httpx.TimeoutException):
             return []
+        if resp.status_code == 404 and offset == 0:
+            raise HandleNotFoundError(ats=self.ats, handle=handle, url=url)
         if resp.status_code != 200:
             return []
         return _extract_listing_rows(resp.text or "")
@@ -395,7 +410,7 @@ class ICIMSAdapter:
         seen_ids: set[str] = set()
         offset = 0
         for _ in range(_MAX_PAGES):
-            rows = await self._fetch_listing(careers_url, offset)
+            rows = await self._fetch_listing(careers_url, offset, handle=handle)
             if not rows:
                 break
             # Detect tenants that ignore the offset param — if every row

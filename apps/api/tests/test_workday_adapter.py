@@ -410,3 +410,63 @@ async def test_target_company_can_hold_adapter_config(db_session: Any) -> None:
         )
     ).scalar_one()
     assert fetched == {"wd_number": "wd5", "site": "External"}
+
+
+# ── HandleNotFoundError (Bestiary 5.9) ─────────────────────────────────────────
+
+
+async def test_404_on_initial_listing_raises_handle_not_found() -> None:
+    """Workday: a 404 on the first POST to /wday/cxs/{tenant}/{site}/jobs
+    means the tenant/site combination doesn't exist. Surface as
+    HandleNotFoundError instead of silent empty-list fallback."""
+    from job_assist.adapters.base import HandleNotFoundError
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(404)
+        return httpx.Response(200)
+
+    transport = httpx.MockTransport(handler)
+    client = httpx.AsyncClient(transport=transport)
+    try:
+        async with WorkdayAdapter(
+            adapter_config={"wd_number": "wd5", "site": "External"},
+            client=client,
+        ) as adapter:
+            with pytest.raises(HandleNotFoundError) as exc_info:
+                await adapter.fetch_postings("unknown-tenant")
+    finally:
+        await client.aclose()
+    assert exc_info.value.ats == "workday"
+    assert exc_info.value.handle == "unknown-tenant"
+
+
+async def test_404_mid_pagination_does_not_raise() -> None:
+    """A 404 at offset > 0 is treated as an empty page (rare; tenant
+    disappearing mid-fetch). Only offset=0 raises. Keeps the historical
+    silent-end-of-walk behaviour for the edge case."""
+    page1 = {"jobPostings": [{"externalPath": "/job/R-1"}]}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            body = json.loads(request.content)
+            if body["offset"] == 0:
+                return httpx.Response(200, json=page1)
+            return httpx.Response(404)  # mid-pagination 404
+        # detail GET
+        if "R-1" in str(request.url):
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    client = httpx.AsyncClient(transport=transport)
+    try:
+        async with WorkdayAdapter(
+            adapter_config={"wd_number": "wd5", "site": "External"},
+            client=client,
+        ) as adapter:
+            # Should complete normally with just the page-1 result.
+            postings = await adapter.fetch_postings("real-tenant")
+    finally:
+        await client.aclose()
+    assert len(postings) == 1

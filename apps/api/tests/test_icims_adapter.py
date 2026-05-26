@@ -583,3 +583,55 @@ def test_basesalary_shape_pinned_to_documented_form() -> None:
     assert value["@type"] == "QuantitativeValue"
     assert value["minValue"] == 180_000
     assert value["maxValue"] == 240_000
+
+
+# ── HandleNotFoundError (Bestiary 5.9) ─────────────────────────────────────────
+
+
+async def test_404_on_initial_listing_raises_handle_not_found() -> None:
+    """iCIMS: a 404 on the first listing GET means the careers URL
+    doesn't resolve to a tenant. Surface as HandleNotFoundError
+    instead of silent empty fallback."""
+    from job_assist.adapters.base import HandleNotFoundError
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    client = httpx.AsyncClient(transport=transport)
+    try:
+        async with ICIMSAdapter(client=client) as adapter:
+            with pytest.raises(HandleNotFoundError) as exc_info:
+                await adapter.fetch_postings("missing-tenant")
+    finally:
+        await client.aclose()
+    assert exc_info.value.ats == "icims"
+    assert exc_info.value.handle == "missing-tenant"
+
+
+async def test_404_mid_pagination_does_not_raise() -> None:
+    """Per-page 404 at offset > 0 is treated as end-of-walk, not a
+    handle-level failure. Matches the workday adapter's contract."""
+    # Page 1 returns a single listing row; page 2 returns 404.
+    page1_html = """<html><body>
+      <a class="iCIMS_JobsTable" href="/jobs/1234/some-role/job">Some Role</a>
+    </body></html>"""
+
+    call_count = {"n": 0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        # First call (listing offset=0) succeeds; subsequent calls 404.
+        if call_count["n"] == 1:
+            return httpx.Response(200, text=page1_html)
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    client = httpx.AsyncClient(transport=transport)
+    try:
+        async with ICIMSAdapter(client=client) as adapter:
+            # Should not raise — pagination ends silently on the 404
+            # detail/next-page call.
+            await adapter.fetch_postings("real-tenant")
+    finally:
+        await client.aclose()
