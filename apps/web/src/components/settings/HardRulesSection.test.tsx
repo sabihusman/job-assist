@@ -32,7 +32,7 @@ function profile(overrides: Partial<OperatorProfileRead> = {}): OperatorProfileR
     geo_whitelist: [],
     salary_floor_usd: 85_000,
     salary_ceiling_usd: null,
-    applicant_cap: 150,
+    applicant_cap: 500,
     staffing_firm_blocklist: [],
     seniority_levels_included: null,
     created_at: '2026-05-26T00:00:00Z',

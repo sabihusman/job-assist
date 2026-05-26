@@ -137,7 +137,7 @@ async def _seed_operator_profile(db_session: Any) -> None:
             role_keywords=[],
             geo_whitelist=[],
             salary_floor_usd=85_000,
-            applicant_cap=150,
+            applicant_cap=500,
             staffing_firm_blocklist=[],
         )
     )

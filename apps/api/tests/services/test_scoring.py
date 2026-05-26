@@ -288,7 +288,7 @@ def _make_profile(**overrides: Any) -> OperatorProfile:
         "geo_whitelist": ["Remote", "Des Moines", "New York", "Austin"],
         "salary_floor_usd": 100_000,
         "salary_ceiling_usd": 250_000,
-        "applicant_cap": 150,
+        "applicant_cap": 500,
         "seniority_levels_included": ["senior_pm", "lead_pm"],
         "staffing_firm_blocklist": [],
         "created_at": now,

@@ -245,12 +245,16 @@ class TestSalaryFloor:
 
 class TestApplicantCap:
     def test_over_cap_blocks(self) -> None:
-        posting = _posting(applicant_count=300)
+        # Default cap was raised 150 → 500 in May 2026 (see DECISIONS.md
+        # ADR-008 history note); 600 keeps the over-cap intent.
+        posting = _posting(applicant_count=600)
         result = apply_hard_rules(posting, _target())
         assert result.failed_rule == "applicant_cap"
 
     def test_at_cap_passes(self) -> None:
-        posting = _posting(applicant_count=150)
+        # Exactly at the cap is allowed (rule fires on ``> cap``, not
+        # ``>= cap``). Track the default if it moves again.
+        posting = _posting(applicant_count=500)
         result = apply_hard_rules(posting, _target())
         assert result.passed is True
 
@@ -314,7 +318,7 @@ class TestDefaults:
         """Catch accidental drift between the dataclass and DECISIONS.md."""
         cfg = HardRuleConfig()
         assert cfg.salary_floor_usd == 85_000
-        assert cfg.applicant_cap == 150
+        assert cfg.applicant_cap == 500
         # Whitelist contains all the cities the operator currently considers.
         for expected_city in (
             "Remote",

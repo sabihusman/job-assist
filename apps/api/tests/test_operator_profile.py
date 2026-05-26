@@ -68,7 +68,7 @@ async def reset_operator_profile(db_session: Any) -> Any:
                    role_keywords = '[]'::jsonb,
                    geo_whitelist = CAST(:geo AS jsonb),
                    salary_floor_usd = 85000,
-                   applicant_cap = 150,
+                   applicant_cap = 500,
                    staffing_firm_blocklist = CAST(:blocklist AS jsonb)
              WHERE id = 1
             """
@@ -121,7 +121,7 @@ async def test_migration_seeds_row(db_session: Any, reset_operator_profile: Any)
     assert body["role_keywords"] == []
     assert body["geo_whitelist"] == _SEED_GEO_WHITELIST
     assert body["salary_floor_usd"] == 85_000
-    assert body["applicant_cap"] == 150
+    assert body["applicant_cap"] == 500
     assert body["staffing_firm_blocklist"] == _SEED_STAFFING_FIRM_BLOCKLIST
     assert "created_at" in body and "updated_at" in body
 
@@ -161,7 +161,7 @@ async def test_put_partial_update(db_session: Any, reset_operator_profile: Any) 
     # Untouched fields keep the seeded defaults.
     assert body["geo_whitelist"] == _SEED_GEO_WHITELIST
     assert body["salary_floor_usd"] == 85_000
-    assert body["applicant_cap"] == 150
+    assert body["applicant_cap"] == 500
     assert body["staffing_firm_blocklist"] == _SEED_STAFFING_FIRM_BLOCKLIST
 
 
