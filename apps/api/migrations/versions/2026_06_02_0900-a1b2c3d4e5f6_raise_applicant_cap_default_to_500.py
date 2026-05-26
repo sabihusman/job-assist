@@ -6,7 +6,7 @@ operator hasn't already customized it.
 
 Why now: the LinkedIn adapter ships in a future PR and will populate
 ``job_posting.applicant_count`` for the first time. Competitive
-enterprise PM roles on LinkedIn regularly show 200–800 applicant
+enterprise PM roles on LinkedIn regularly show 200-800 applicant
 counts, so the original 150 default would have surfaced as a
 near-universal drop on day one. Lifting the default before that
 adapter lands means LinkedIn ingestion ships with a usable threshold
