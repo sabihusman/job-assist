@@ -17,7 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from job_assist.config import settings
 from job_assist.db.session import get_db
+from job_assist.schemas.contact import ContactCreate, ContactUpdate
 from job_assist.schemas.operator_profile import OperatorProfileUpdate
+from job_assist.schemas.outreach import OutreachMessageCreate
 from job_assist.schemas.public import DEFAULT_SORT, PostingStateRequest, SortKey
 from job_assist.schemas.reclassify import ReclassifySweepRequest, ReclassifySweepResponse
 from job_assist.schemas.score import ScoreSweepRequest, ScoreSweepResponse
@@ -451,6 +453,489 @@ async def list_contacts(
         }
         for c in rows
     ]
+    return {"total": total, "offset": offset, "limit": limit, "items": items}
+
+
+# ── Contact CRUD + outreach (PR #52) ──────────────────────────────────────────
+
+
+def _contact_detail_dict(c: Any) -> dict[str, Any]:
+    """Serialize a Contact ORM row to the ``ContactDetail`` wire shape.
+
+    Shared by ``GET /contacts/{id}``, ``POST /contacts``, and
+    ``PATCH /contacts/{id}`` so the responses are byte-identical.
+    """
+    return {
+        "id": str(c.id),
+        "first_name": c.first_name,
+        "last_name": c.last_name,
+        "preferred_first_name": c.preferred_first_name,
+        "email_primary": c.email_primary,
+        "email_secondary": c.email_secondary,
+        "linkedin_url": c.linkedin_url,
+        "phone": c.phone,
+        "current_employer": c.current_employer,
+        "current_position": c.current_position,
+        "location_city": c.location_city,
+        "location_state": c.location_state,
+        "location_country": c.location_country,
+        "location_metro": c.location_metro,
+        "source_type": c.source_type,
+        "source_metadata": c.source_metadata,
+        "job_functions_of_interest": c.job_functions_of_interest,
+        "industries_of_interest": c.industries_of_interest,
+        "contact_opt_in": c.contact_opt_in,
+        "contact_opt_in_topics": c.contact_opt_in_topics,
+        "notes": c.notes,
+        "target_company_id": str(c.target_company_id) if c.target_company_id else None,
+        "archived_at": c.archived_at.isoformat() if c.archived_at else None,
+        "created_at": c.created_at.isoformat(),
+        "updated_at": c.updated_at.isoformat(),
+    }
+
+
+def _outreach_message_dict(m: Any) -> dict[str, Any]:
+    """Serialize an OutreachMessage ORM row to the wire shape.
+
+    ORM attribute is ``message_metadata`` (SQLAlchemy reserves
+    ``metadata`` on Base); wire JSON is ``metadata``.
+    """
+    return {
+        "id": str(m.id),
+        "contact_id": str(m.contact_id),
+        "direction": m.direction,
+        "channel": m.channel,
+        "subject": m.subject,
+        "body": m.body,
+        "sent_at": m.sent_at.isoformat(),
+        "posting_id": str(m.posting_id) if m.posting_id else None,
+        "source": m.source,
+        "external_message_id": m.external_message_id,
+        "metadata": m.message_metadata,
+        "created_at": m.created_at.isoformat(),
+    }
+
+
+@app.post("/contacts", tags=["public"], status_code=201)
+async def create_contact(
+    payload: ContactCreate,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Operator-driven contact create (PR #52).
+
+    Distinct from ``POST /admin/seed/contacts`` (xlsx ingest, count-only
+    response). This one returns a full ContactDetail so the frontend
+    can immediately render the row in the detail panel.
+
+    Returns 422 on:
+      * Pydantic validation failures (missing channel, bad source_type,
+        empty name, …) — handled by FastAPI's normal flow.
+      * UNIQUE-index conflict on ``LOWER(email_primary)`` or
+        ``LOWER(linkedin_url)`` among active rows — caught here and
+        re-raised with a clean message instead of an opaque 500.
+
+    Returns 404 on unknown ``target_company_id``.
+
+    TODO: add authentication. Single-operator trust model for now.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.exc import IntegrityError
+
+    from job_assist.db.models import Contact, TargetCompany
+
+    if payload.target_company_id is not None:
+        exists = (
+            await db.execute(
+                select(TargetCompany.id).where(TargetCompany.id == payload.target_company_id),
+            )
+        ).scalar_one_or_none()
+        if exists is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"target_company {payload.target_company_id} not found",
+            )
+
+    row = Contact(**payload.model_dump())
+    db.add(row)
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        # The two partial UNIQUE indexes both LOWER() — surface a
+        # readable message rather than the raw PG diagnostic.
+        msg = str(exc.orig).lower() if exc.orig else str(exc).lower()
+        if "uq_contact_email_primary" in msg:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"email_primary={payload.email_primary!r} conflicts with an "
+                    "existing active contact (case-insensitive)"
+                ),
+            ) from exc
+        if "uq_contact_linkedin_url" in msg:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"linkedin_url={payload.linkedin_url!r} conflicts with an "
+                    "existing active contact (case-insensitive)"
+                ),
+            ) from exc
+        raise HTTPException(status_code=422, detail=str(exc.orig or exc)) from exc
+
+    await db.refresh(row)
+    return _contact_detail_dict(row)
+
+
+@app.get("/contacts/{contact_id}", tags=["public"])
+async def get_contact(contact_id: uuid.UUID, db: DbSession) -> dict[str, Any]:
+    """Full contact detail (PR #52).
+
+    Separate from ``GET /contacts`` so the list payload stays lean —
+    operator-only fields (``notes``, ``contact_opt_in_topics``,
+    ``source_metadata``, …) load only when a row is opened. Mirrors
+    the ``GET /postings`` vs ``GET /postings/{id}`` split.
+
+    Includes archived contacts (no filter on ``archived_at``) — the
+    operator can open an archived row to unarchive it or to view its
+    outreach history.
+    """
+    from sqlalchemy import select
+
+    from job_assist.db.models import Contact
+
+    row = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"contact {contact_id} not found")
+    return _contact_detail_dict(row)
+
+
+@app.patch("/contacts/{contact_id}", tags=["public"])
+async def update_contact(
+    contact_id: uuid.UUID,
+    payload: ContactUpdate,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Partial update of a contact's mutable fields (PR #52).
+
+    Immutable fields (``id``, ``created_at``, ``source_type``,
+    ``first_name``, ``last_name``) are rejected via the schema's
+    ``extra='forbid'``. Operators who think a name is wrong should
+    archive + recreate rather than rename.
+
+    Reachability is re-asserted after applying the diff — if the
+    operator clears both ``email_primary`` and ``linkedin_url``, the
+    CHECK constraint would fire as a 500. Catch it ourselves and
+    return 422 with a clean message.
+
+    Linking to an unknown ``target_company_id`` returns 404.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.exc import IntegrityError
+
+    from job_assist.db.models import Contact, TargetCompany
+
+    diff = payload.model_dump(exclude_unset=True)
+
+    row = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"contact {contact_id} not found")
+
+    if "target_company_id" in diff and diff["target_company_id"] is not None:
+        exists = (
+            await db.execute(
+                select(TargetCompany.id).where(TargetCompany.id == diff["target_company_id"]),
+            )
+        ).scalar_one_or_none()
+        if exists is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"target_company {diff['target_company_id']} not found",
+            )
+
+    # Pre-apply reachability check: would this diff leave the row with
+    # neither email_primary nor linkedin_url? Easier to catch here than
+    # to translate the PG CHECK violation back into a useful message.
+    future_email = diff.get("email_primary", row.email_primary)
+    future_linkedin = diff.get("linkedin_url", row.linkedin_url)
+    if future_email is None and future_linkedin is None:
+        raise HTTPException(
+            status_code=422,
+            detail="at least one of email_primary or linkedin_url must remain set",
+        )
+
+    for key, value in diff.items():
+        setattr(row, key, value)
+
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        msg = str(exc.orig).lower() if exc.orig else str(exc).lower()
+        if "uq_contact_email_primary" in msg:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"email_primary={diff.get('email_primary')!r} conflicts with an "
+                    "existing active contact (case-insensitive)"
+                ),
+            ) from exc
+        if "uq_contact_linkedin_url" in msg:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"linkedin_url={diff.get('linkedin_url')!r} conflicts with an "
+                    "existing active contact (case-insensitive)"
+                ),
+            ) from exc
+        raise HTTPException(status_code=422, detail=str(exc.orig or exc)) from exc
+
+    await db.refresh(row)
+    return _contact_detail_dict(row)
+
+
+@app.post("/contacts/{contact_id}/archive", tags=["public"], status_code=204)
+async def archive_contact(contact_id: uuid.UUID, db: DbSession) -> None:
+    """Soft-delete a contact (PR #52).
+
+    Sets ``archived_at = now()``. Idempotent — archiving an already-
+    archived contact is a no-op (returns 204). The partial UNIQUE
+    indexes on email + LinkedIn are scoped to ``archived_at IS NULL``
+    so archiving frees the dedup slot for future re-ingests.
+
+    Outreach history is preserved — ``archived_at`` is not DELETE.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.sql import func as sa_func
+
+    from job_assist.db.models import Contact
+
+    row = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"contact {contact_id} not found")
+
+    if row.archived_at is None:
+        # Use the DB's now() so the timestamp matches the index scope
+        # semantics exactly. Avoid Python-side now() drift.
+        row.archived_at = (await db.execute(select(sa_func.now()))).scalar_one()
+        await db.commit()
+
+
+@app.post("/contacts/{contact_id}/unarchive", tags=["public"], status_code=204)
+async def unarchive_contact(contact_id: uuid.UUID, db: DbSession) -> None:
+    """Reverse :func:`archive_contact` (PR #52).
+
+    Clears ``archived_at``. Idempotent — unarchiving an active row
+    is a no-op (returns 204).
+
+    On conflict (a different active contact now occupies the email
+    / LinkedIn unique slot the archived row used to hold), returns
+    422 with a clean message rather than a 500.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.exc import IntegrityError
+
+    from job_assist.db.models import Contact
+
+    row = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"contact {contact_id} not found")
+
+    if row.archived_at is None:
+        return  # already active
+
+    row.archived_at = None
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        msg = str(exc.orig).lower() if exc.orig else str(exc).lower()
+        if "uq_contact_" in msg:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "cannot unarchive: another active contact already holds this "
+                    "email_primary or linkedin_url (case-insensitive)"
+                ),
+            ) from exc
+        raise HTTPException(status_code=422, detail=str(exc.orig or exc)) from exc
+
+
+@app.post("/contacts/{contact_id}/outreach", tags=["public"], status_code=201)
+async def log_outreach(
+    contact_id: uuid.UUID,
+    payload: OutreachMessageCreate,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Log an operator-sent or received outreach message (PR #52).
+
+    ``source`` is forced to ``'manual'`` server-side; this PR only
+    writes manual rows. PR #53 will add a gmail_auto path via a
+    separate internal code path that bypasses this schema.
+
+    ``posting_id`` is validated with a pre-check + 404 (mirrors PR #31's
+    posting_action precedent) so the operator gets a clean error
+    instead of a 500-via-IntegrityError.
+
+    Outreach against an archived contact is allowed — the operator
+    may receive an inbound reply from someone they've stopped
+    initiating with.
+    """
+    from sqlalchemy import literal, select
+
+    from job_assist.db.models import Contact, JobPosting, OutreachMessage
+
+    # Contact must exist (any archive state is fine).
+    contact_exists = (
+        await db.execute(
+            select(literal(1)).where(Contact.id == contact_id).limit(1),
+        )
+    ).scalar_one_or_none()
+    if contact_exists is None:
+        raise HTTPException(status_code=404, detail=f"contact {contact_id} not found")
+
+    if payload.posting_id is not None:
+        posting_exists = (
+            await db.execute(
+                select(literal(1)).where(JobPosting.id == payload.posting_id).limit(1),
+            )
+        ).scalar_one_or_none()
+        if posting_exists is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"job_posting {payload.posting_id} not found",
+            )
+
+    row = OutreachMessage(
+        contact_id=contact_id,
+        direction=payload.direction,
+        channel=payload.channel,
+        subject=payload.subject,
+        body=payload.body,
+        sent_at=payload.sent_at,
+        posting_id=payload.posting_id,
+        source="manual",  # forced server-side; PR #53 writes gmail_auto
+        external_message_id=None,
+        message_metadata=payload.message_metadata,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return _outreach_message_dict(row)
+
+
+@app.get("/contacts/{contact_id}/outreach", tags=["public"])
+async def list_contact_outreach(
+    contact_id: uuid.UUID,
+    db: DbSession,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Paginated outreach timeline for one contact (PR #52).
+
+    Newest-first via ``ORDER BY sent_at DESC, id ASC``. Stable
+    ``id ASC`` tiebreaker on same-timestamp rows (PR #53 imports
+    may bulk-insert at the same instant).
+
+    2-query budget: one COUNT, one SELECT.
+
+    Returning an empty page for a non-existent contact_id would be
+    indistinguishable from "contact exists but has no outreach yet";
+    pre-check + 404 to disambiguate.
+    """
+    from sqlalchemy import func as sa_func
+    from sqlalchemy import literal, select
+
+    from job_assist.db.models import Contact, OutreachMessage
+
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=422, detail="limit must be 1..100")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset must be >= 0")
+
+    contact_exists = (
+        await db.execute(
+            select(literal(1)).where(Contact.id == contact_id).limit(1),
+        )
+    ).scalar_one_or_none()
+    if contact_exists is None:
+        raise HTTPException(status_code=404, detail=f"contact {contact_id} not found")
+
+    count_stmt = (
+        select(sa_func.count())
+        .select_from(OutreachMessage)
+        .where(OutreachMessage.contact_id == contact_id)
+    )
+    total: int = (await db.execute(count_stmt)).scalar_one() or 0
+
+    rows_stmt = (
+        select(OutreachMessage)
+        .where(OutreachMessage.contact_id == contact_id)
+        .order_by(OutreachMessage.sent_at.desc(), OutreachMessage.id.asc())
+        .limit(limit)
+        .offset(offset)
+    )
+    rows = (await db.execute(rows_stmt)).scalars().all()
+    items = [_outreach_message_dict(m) for m in rows]
+    return {"total": total, "offset": offset, "limit": limit, "items": items}
+
+
+@app.get("/outreach/recent", tags=["public"])
+async def list_outreach_recent(
+    db: DbSession,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Cross-contact outreach feed (PR #52).
+
+    Drives the upcoming follow-up cron (PR #54) — "who haven't I
+    heard back from in N days?" — but useful to expose now as the
+    Contacts-page-wide activity view.
+
+    2-query budget: one COUNT, one SELECT-with-JOIN. The JOIN pulls
+    minimal contact context (first_name, last_name, source_type) so
+    the feed renders without a per-row contact lookup.
+
+    Ordering: ``sent_at DESC, id ASC`` — same stable tiebreaker as
+    the per-contact view.
+    """
+    from sqlalchemy import func as sa_func
+    from sqlalchemy import select
+
+    from job_assist.db.models import Contact, OutreachMessage
+
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=422, detail="limit must be 1..100")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset must be >= 0")
+
+    count_stmt = select(sa_func.count()).select_from(OutreachMessage)
+    total: int = (await db.execute(count_stmt)).scalar_one() or 0
+
+    rows_stmt = (
+        select(
+            OutreachMessage,
+            Contact.first_name.label("c_first_name"),
+            Contact.last_name.label("c_last_name"),
+            Contact.source_type.label("c_source_type"),
+        )
+        .join(Contact, Contact.id == OutreachMessage.contact_id)
+        .order_by(OutreachMessage.sent_at.desc(), OutreachMessage.id.asc())
+        .limit(limit)
+        .offset(offset)
+    )
+    rows = (await db.execute(rows_stmt)).all()
+
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        m = row[0]
+        items.append(
+            {
+                **_outreach_message_dict(m),
+                "contact_first_name": row.c_first_name,
+                "contact_last_name": row.c_last_name,
+                "contact_source_type": row.c_source_type,
+            }
+        )
     return {"total": total, "offset": offset, "limit": limit, "items": items}
 
 

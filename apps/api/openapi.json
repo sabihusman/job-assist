@@ -367,6 +367,398 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Create Contact",
+        "description": "Operator-driven contact create (PR #52).\n\nDistinct from ``POST /admin/seed/contacts`` (xlsx ingest, count-only\nresponse). This one returns a full ContactDetail so the frontend\ncan immediately render the row in the detail panel.\n\nReturns 422 on:\n  * Pydantic validation failures (missing channel, bad source_type,\n    empty name, \u2026) \u2014 handled by FastAPI's normal flow.\n  * UNIQUE-index conflict on ``LOWER(email_primary)`` or\n    ``LOWER(linkedin_url)`` among active rows \u2014 caught here and\n    re-raised with a clean message instead of an opaque 500.\n\nReturns 404 on unknown ``target_company_id``.\n\nTODO: add authentication. Single-operator trust model for now.",
+        "operationId": "create_contact_contacts_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContactCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Create Contact Contacts Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/contacts/{contact_id}": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Get Contact",
+        "description": "Full contact detail (PR #52).\n\nSeparate from ``GET /contacts`` so the list payload stays lean \u2014\noperator-only fields (``notes``, ``contact_opt_in_topics``,\n``source_metadata``, \u2026) load only when a row is opened. Mirrors\nthe ``GET /postings`` vs ``GET /postings/{id}`` split.\n\nIncludes archived contacts (no filter on ``archived_at``) \u2014 the\noperator can open an archived row to unarchive it or to view its\noutreach history.",
+        "operationId": "get_contact_contacts__contact_id__get",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Contact Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Contact Contacts  Contact Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Update Contact",
+        "description": "Partial update of a contact's mutable fields (PR #52).\n\nImmutable fields (``id``, ``created_at``, ``source_type``,\n``first_name``, ``last_name``) are rejected via the schema's\n``extra='forbid'``. Operators who think a name is wrong should\narchive + recreate rather than rename.\n\nReachability is re-asserted after applying the diff \u2014 if the\noperator clears both ``email_primary`` and ``linkedin_url``, the\nCHECK constraint would fire as a 500. Catch it ourselves and\nreturn 422 with a clean message.\n\nLinking to an unknown ``target_company_id`` returns 404.",
+        "operationId": "update_contact_contacts__contact_id__patch",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Contact Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContactUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Update Contact Contacts  Contact Id  Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/contacts/{contact_id}/archive": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Archive Contact",
+        "description": "Soft-delete a contact (PR #52).\n\nSets ``archived_at = now()``. Idempotent \u2014 archiving an already-\narchived contact is a no-op (returns 204). The partial UNIQUE\nindexes on email + LinkedIn are scoped to ``archived_at IS NULL``\nso archiving frees the dedup slot for future re-ingests.\n\nOutreach history is preserved \u2014 ``archived_at`` is not DELETE.",
+        "operationId": "archive_contact_contacts__contact_id__archive_post",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Contact Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/contacts/{contact_id}/unarchive": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Unarchive Contact",
+        "description": "Reverse :func:`archive_contact` (PR #52).\n\nClears ``archived_at``. Idempotent \u2014 unarchiving an active row\nis a no-op (returns 204).\n\nOn conflict (a different active contact now occupies the email\n/ LinkedIn unique slot the archived row used to hold), returns\n422 with a clean message rather than a 500.",
+        "operationId": "unarchive_contact_contacts__contact_id__unarchive_post",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Contact Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/contacts/{contact_id}/outreach": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Log Outreach",
+        "description": "Log an operator-sent or received outreach message (PR #52).\n\n``source`` is forced to ``'manual'`` server-side; this PR only\nwrites manual rows. PR #53 will add a gmail_auto path via a\nseparate internal code path that bypasses this schema.\n\n``posting_id`` is validated with a pre-check + 404 (mirrors PR #31's\nposting_action precedent) so the operator gets a clean error\ninstead of a 500-via-IntegrityError.\n\nOutreach against an archived contact is allowed \u2014 the operator\nmay receive an inbound reply from someone they've stopped\ninitiating with.",
+        "operationId": "log_outreach_contacts__contact_id__outreach_post",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Contact Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutreachMessageCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Log Outreach Contacts  Contact Id  Outreach Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "List Contact Outreach",
+        "description": "Paginated outreach timeline for one contact (PR #52).\n\nNewest-first via ``ORDER BY sent_at DESC, id ASC``. Stable\n``id ASC`` tiebreaker on same-timestamp rows (PR #53 imports\nmay bulk-insert at the same instant).\n\n2-query budget: one COUNT, one SELECT.\n\nReturning an empty page for a non-existent contact_id would be\nindistinguishable from \"contact exists but has no outreach yet\";\npre-check + 404 to disambiguate.",
+        "operationId": "list_contact_outreach_contacts__contact_id__outreach_get",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Contact Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Contact Outreach Contacts  Contact Id  Outreach Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/outreach/recent": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "List Outreach Recent",
+        "description": "Cross-contact outreach feed (PR #52).\n\nDrives the upcoming follow-up cron (PR #54) \u2014 \"who haven't I\nheard back from in N days?\" \u2014 but useful to expose now as the\nContacts-page-wide activity view.\n\n2-query budget: one COUNT, one SELECT-with-JOIN. The JOIN pulls\nminimal contact context (first_name, last_name, source_type) so\nthe feed renders without a per-row contact lookup.\n\nOrdering: ``sent_at DESC, id ASC`` \u2014 same stable tiebreaker as\nthe per-contact view.",
+        "operationId": "list_outreach_recent_outreach_recent_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Outreach Recent Outreach Recent Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/admin/gmail/backfill": {
@@ -1491,6 +1883,451 @@
         "title": "ActionType",
         "description": "Operator's action on a job posting (PR #31).\n\nStored as plain TEXT in posting_action.action_type (CHECK-constrained),\nnot a PG enum \u2014 keeps the vocabulary evolvable without schema migrations."
       },
+      "ContactCreate": {
+        "properties": {
+          "first_name": {
+            "type": "string",
+            "title": "First Name"
+          },
+          "last_name": {
+            "type": "string",
+            "title": "Last Name"
+          },
+          "preferred_first_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred First Name"
+          },
+          "email_primary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email Primary"
+          },
+          "email_secondary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email Secondary"
+          },
+          "linkedin_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Linkedin Url"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
+          },
+          "current_employer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Employer"
+          },
+          "current_position": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Position"
+          },
+          "location_city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location City"
+          },
+          "location_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location State"
+          },
+          "location_country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Country"
+          },
+          "location_metro": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Metro"
+          },
+          "source_type": {
+            "type": "string",
+            "title": "Source Type"
+          },
+          "source_metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Metadata"
+          },
+          "job_functions_of_interest": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Functions Of Interest"
+          },
+          "industries_of_interest": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industries Of Interest"
+          },
+          "contact_opt_in": {
+            "type": "boolean",
+            "title": "Contact Opt In",
+            "default": false
+          },
+          "contact_opt_in_topics": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Opt In Topics"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "target_company_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Company Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "first_name",
+          "last_name",
+          "source_type"
+        ],
+        "title": "ContactCreate",
+        "description": "Body for ``POST /contacts`` \u2014 operator-driven create.\n\nDistinct from :class:`ContactSeedRow` (which is the xlsx-import\nshape with stricter normalisation and a count-only response).\nThis one returns a full :class:`ContactDetail` so the frontend\ncan immediately show the created row in the detail panel.\n\nReachability + source_type rules mirror the DB CHECK constraints\nso the operator gets a clean 422 instead of an opaque PG error."
+      },
+      "ContactUpdate": {
+        "properties": {
+          "preferred_first_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred First Name"
+          },
+          "email_primary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email Primary"
+          },
+          "email_secondary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email Secondary"
+          },
+          "linkedin_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Linkedin Url"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
+          },
+          "current_employer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Employer"
+          },
+          "current_position": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Position"
+          },
+          "location_city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location City"
+          },
+          "location_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location State"
+          },
+          "location_country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Country"
+          },
+          "location_metro": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Metro"
+          },
+          "source_metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Metadata"
+          },
+          "job_functions_of_interest": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Functions Of Interest"
+          },
+          "industries_of_interest": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industries Of Interest"
+          },
+          "contact_opt_in": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Opt In"
+          },
+          "contact_opt_in_topics": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Opt In Topics"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "target_company_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Company Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ContactUpdate",
+        "description": "Body for ``PATCH /contacts/{id}`` \u2014 partial update.\n\nOnly mutable fields are accepted. Immutable fields (``id``,\n``created_at``, ``source_type``, ``first_name``, ``last_name``)\nare intentionally absent from this schema; passing them via\n``extra='forbid'`` returns 422 with a clean message rather than\nsilently dropping them. Operators who think a name is wrong\nshould archive + re-create rather than rename.\n\nEvery field is ``Optional`` with a sentinel default \u2014 only fields\npresent in the request body (``exclude_unset=True`` at apply time)\nare touched. Sending ``\"notes\": null`` explicitly clears notes;\nomitting the key leaves the existing value alone.\n\nReachability after update is re-checked in the endpoint, not here,\nbecause the validator only sees the partial diff \u2014 it can't know\nwhat's already in the row."
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1611,6 +2448,78 @@
         "type": "object",
         "title": "OperatorProfileUpdate",
         "description": "Partial update body for ``PUT /operator/profile``.\n\nEvery field is optional. Fields omitted from the body leave the\ncorresponding column untouched (``exclude_unset=True`` on the way\ninto SQLAlchemy). Fields that ARE present run the validators below\nbefore they reach the DB."
+      },
+      "OutreachMessageCreate": {
+        "properties": {
+          "direction": {
+            "type": "string",
+            "title": "Direction"
+          },
+          "channel": {
+            "type": "string",
+            "title": "Channel"
+          },
+          "sent_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Sent At"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject"
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body"
+          },
+          "posting_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Posting Id"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "direction",
+          "channel",
+          "sent_at"
+        ],
+        "title": "OutreachMessageCreate",
+        "description": "Body for ``POST /contacts/{contact_id}/outreach``.\n\nOperator-facing fields only. ``source`` is forced to ``'manual'``\nserver-side; passing it in the body is rejected via\n``extra='forbid'``. ``created_at`` is server-set.\n\n``external_message_id`` is also rejected on manual writes \u2014 PR #53\nwill populate it for ``gmail_auto`` rows via a separate internal\ncode path that bypasses this schema."
       },
       "PostingStateRequest": {
         "properties": {

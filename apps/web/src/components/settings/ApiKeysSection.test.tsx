@@ -27,6 +27,7 @@ describe('ApiKeysSection', () => {
   test('every row pairs the env name with a set badge in the same row', () => {
     render(<ApiKeysSection />);
     const dbRow = screen.getByText('DATABASE_URL').closest('li');
-    expect(within(dbRow!).getByText('set')).toBeInTheDocument();
+    if (!dbRow) throw new Error('DATABASE_URL row not found');
+    expect(within(dbRow).getByText('set')).toBeInTheDocument();
   });
 });

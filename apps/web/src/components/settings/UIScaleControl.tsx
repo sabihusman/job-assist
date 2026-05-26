@@ -24,6 +24,12 @@ const MIN = 0;
 const MAX = 20;
 const STEP = 2;
 
+// Module-level helper so the ``useCallback`` hooks below can declare
+// empty deps without biome's useExhaustiveDependencies flagging the
+// in-scope ``clamp`` reference. Pure function over module-level
+// constants — no closure to track.
+const clamp = (n: number) => Math.min(MAX, Math.max(MIN, n));
+
 function applyScale(percent: number) {
   if (typeof document === 'undefined') return;
   // 100% is the browser default; +N% bumps everything proportionally.
@@ -56,7 +62,6 @@ export function UIScaleControl() {
     window.localStorage.setItem(STORAGE_KEY, String(percent));
   }, [percent, mounted]);
 
-  const clamp = (n: number) => Math.min(MAX, Math.max(MIN, n));
   const decrement = useCallback(() => setPercent((p) => clamp(p - STEP)), []);
   const increment = useCallback(() => setPercent((p) => clamp(p + STEP)), []);
   const reset = useCallback(() => setPercent(0), []);

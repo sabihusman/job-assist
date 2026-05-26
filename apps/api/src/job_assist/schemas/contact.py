@@ -244,3 +244,231 @@ class ContactsListResponse(BaseModel):
     offset: int
     limit: int
     items: list[ContactListItem]
+
+
+# ── PR #52 — detail + CRUD shapes ────────────────────────────────────────────
+
+
+class ContactDetail(BaseModel):
+    """Full row shape for ``GET /contacts/{id}``.
+
+    Strict superset of :class:`ContactListItem` — adds the heavy /
+    operator-only fields the detail panel needs: ``notes``,
+    ``contact_opt_in`` + ``contact_opt_in_topics``,
+    ``source_metadata``, ``job_functions_of_interest``,
+    ``industries_of_interest``, ``phone``, ``updated_at``.
+
+    Split from the list endpoint deliberately — the Contacts page
+    list query paginates and stays lean; the detail panel pulls
+    these heavier fields only when the operator opens a row. Same
+    pattern as ``GET /postings`` vs ``GET /postings/{id}``.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    first_name: str
+    last_name: str
+    preferred_first_name: str | None
+    email_primary: str | None
+    email_secondary: str | None
+    linkedin_url: str | None
+    phone: str | None
+    current_employer: str | None
+    current_position: str | None
+    location_city: str | None
+    location_state: str | None
+    location_country: str | None
+    location_metro: str | None
+    source_type: str
+    source_metadata: dict[str, object] | None
+    job_functions_of_interest: list[str] | None
+    industries_of_interest: list[str] | None
+    contact_opt_in: bool
+    contact_opt_in_topics: list[str] | None
+    notes: str | None
+    target_company_id: uuid.UUID | None
+    archived_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ContactCreate(BaseModel):
+    """Body for ``POST /contacts`` — operator-driven create.
+
+    Distinct from :class:`ContactSeedRow` (which is the xlsx-import
+    shape with stricter normalisation and a count-only response).
+    This one returns a full :class:`ContactDetail` so the frontend
+    can immediately show the created row in the detail panel.
+
+    Reachability + source_type rules mirror the DB CHECK constraints
+    so the operator gets a clean 422 instead of an opaque PG error.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    first_name: str
+    last_name: str
+    preferred_first_name: str | None = None
+    email_primary: str | None = None
+    email_secondary: str | None = None
+    linkedin_url: str | None = None
+    phone: str | None = None
+    current_employer: str | None = None
+    current_position: str | None = None
+    location_city: str | None = None
+    location_state: str | None = None
+    location_country: str | None = None
+    location_metro: str | None = None
+    source_type: str
+    source_metadata: dict[str, object] | None = None
+    job_functions_of_interest: list[str] | None = None
+    industries_of_interest: list[str] | None = None
+    contact_opt_in: bool = False
+    contact_opt_in_topics: list[str] | None = None
+    notes: str | None = None
+    target_company_id: uuid.UUID | None = None
+
+    @field_validator("first_name", "last_name")
+    @classmethod
+    def _required_name(cls, value: str) -> str:
+        trimmed = value.strip() if isinstance(value, str) else ""
+        if not trimmed:
+            raise ValueError("must be a non-empty string")
+        return trimmed
+
+    @field_validator(
+        "preferred_first_name",
+        "phone",
+        "current_employer",
+        "current_position",
+        "location_city",
+        "location_state",
+        "location_country",
+        "location_metro",
+        "notes",
+    )
+    @classmethod
+    def _strip_optional(cls, value: str | None) -> str | None:
+        return _clean_optional_str(value)
+
+    @field_validator("email_primary", "email_secondary")
+    @classmethod
+    def _normalize_email(cls, value: str | None) -> str | None:
+        return _clean_email(value)
+
+    @field_validator("linkedin_url")
+    @classmethod
+    def _normalize_linkedin(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        trimmed = value.strip()
+        if not trimmed:
+            return None
+        return _normalize_linkedin_url(trimmed)
+
+    @field_validator("source_type")
+    @classmethod
+    def _validate_source_type(cls, value: str) -> str:
+        trimmed = value.strip() if isinstance(value, str) else ""
+        if trimmed not in _VALID_SOURCE_TYPES:
+            raise ValueError(
+                f"source_type must be one of {sorted(_VALID_SOURCE_TYPES)}; got {trimmed!r}"
+            )
+        return trimmed
+
+    @field_validator(
+        "job_functions_of_interest",
+        "industries_of_interest",
+        "contact_opt_in_topics",
+    )
+    @classmethod
+    def _validate_list(cls, value: list[str] | None) -> list[str] | None:
+        return _clean_str_list(value)
+
+    @model_validator(mode="after")
+    def _require_channel(self) -> ContactCreate:
+        if self.email_primary is None and self.linkedin_url is None:
+            raise ValueError("at least one of email_primary or linkedin_url must be provided")
+        return self
+
+
+class ContactUpdate(BaseModel):
+    """Body for ``PATCH /contacts/{id}`` — partial update.
+
+    Only mutable fields are accepted. Immutable fields (``id``,
+    ``created_at``, ``source_type``, ``first_name``, ``last_name``)
+    are intentionally absent from this schema; passing them via
+    ``extra='forbid'`` returns 422 with a clean message rather than
+    silently dropping them. Operators who think a name is wrong
+    should archive + re-create rather than rename.
+
+    Every field is ``Optional`` with a sentinel default — only fields
+    present in the request body (``exclude_unset=True`` at apply time)
+    are touched. Sending ``"notes": null`` explicitly clears notes;
+    omitting the key leaves the existing value alone.
+
+    Reachability after update is re-checked in the endpoint, not here,
+    because the validator only sees the partial diff — it can't know
+    what's already in the row.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    preferred_first_name: str | None = None
+    email_primary: str | None = None
+    email_secondary: str | None = None
+    linkedin_url: str | None = None
+    phone: str | None = None
+    current_employer: str | None = None
+    current_position: str | None = None
+    location_city: str | None = None
+    location_state: str | None = None
+    location_country: str | None = None
+    location_metro: str | None = None
+    source_metadata: dict[str, object] | None = None
+    job_functions_of_interest: list[str] | None = None
+    industries_of_interest: list[str] | None = None
+    contact_opt_in: bool | None = None
+    contact_opt_in_topics: list[str] | None = None
+    notes: str | None = None
+    target_company_id: uuid.UUID | None = None
+
+    @field_validator(
+        "preferred_first_name",
+        "phone",
+        "current_employer",
+        "current_position",
+        "location_city",
+        "location_state",
+        "location_country",
+        "location_metro",
+        "notes",
+    )
+    @classmethod
+    def _strip_optional(cls, value: str | None) -> str | None:
+        return _clean_optional_str(value)
+
+    @field_validator("email_primary", "email_secondary")
+    @classmethod
+    def _normalize_email(cls, value: str | None) -> str | None:
+        return _clean_email(value)
+
+    @field_validator("linkedin_url")
+    @classmethod
+    def _normalize_linkedin(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        trimmed = value.strip()
+        if not trimmed:
+            return None
+        return _normalize_linkedin_url(trimmed)
+
+    @field_validator(
+        "job_functions_of_interest",
+        "industries_of_interest",
+        "contact_opt_in_topics",
+    )
+    @classmethod
+    def _validate_list(cls, value: list[str] | None) -> list[str] | None:
+        return _clean_str_list(value)

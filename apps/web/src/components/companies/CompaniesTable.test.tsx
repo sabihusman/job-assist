@@ -58,6 +58,7 @@ describe('CompaniesTable', () => {
     // Beta Co has no ATS and no applied postings, so both the ATS and
     // Outcomes cells render `—`. Just confirm at least one is present.
     const betaRow = screen.getByText('Beta Co').closest('tr');
-    expect(within(betaRow!).getAllByText('—').length).toBeGreaterThan(0);
+    if (!betaRow) throw new Error('Beta Co row not found');
+    expect(within(betaRow).getAllByText('—').length).toBeGreaterThan(0);
   });
 });

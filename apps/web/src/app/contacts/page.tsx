@@ -3,6 +3,7 @@
 import { useState } from 'react';
 
 import { AppShell } from '@/components/chrome/AppShell';
+import { ContactDetailPanel } from '@/components/contacts/ContactDetailPanel';
 import { ContactsTable } from '@/components/contacts/ContactsTable';
 import { useContacts } from '@/lib/api/contacts';
 import {
@@ -39,6 +40,10 @@ const SOURCE_OPTIONS: ContactSourceType[] = [
 
 function ContactsPageInner() {
   const [filters, setFilters] = useState(DEFAULT_CONTACTS_FILTERS);
+  // PR #52: row click opens the detail panel for that contact. ``null``
+  // closes the panel. Lives at the page level (not inside the table)
+  // so the AppShell + table + panel can all read/write it.
+  const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const { data, isLoading, isError, error, refetch } = useContacts(filters);
   const items = data?.items ?? [];
 
@@ -118,8 +123,18 @@ function ContactsPageInner() {
       ) : isLoading ? (
         <LoadingSkeleton />
       ) : (
-        <ContactsTable contacts={items} showingArchived={filters.include_archived} />
+        <ContactsTable
+          contacts={items}
+          showingArchived={filters.include_archived}
+          onOpenDetail={setSelectedContactId}
+          selectedId={selectedContactId}
+        />
       )}
+
+      <ContactDetailPanel
+        contactId={selectedContactId}
+        onClose={() => setSelectedContactId(null)}
+      />
     </div>
   );
 }
