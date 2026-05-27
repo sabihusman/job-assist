@@ -20,12 +20,17 @@ export function SidebarItem({
   icon: Icon,
   badge,
   collapsed,
+  onClick,
 }: {
   href: string;
   label: string;
   icon: LucideIcon;
   badge?: number;
   collapsed: boolean;
+  /**
+   * PR 1 UX overhaul: mobile drawer dismisses on nav. Desktop omits.
+   */
+  onClick?: () => void;
 }) {
   const pathname = usePathname();
   const active = href === '/' ? pathname === '/' : pathname.startsWith(href);
@@ -33,6 +38,7 @@ export function SidebarItem({
   return (
     <Link
       href={href}
+      onClick={onClick}
       // Pin the accessible name to just the label — otherwise the
       // badge count gets concatenated ("Triage 24") and a11y queries
       // for "Triage" need a regex match. The visible text is unchanged.
@@ -40,7 +46,7 @@ export function SidebarItem({
       aria-current={active ? 'page' : undefined}
       data-active={active}
       className={cn(
-        'group flex h-9 items-center rounded-md px-2 text-sm transition-colors',
+        'group flex h-9 items-center rounded-md px-2 text-md transition-colors',
         'hover:bg-accent hover:text-accent-foreground',
         active ? 'bg-accent text-accent-foreground font-medium' : 'text-foreground/80',
       )}

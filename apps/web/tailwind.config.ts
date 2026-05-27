@@ -93,6 +93,28 @@ const config: Config = {
           'monospace',
         ],
       },
+      /**
+       * Density typography scale (UX overhaul PR 1).
+       *
+       * Names the pixel values that 189 arbitrary ``text-[Npx]`` call
+       * sites in the codebase already use. New code should prefer the
+       * named tokens; existing call sites migrate opportunistically as
+       * pages get touched in later PRs. See docs/DESIGN_SYSTEM.md.
+       *
+       * Line-heights pinned to specific rem values rather than Tailwind's
+       * default ratio multipliers — dense data UI benefits from
+       * predictable vertical rhythm.
+       */
+      fontSize: {
+        '2xs': ['0.625rem', { lineHeight: '0.875rem' }], // 10 / 14
+        xs: ['0.6875rem', { lineHeight: '1rem' }], //       11 / 16
+        sm: ['0.75rem', { lineHeight: '1.125rem' }], //     12 / 18
+        base: ['0.8125rem', { lineHeight: '1.25rem' }], //  13 / 20
+        md: ['0.875rem', { lineHeight: '1.25rem' }], //     14 / 20
+        lg: ['1rem', { lineHeight: '1.5rem' }], //          16 / 24
+        xl: ['1.125rem', { lineHeight: '1.625rem' }], //    18 / 26
+        '2xl': ['1.5rem', { lineHeight: '2rem' }], //       24 / 32
+      },
       boxShadow: {
         card: 'var(--shadow-card)',
       },

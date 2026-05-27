@@ -1,6 +1,6 @@
 'use client';
 
-import { PanelLeft, Search } from 'lucide-react';
+import { Menu, PanelLeft, Search } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import { useUiStore } from '@/lib/stores/ui';
@@ -8,15 +8,21 @@ import { cn } from '@/lib/utils';
 
 /**
  * 48px sticky banner. Layout (left-to-right):
- *   [sidebar toggle] [title / subtitle] ...... [Jump to…] [adornments]
+ *   [mobile hamburger | desktop sidebar toggle]
+ *   [title / subtitle]
+ *   ......
+ *   [Jump to… | search-icon-only at <sm]
+ *   [adornments]
  *
- * `adornments` is the per-page right-side slot. In #32a no page uses
- * it — the Triage J/K legend lands in #32b, and Companies' "+ Add
- * company" button was stripped from v1.
+ * PR 1 UX overhaul:
+ *   - Hamburger at < md (44×44px tap target) opens the mobile drawer.
+ *     Desktop's PanelLeft toggle is hidden at < md.
+ *   - The ⌘K search trigger collapses to an icon-only square at < sm
+ *     (where the 280px wide bar would crowd out the title).
  *
- * `bg-surface/80` + `backdrop-blur` produces the slight translucency
- * UI_SPEC.md flags. Sticky positioning keeps it pinned as the main
- * content scrolls underneath.
+ * ``bg-surface/80`` + ``backdrop-blur`` produces the slight
+ * translucency UI_SPEC.md flags. Sticky positioning keeps it pinned
+ * as the main content scrolls underneath.
  */
 export function Banner({
   title,
@@ -28,6 +34,7 @@ export function Banner({
   adornments?: ReactNode;
 }) {
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
+  const openSidebarMobile = useUiStore((s) => s.openSidebarMobile);
   const openPalette = useUiStore((s) => s.openPalette);
 
   return (
@@ -36,33 +43,59 @@ export function Banner({
         'sticky top-0 z-20 flex h-12 items-center gap-3 border-b border-border bg-surface/80 px-4 backdrop-blur',
       )}
     >
+      {/* Mobile hamburger — visible only < md. 44px min tap target. */}
+      <button
+        type="button"
+        onClick={openSidebarMobile}
+        aria-label="Open navigation menu"
+        className="flex h-11 w-11 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-accent-foreground md:hidden"
+      >
+        <Menu className="h-5 w-5" />
+      </button>
+
+      {/* Desktop sidebar toggle — visible only ≥ md (mobile uses the
+          hamburger above, which opens the drawer rather than collapsing). */}
       <button
         type="button"
         onClick={toggleSidebar}
         aria-label="Toggle sidebar"
-        className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+        className="hidden h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-accent-foreground md:flex"
       >
         <PanelLeft className="h-4 w-4" />
       </button>
 
       <div className="flex min-w-0 flex-col leading-tight">
-        <h1 className="truncate text-[14px] font-semibold">{title}</h1>
-        {subtitle && <p className="truncate text-[13px] text-muted-foreground">{subtitle}</p>}
+        <h1 className="truncate text-md font-semibold">{title}</h1>
+        {subtitle && <p className="truncate text-base text-muted-foreground">{subtitle}</p>}
       </div>
 
       <div className="ml-auto flex items-center gap-3">
+        {/* Icon-only search trigger at < sm. */}
         <button
           type="button"
           onClick={openPalette}
           aria-label="Open command palette"
           className={cn(
-            'flex h-8 w-[280px] items-center gap-2 rounded-md border border-border bg-surface-2 px-3 text-left text-sm text-muted-foreground transition-colors',
-            'hover:border-border-strong',
+            'flex h-8 w-8 items-center justify-center rounded-md border border-border bg-surface-2 text-muted-foreground transition-colors',
+            'hover:border-border-strong sm:hidden',
+          )}
+        >
+          <Search className="h-4 w-4" />
+        </button>
+
+        {/* Full search trigger at ≥ sm. */}
+        <button
+          type="button"
+          onClick={openPalette}
+          aria-label="Open command palette"
+          className={cn(
+            'hidden h-8 w-[280px] items-center gap-2 rounded-md border border-border bg-surface-2 px-3 text-left text-md text-muted-foreground transition-colors',
+            'hover:border-border-strong sm:flex',
           )}
         >
           <Search className="h-3.5 w-3.5" />
           <span className="flex-1 truncate">Jump to…</span>
-          <kbd className="rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px]">
+          <kbd className="rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-2xs">
             ⌘K
           </kbd>
         </button>

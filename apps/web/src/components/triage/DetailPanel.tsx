@@ -8,19 +8,26 @@ import { CompanyAvatar } from '@/components/shared/CompanyAvatar';
 import { MarkdownRenderer } from '@/components/shared/MarkdownRenderer';
 import { ReasonPicker } from '@/components/triage/ReasonPicker';
 import type { TriageCardAction } from '@/components/triage/TriageCard';
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { usePosting } from '@/lib/api/hooks';
 import { familyLabel } from '@/lib/triage/family-labels';
 import type { PostingDetail } from '@/lib/triage/types';
+import { useIsLgUp } from '@/lib/use-media-query';
 import { cn } from '@/lib/utils';
 
 /**
- * Right-side detail panel. 460px wide, sticky inside its own column,
- * visible at lg+ only — the parent layout hides it on smaller screens.
+ * Right-side detail panel.
  *
- * Always renders the chrome (top mini header, action bar) even with
- * no selection so the column doesn't reflow. The middle is replaced
- * with an empty-state message when `selectedId` is null or while the
- * detail query resolves.
+ * Desktop (≥ lg): in-place aside, 460px wide. Always renders the
+ * chrome even with no selection so the column doesn't reflow; the
+ * middle swaps between empty / loading / content.
+ *
+ * Mobile (< lg): full-height Sheet sliding up from the bottom (UX
+ * overhaul PR 1). Open state is bound to ``selectedId !== null`` —
+ * tapping a card opens the sheet; the Sheet's close button or the
+ * backdrop dismisses it via ``onClose``. Pre-PR-1 the detail surface
+ * was entirely hidden below lg, leaving mobile users with no detail
+ * view at all.
  */
 export function DetailPanel({
   selectedId,
@@ -32,32 +39,68 @@ export function DetailPanel({
   onAction: (postingId: string, action: TriageCardAction) => void;
 }) {
   const { data, isLoading } = usePosting(selectedId);
+  const isLgUp = useIsLgUp();
 
-  if (!selectedId) return <DetailEmpty />;
-  if (isLoading || !data) return <DetailLoading />;
-  return <DetailContent posting={data} onClose={onClose} onAction={onAction} />;
-}
+  // Choose which body to render based on selection + load state.
+  let body: React.ReactNode;
+  if (!selectedId) body = <DetailEmptyBody />;
+  else if (isLoading || !data) body = <DetailLoadingBody />;
+  else body = <DetailContentBody posting={data} onClose={onClose} onAction={onAction} />;
 
-function DetailEmpty() {
+  // Gate the Sheet ``open`` prop by viewport, not just CSS. Radix
+  // Dialog (under Sheet) marks every sibling of its open content
+  // with ``aria-hidden="true"`` to enforce a modal trap — that runs
+  // even when ``lg:hidden`` hides the visible content, which would
+  // silently make the entire FilterRow / Sidebar inaccessible at
+  // lg+ (caught in the PR 1 E2E run: ``getByRole('button', { name:
+  // 'T1' })`` timed out across 8 specs). Gating by viewport keeps
+  // Radix entirely out of the DOM at lg+.
+  const sheetOpen = !isLgUp && selectedId !== null;
+
   return (
-    <aside className="hidden h-[calc(100vh-3rem)] w-[460px] shrink-0 border-l border-border bg-surface lg:flex">
-      <div className="m-auto flex flex-col items-center gap-3 px-8 text-center text-sm text-muted-foreground">
-        <ArrowLeft className="h-5 w-5" aria-hidden="true" />
-        <p>Select a posting to see details.</p>
-      </div>
-    </aside>
+    <>
+      {/* Desktop in-place panel — visible at lg+. */}
+      <aside
+        className="hidden h-[calc(100vh-3rem)] w-[460px] shrink-0 flex-col border-l border-border bg-surface lg:flex"
+        aria-label="Posting details"
+      >
+        {body}
+      </aside>
+
+      {/* Mobile sheet — opens when a posting is selected AND the
+          viewport is below lg. The ``lg:hidden`` classes on the Sheet
+          surfaces are belt-and-suspenders for SSR/hydration: between
+          the server paint and ``useEffect`` syncing the media query,
+          the open prop is false anyway, so no visible flash. */}
+      <Sheet open={sheetOpen} onOpenChange={(o) => !o && onClose()}>
+        <SheetContent
+          side="bottom"
+          className="h-[90vh] p-0 lg:hidden"
+          overlayClassName="lg:hidden"
+          hideCloseButton
+        >
+          <SheetTitle className="sr-only">Posting details</SheetTitle>
+          {body}
+        </SheetContent>
+      </Sheet>
+    </>
   );
 }
 
-function DetailLoading() {
+function DetailEmptyBody() {
   return (
-    <aside className="hidden h-[calc(100vh-3rem)] w-[460px] shrink-0 border-l border-border bg-surface lg:block">
-      <div className="px-6 py-8 text-sm text-muted-foreground">Loading…</div>
-    </aside>
+    <div className="m-auto flex flex-col items-center gap-3 px-8 text-center text-sm text-muted-foreground">
+      <ArrowLeft className="h-5 w-5" aria-hidden="true" />
+      <p>Select a posting to see details.</p>
+    </div>
   );
 }
 
-function DetailContent({
+function DetailLoadingBody() {
+  return <div className="px-6 py-8 text-sm text-muted-foreground">Loading…</div>;
+}
+
+function DetailContentBody({
   posting,
   onClose,
   onAction,
@@ -77,7 +120,7 @@ function DetailContent({
   };
 
   return (
-    <aside className="hidden h-[calc(100vh-3rem)] w-[460px] shrink-0 flex-col border-l border-border bg-surface lg:flex">
+    <div className="flex h-full flex-col">
       {/* Top mini header */}
       <div className="sticky top-0 z-10 flex h-10 items-center gap-2 border-b border-border bg-surface px-4">
         <span
@@ -214,7 +257,7 @@ function DetailContent({
           />
         </div>
       </div>
-    </aside>
+    </div>
   );
 }
 
