@@ -143,7 +143,12 @@ function DetailContent({
           <KvRow label="Salary" value={fmtSalary(posting.salary)} mono />
           <KvRow label="Source" value={posting.source.ats.toUpperCase()} />
           <KvRow label="First seen" value={fmtAgo(posting.first_seen_at)} mono />
-          <KvRow label="Score" value="—" />
+          {/* PR #76: previously hardcoded ``value="—"`` regardless of
+              ``posting.score``. Same source as the card's FitScoreBadge
+              (``/postings/{id}`` returns ``score: jp.fit_score`` —
+              ``main.py:2080``). Null when the score sweep hasn't visited
+              the row yet; render the em-dash placeholder in that case. */}
+          <KvRow label="Score" value={posting.score !== null ? String(posting.score) : '—'} mono />
           <KvRow label="Family" value={familyLabel(posting.role.family)} />
           <KvRow label="ID" value={posting.id.slice(0, 8)} mono />
         </dl>
