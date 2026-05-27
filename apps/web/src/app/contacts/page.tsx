@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useMemo, useState } from 'react';
 
 import { AppShell } from '@/components/chrome/AppShell';
 import { ContactDetailPanel } from '@/components/contacts/ContactDetailPanel';
@@ -19,18 +20,17 @@ import { cn } from '@/lib/utils';
  * Read-only list of outreach contacts. Source filter chips, search,
  * archived toggle. No CRUD — that ships in PR #52.
  *
- * PII discipline: filter state lives in component state, NOT in the
- * URL. Names + emails are sensitive enough that they shouldn't end up
- * in browser history bars when the operator types a search query.
+ * PII discipline (PR #72 split):
+ *   - ``source_type`` lives in the URL. It's an enum
+ *     (``tippie_alumni`` | ``linkedin_outreach`` | ...), not PII —
+ *     putting it in the URL makes filter state shareable, refresh-
+ *     stable, and consistent with how Triage handles its filters.
+ *   - ``search`` and ``include_archived`` stay in component state.
+ *     The search field can contain typed names — that's sensitive
+ *     enough that it shouldn't end up in browser history bars.
+ *   - ``useSearchParams`` requires a Suspense boundary in the App
+ *     Router (same pattern as ``/applied``, ``/page.tsx``).
  */
-export default function ContactsPage() {
-  return (
-    <AppShell title="Contacts" subtitle="Outreach pipeline">
-      <ContactsPageInner />
-    </AppShell>
-  );
-}
-
 const SOURCE_OPTIONS: ContactSourceType[] = [
   'tippie_alumni',
   'linkedin_outreach',
@@ -38,22 +38,63 @@ const SOURCE_OPTIONS: ContactSourceType[] = [
   'warm_intro',
 ];
 
+const VALID_SOURCES = new Set<ContactSourceType>(SOURCE_OPTIONS);
+
+export default function ContactsPage() {
+  return (
+    <AppShell title="Contacts" subtitle="Outreach pipeline">
+      <Suspense fallback={<LoadingSkeleton />}>
+        <ContactsPageInner />
+      </Suspense>
+    </AppShell>
+  );
+}
+
 function ContactsPageInner() {
-  const [filters, setFilters] = useState(DEFAULT_CONTACTS_FILTERS);
-  // PR #52: row click opens the detail panel for that contact. ``null``
-  // closes the panel. Lives at the page level (not inside the table)
-  // so the AppShell + table + panel can all read/write it.
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // Source filter derives from the URL on every render — single source
+  // of truth. Filter-set values not in the enum are dropped (stale
+  // links / URL tampering shouldn't crash the page).
+  const sourceFromUrl: ContactSourceType[] = useMemo(() => {
+    return searchParams
+      .getAll('source_type')
+      .filter((s): s is ContactSourceType => VALID_SOURCES.has(s as ContactSourceType));
+  }, [searchParams]);
+
+  // The non-PII fields that DON'T go to the URL stay in component
+  // state. Default include_archived=false, default search="".
+  const [stateBits, setStateBits] = useState({
+    search: DEFAULT_CONTACTS_FILTERS.search,
+    include_archived: DEFAULT_CONTACTS_FILTERS.include_archived,
+  });
+
+  const filters = useMemo(
+    () => ({
+      ...DEFAULT_CONTACTS_FILTERS,
+      ...stateBits,
+      source_type: sourceFromUrl,
+    }),
+    [stateBits, sourceFromUrl],
+  );
+
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const { data, isLoading, isError, error, refetch } = useContacts(filters);
   const items = data?.items ?? [];
 
   const toggleSource = (source: ContactSourceType) => {
-    setFilters((f) => {
-      const next = f.source_type.includes(source)
-        ? f.source_type.filter((s) => s !== source)
-        : [...f.source_type, source];
-      return { ...f, source_type: next, offset: 0 };
-    });
+    // Mutate the URL (replace, not push — filter toggles shouldn't
+    // pollute browser history). Round-trip via URLSearchParams so we
+    // preserve any non-source params someone might have appended.
+    const next = new URLSearchParams(searchParams.toString());
+    const current = next.getAll('source_type');
+    const has = current.includes(source);
+    next.delete('source_type');
+    const after = has ? current.filter((s) => s !== source) : [...current, source];
+    for (const s of after) next.append('source_type', s);
+    const qs = next.toString();
+    router.replace(qs ? `/contacts?${qs}` : '/contacts', { scroll: false });
   };
 
   return (
@@ -62,7 +103,7 @@ function ContactsPageInner() {
       <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
         <FilterGroup label="SOURCE">
           {SOURCE_OPTIONS.map((src) => {
-            const selected = filters.source_type.includes(src);
+            const selected = sourceFromUrl.includes(src);
             return (
               <button
                 key={src}
@@ -92,8 +133,8 @@ function ContactsPageInner() {
           <input
             id="contacts-search"
             type="search"
-            value={filters.search}
-            onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value, offset: 0 }))}
+            value={stateBits.search}
+            onChange={(e) => setStateBits((s) => ({ ...s, search: e.target.value }))}
             placeholder="name…"
             className="rounded bg-surface px-2 py-0.5 text-xs ring-1 ring-inset ring-border text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-ring"
           />
@@ -102,10 +143,8 @@ function ContactsPageInner() {
         <label className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <input
             type="checkbox"
-            checked={filters.include_archived}
-            onChange={(e) =>
-              setFilters((f) => ({ ...f, include_archived: e.target.checked, offset: 0 }))
-            }
+            checked={stateBits.include_archived}
+            onChange={(e) => setStateBits((s) => ({ ...s, include_archived: e.target.checked }))}
           />
           Show archived
         </label>
@@ -125,7 +164,7 @@ function ContactsPageInner() {
       ) : (
         <ContactsTable
           contacts={items}
-          showingArchived={filters.include_archived}
+          showingArchived={stateBits.include_archived}
           onOpenDetail={setSelectedContactId}
           selectedId={selectedContactId}
         />
