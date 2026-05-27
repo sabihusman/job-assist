@@ -12,6 +12,7 @@ import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { usePosting } from '@/lib/api/hooks';
 import { familyLabel } from '@/lib/triage/family-labels';
 import type { PostingDetail } from '@/lib/triage/types';
+import { useIsLgUp } from '@/lib/use-media-query';
 import { cn } from '@/lib/utils';
 
 /**
@@ -38,12 +39,23 @@ export function DetailPanel({
   onAction: (postingId: string, action: TriageCardAction) => void;
 }) {
   const { data, isLoading } = usePosting(selectedId);
+  const isLgUp = useIsLgUp();
 
   // Choose which body to render based on selection + load state.
   let body: React.ReactNode;
   if (!selectedId) body = <DetailEmptyBody />;
   else if (isLoading || !data) body = <DetailLoadingBody />;
   else body = <DetailContentBody posting={data} onClose={onClose} onAction={onAction} />;
+
+  // Gate the Sheet ``open`` prop by viewport, not just CSS. Radix
+  // Dialog (under Sheet) marks every sibling of its open content
+  // with ``aria-hidden="true"`` to enforce a modal trap — that runs
+  // even when ``lg:hidden`` hides the visible content, which would
+  // silently make the entire FilterRow / Sidebar inaccessible at
+  // lg+ (caught in the PR 1 E2E run: ``getByRole('button', { name:
+  // 'T1' })`` timed out across 8 specs). Gating by viewport keeps
+  // Radix entirely out of the DOM at lg+.
+  const sheetOpen = !isLgUp && selectedId !== null;
 
   return (
     <>
@@ -55,11 +67,12 @@ export function DetailPanel({
         {body}
       </aside>
 
-      {/* Mobile sheet — opens automatically when a posting is selected,
-          hidden at lg+ via responsive utilities on both the content and
-          the backdrop overlay (without the overlay class the backdrop
-          would still cover the desktop viewport). */}
-      <Sheet open={selectedId !== null} onOpenChange={(o) => !o && onClose()}>
+      {/* Mobile sheet — opens when a posting is selected AND the
+          viewport is below lg. The ``lg:hidden`` classes on the Sheet
+          surfaces are belt-and-suspenders for SSR/hydration: between
+          the server paint and ``useEffect`` syncing the media query,
+          the open prop is false anyway, so no visible flash. */}
+      <Sheet open={sheetOpen} onOpenChange={(o) => !o && onClose()}>
         <SheetContent
           side="bottom"
           className="h-[90vh] p-0 lg:hidden"
