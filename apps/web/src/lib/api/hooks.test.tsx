@@ -226,6 +226,64 @@ describe('useRecordAction', () => {
     );
   });
 
+  // ── PR #70 multi-page optimistic remove ───────────────────────────────────
+  //
+  // After the operator clicks Load More on Triage, the cache holds TWO
+  // entries under ``['postings', ...]`` for the same filter set (one
+  // per page). Optimistic remove on a card must update BOTH so the
+  // card doesn't reappear after the page-2 query refetches.
+
+  test('optimistic remove updates BOTH page-1 and page-2 cache entries (PR #70)', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // Page 1 — offset 0
+    const page1Key = queryKeys.postings({ limit: 100, offset: 0 });
+    client.setQueryData<PostingsListResponse>(page1Key, {
+      total: 150,
+      offset: 0,
+      limit: 100,
+      items: [fakePosting('p1-a'), fakePosting('p1-b')],
+    });
+    // Page 2 — offset 100 (post-Load More)
+    const page2Key = queryKeys.postings({ limit: 100, offset: 100 });
+    client.setQueryData<PostingsListResponse>(page2Key, {
+      total: 150,
+      offset: 100,
+      limit: 100,
+      items: [fakePosting('p2-a'), fakePosting('p2-b')],
+    });
+
+    postMock.mockResolvedValue({
+      data: {
+        current: 'not_interested',
+        reason: 'wrong_role',
+        snooze_until: null,
+        current_at: new Date().toISOString(),
+      },
+      error: null,
+      response: new Response(null, { status: 200 }),
+    });
+
+    const { result } = renderHook(() => useRecordAction(), { wrapper: wrap(client) });
+    act(() => {
+      // Pass a card that lives in page 2 — the optimistic remove must
+      // reach across both cache entries to find and drop it.
+      result.current.mutate({
+        postingId: 'p2-a',
+        action_type: 'not_interested',
+        reason: 'wrong_role',
+      });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const p1 = client.getQueryData<PostingsListResponse>(page1Key);
+    const p2 = client.getQueryData<PostingsListResponse>(page2Key);
+    // Page 1 untouched in row content (p2-a wasn't there) but total
+    // decremented because the loop applies to every cached entry.
+    expect(p1?.items.map((p) => p.id)).toEqual(['p1-a', 'p1-b']);
+    // Page 2 has p2-a removed.
+    expect(p2?.items.map((p) => p.id)).toEqual(['p2-b']);
+  });
+
   test('surfaces the FastAPI detail on the thrown error', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     seedListCache(client, [fakePosting('a')]);

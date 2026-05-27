@@ -68,7 +68,7 @@ function toQuery(filters: TriageFilters): Record<string, unknown> {
  * Paginated triage list. Key includes the serialised filters so that
  * changing chips invalidates correctly without manual cache busts.
  */
-export function useTriagePostings(filters: TriageFilters) {
+export function useTriagePostings(filters: TriageFilters, enabled = true) {
   const query = toQuery(filters);
   return useQuery({
     queryKey: queryKeys.postings(query),
@@ -81,6 +81,7 @@ export function useTriagePostings(filters: TriageFilters) {
       if (error) throw error;
       return data as unknown as PostingsListResponse;
     },
+    enabled,
     refetchOnWindowFocus: false,
     staleTime: 30_000,
   });

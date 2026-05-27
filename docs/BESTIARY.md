@@ -524,6 +524,14 @@ Two-part fix:
 
 **Discovered in:** PR #68 (Pass-action handler crash investigation). The bug had been latent since PR #32b (when useSavedFilterCount was introduced sharing the key) but only became operationally visible after PR #58 fixed the wire shape — until then, the wire-shape bug masked the cache-collision bug.
 
+### 5.13 Pagination on the most-used list page is operator-critical, not optional
+
+Triage shipped originally with hardcoded 20-row limit and no pagination. The audit found this only after the corpus grew past 50 rows. Pre-corpus-growth, the test scenario "operator sees full list" passed; post-growth, the operator silently couldn't reach 96% of postings.
+
+Same lesson as PR #67's frontend audit findings (5.11) — list pages with growable data must have pagination from PR 1, not added retroactively when the data grows. The same Load More pattern from OutreachTimeline → PR #67 → this PR is the canonical answer until the 2-page ceiling (issue #68) becomes operator-visible.
+
+**Discovered in:** PR #69 follow-up (frontend audit, 2026-05-26). 696 of 716 pending postings were unreachable from the UI.
+
 ---
 
 ## 6. Privacy / Safety Bestiary
