@@ -382,6 +382,76 @@ curl -X POST -H 'Content-Type: application/json' \
 Both paths are idempotent — rows are matched by `name` and existing rows
 are left alone (skipped), so re-running is safe.
 
+### Seeding contacts (Tippie alumni)
+
+Real contact data lives in an operator-local xlsx (e.g.
+`Connecting_With_Classmates_Directory.xlsx`) — gitignored at `*.xlsx` and
+deliberately never shipped to the Railway container. The seed flow runs
+the operator's machine through three stages: xlsx → JSON → POST.
+
+**Step 1 — convert the xlsx to the JSON intermediate** (PowerShell on
+Windows; the script writes JSON to stdout and counts-only logs to
+stderr, so it's safe to redirect):
+
+```powershell
+cd "C:\path\to\Job Assist"
+$xlsx = 'C:\path\to\Connecting_With_Classmates_Directory.xlsx'
+$json = "$env:TEMP\contacts.json"
+# Use the API venv python — system python may not have openpyxl.
+$py = '.\apps\api\.venv\Scripts\python.exe'
+Start-Process -FilePath $py `
+  -ArgumentList @('apps\api\scripts\tippie_to_contacts_json.py', "`"$xlsx`"") `
+  -NoNewWindow -Wait -RedirectStandardOutput $json
+```
+
+The stderr summary reports rows extracted and rows skipped (e.g.
+`Converted 388 contacts (skipped 1 for missing name, 0 for missing
+contact channel).`). No PII is logged.
+
+**Step 2 — POST to production in batches.** Railway's edge proxy
+rejects request bodies above ~525 KB with an opaque
+`400 "There was an error parsing the body"` (see Bestiary 5.15). The
+full Tippie alumni JSON hits this cap. Batch in chunks of 100 rows or
+fewer:
+
+```powershell
+$contacts = Get-Content $env:TEMP\contacts.json -Raw | ConvertFrom-Json
+$batchSize = 100
+for ($i = 0; $i -lt $contacts.Count; $i += $batchSize) {
+  $end = [Math]::Min($i + $batchSize - 1, $contacts.Count - 1)
+  $batch = @($contacts[$i..$end])
+  $body = ConvertTo-Json -InputObject $batch -Depth 5 -Compress
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+  Invoke-RestMethod `
+    -Uri 'https://api-production-ca5ad.up.railway.app/admin/seed/contacts' `
+    -Method POST -ContentType 'application/json' -Body $bytes -TimeoutSec 120
+}
+```
+
+PowerShell 5.1 re-encodes string bodies; passing raw UTF-8 bytes via
+`[System.Text.Encoding]::UTF8.GetBytes()` avoids charset issues.
+
+The seed endpoint dedupes via `LOWER(email_primary)` and
+`LOWER(linkedin_url)` partial unique indexes, so overlapping batches
+are safe. Each batch response carries
+`{inserted, skipped_duplicate_email, skipped_duplicate_linkedin, skipped_invalid, total}`.
+
+**Step 3 — verify the seed landed:**
+
+```powershell
+$r = Invoke-RestMethod -Uri 'https://api-production-ca5ad.up.railway.app/contacts?limit=1' -Method GET
+"total contacts: $($r.total)"
+```
+
+**Step 4 — wipe the local JSON intermediate** (it contains PII):
+
+```powershell
+Remove-Item $env:TEMP\contacts.json -Force
+```
+
+The xlsx source file is gitignored but lives outside the repo — keep,
+archive, or delete it per your preference.
+
 ### Application state and outcome data
 
 `application_state` and `outcome_event` rows live in Supabase only. They are
