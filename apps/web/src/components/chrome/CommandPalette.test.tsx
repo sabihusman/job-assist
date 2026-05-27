@@ -49,6 +49,28 @@ describe('CommandPalette', () => {
     expect(pushMock).toHaveBeenCalledWith('/applied');
   });
 
+  test('lists all 9 nav destinations (PR #72)', () => {
+    render(<CommandPalette />);
+    const dialog = screen.getByRole('dialog');
+    // Sidebar parity: every NAV_ITEMS entry must have a palette entry.
+    // Outreach is intentionally stripped (see existing test) — that's
+    // why this is 9, not 10.
+    const expected = [
+      'Go to Triage',
+      'Go to Applied',
+      'Go to Passed',
+      'Go to Rejected',
+      'Go to Pipeline',
+      'Go to Companies',
+      'Go to Contacts',
+      'Go to Stats',
+      'Go to Settings',
+    ];
+    for (const label of expected) {
+      expect(within(dialog).getByText(label)).toBeInTheDocument();
+    }
+  });
+
   test("renders 'No matches' on gibberish search", async () => {
     const user = userEvent.setup();
     render(<CommandPalette />);

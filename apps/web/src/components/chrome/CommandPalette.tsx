@@ -35,7 +35,20 @@ import { useUiStore } from '@/lib/stores/ui';
 type NavCommand = {
   type: 'nav';
   label: string;
-  href: '/' | '/applied' | '/pipeline' | '/companies' | '/stats' | '/settings';
+  // PR #72: added /passed, /rejected, /contacts so the palette covers
+  // every entry in the Sidebar nav. No shortcut hints on the new three
+  // — letters P, C, S are already claimed (Pipeline/Companies/Settings)
+  // and arbitrary single letters would obscure rather than help.
+  href:
+    | '/'
+    | '/applied'
+    | '/passed'
+    | '/rejected'
+    | '/pipeline'
+    | '/companies'
+    | '/contacts'
+    | '/stats'
+    | '/settings';
   shortcut?: string;
 };
 
@@ -50,8 +63,13 @@ type PaletteCommand = NavCommand | StubCommand;
 const COMMANDS: readonly PaletteCommand[] = [
   { type: 'nav', label: 'Go to Triage', href: '/', shortcut: 'G T' },
   { type: 'nav', label: 'Go to Applied', href: '/applied', shortcut: 'G A' },
+  // PR #72: Passed/Rejected/Contacts slot in their Sidebar order. No
+  // shortcut hints (see NavCommand type comment for the rationale).
+  { type: 'nav', label: 'Go to Passed', href: '/passed' },
+  { type: 'nav', label: 'Go to Rejected', href: '/rejected' },
   { type: 'nav', label: 'Go to Pipeline', href: '/pipeline', shortcut: 'G P' },
   { type: 'nav', label: 'Go to Companies', href: '/companies', shortcut: 'G C' },
+  { type: 'nav', label: 'Go to Contacts', href: '/contacts' },
   { type: 'nav', label: 'Go to Stats', href: '/stats', shortcut: 'G S' },
   // Settings intentionally has no shortcut hint — matches UI_SPEC.md.
   { type: 'nav', label: 'Go to Settings', href: '/settings' },
