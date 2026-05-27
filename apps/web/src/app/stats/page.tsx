@@ -74,30 +74,76 @@ export default function StatsPage() {
 
   const isLoading = calibrationQ.isLoading || appliedQ.isLoading || outcomesQ.isLoading;
 
+  // Bestiary 5.11 — surface API errors explicitly. Previously this
+  // page would silently render zeros / em-dashes when any of the
+  // three queries 422'd, making a real data outage indistinguishable
+  // from "no data yet."
+  const isError = calibrationQ.isError || appliedQ.isError || outcomesQ.isError;
+  const errorMsg =
+    (calibrationQ.error as Error)?.message ??
+    (appliedQ.error as Error)?.message ??
+    (outcomesQ.error as Error)?.message ??
+    'Unknown error';
+
   return (
     <AppShell title="Stats" subtitle="Operator metrics">
       <div className="flex flex-col gap-6 px-6 py-4">
-        {/* KPI grid — 5 cards (30d cards stripped per audit). */}
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-5">
-          <KPICard label="Postings ingested (7d)" value={fmtNum(calib?.surfaced, isLoading)} />
-          <KPICard label="Applications (7d)" value={fmtNum(calib?.applied, isLoading)} />
-          <KPICard
-            label="Response rate"
-            value={fmtPct(appliedCount > 0 ? recruiterPlusCount / appliedCount : null, isLoading)}
-            caption="screens / applied"
+        {isError ? (
+          <ErrorCard
+            message={errorMsg}
+            onRetry={() => {
+              calibrationQ.refetch();
+              appliedQ.refetch();
+              outcomesQ.refetch();
+            }}
           />
-          <KPICard label="Avg time to 1st response" value="—" caption="not computed yet" />
-          <KPICard
-            label="Offer rate"
-            value={fmtPct(appliedCount > 0 ? offerCount / appliedCount : null, isLoading)}
-            caption="offers / applied"
-          />
-        </div>
+        ) : (
+          <>
+            {/* KPI grid — 5 cards (30d cards stripped per audit). */}
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-5">
+              <KPICard label="Postings ingested (7d)" value={fmtNum(calib?.surfaced, isLoading)} />
+              <KPICard label="Applications (7d)" value={fmtNum(calib?.applied, isLoading)} />
+              <KPICard
+                label="Response rate"
+                value={fmtPct(
+                  appliedCount > 0 ? recruiterPlusCount / appliedCount : null,
+                  isLoading,
+                )}
+                caption="screens / applied"
+              />
+              <KPICard label="Avg time to 1st response" value="—" caption="not computed yet" />
+              <KPICard
+                label="Offer rate"
+                value={fmtPct(appliedCount > 0 ? offerCount / appliedCount : null, isLoading)}
+                caption="offers / applied"
+              />
+            </div>
 
-        {/* Outcome funnel */}
-        <OutcomeFunnel rows={funnelRows} />
+            {/* Outcome funnel */}
+            <OutcomeFunnel rows={funnelRows} />
+          </>
+        )}
       </div>
     </AppShell>
+  );
+}
+
+function ErrorCard({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <section
+      data-testid="stats-error"
+      className="rounded-md border border-negative/40 bg-negative/5 p-4"
+    >
+      <h2 className="text-sm font-semibold text-negative">Couldn&apos;t load stats.</h2>
+      <p className="mt-1 text-[13px] text-muted-foreground">{message}</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-3 inline-flex h-8 items-center rounded-md border border-border bg-surface px-3 text-sm hover:bg-accent"
+      >
+        Retry
+      </button>
+    </section>
   );
 }
 
