@@ -507,6 +507,23 @@ Two-part fix:
 
 **Discovered in:** PR #66 follow-up audit (2026-05-26). The /passed page silently rendered 'No passed postings yet' while the API had 4 not_interested rows; the 422 from limit=500 was swallowed by React Query's empty default. Same pattern at /applied, /stats, /rejected.
 
+### 5.12 React Query cache keys must not be shared across hooks returning different shapes
+
+Multiple hooks using the same cache key prefix (e.g., `['postings', ...]`) with different cached value shapes will collide when any mutation iterates `qc.getQueriesData({queryKey: [prefix]})`. The iteration returns entries of mixed shape, and code that assumes one shape will crash on entries of another.
+
+Specifically: `useSavedFilterCount` stored a `number` under `['postings', ...]` while `useTriagePostings` / `usePassedPostings` / `useRejectedPostings` / `useAppliedPostings` stored `PostingsListResponse` under the same prefix. `useRecordAction.onMutate` iterated all entries and crashed on the numeric ones with TypeError on `prev.items.filter`. The crash happened synchronously inside onMutate, so mutationFn never ran and no network request fired.
+
+Symptoms when this bug class is present:
+- "Mutation appears to fail" — toast fires, no network activity
+- Mutation lifecycle aborts in onMutate / onSettled / onSuccess without explanation
+- Bug is invisible in unit tests that seed the cache with only one shape
+
+Two-part fix:
+1. Distinct cache keys per shape (`['postings-count', ...]` separate from `['postings', ...]`)
+2. Defense-in-depth shape guards in any code that iterates a multi-shape cache prefix
+
+**Discovered in:** PR #68 (Pass-action handler crash investigation). The bug had been latent since PR #32b (when useSavedFilterCount was introduced sharing the key) but only became operationally visible after PR #58 fixed the wire shape — until then, the wire-shape bug masked the cache-collision bug.
+
 ---
 
 ## 6. Privacy / Safety Bestiary
