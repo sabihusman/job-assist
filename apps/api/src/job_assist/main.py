@@ -2223,9 +2223,7 @@ async def list_companies(
                 # plain string and SQLAlchemy doesn't always coerce
                 # pre-commit. Handle both shapes.
                 "ats": (
-                    tc.ats.value
-                    if tc.ats is not None and hasattr(tc.ats, "value")
-                    else tc.ats
+                    tc.ats.value if tc.ats is not None and hasattr(tc.ats, "value") else tc.ats
                 ),
                 "ats_handle": tc.ats_handle,
                 "notes": tc.notes,
