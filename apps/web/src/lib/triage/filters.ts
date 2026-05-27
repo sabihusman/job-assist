@@ -29,7 +29,11 @@ export const DEFAULT_FILTERS: TriageFilters = {
   include_snoozed_past_only: false,
   target_company_id: null,
   sort: DEFAULT_SORT,
-  limit: 20,
+  // PR #70 / Bestiary 5.13: bumped from 20 → 100 (API cap). With ~716
+  // pending postings, the legacy 20-row default left the operator
+  // unable to reach 96% of postings without explicit Load More clicks.
+  // Page 1 at 100 covers the bulk; Load More fetches the next 100.
+  limit: 100,
   offset: 0,
 };
 
@@ -99,7 +103,7 @@ export function parseFilters(params: {
     include_snoozed_past_only: params.get('include_snoozed_past_only') === 'true',
     target_company_id: params.get('target_company_id'),
     sort,
-    limit: Number.parseInt(params.get('limit') ?? '20', 10) || 20,
+    limit: Number.parseInt(params.get('limit') ?? '100', 10) || 100,
     offset: Number.parseInt(params.get('offset') ?? '0', 10) || 0,
   };
 }

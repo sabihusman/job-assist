@@ -53,7 +53,23 @@ function TriagePageInner() {
   // Memoize so equality-based effects don't re-fire on every render.
   const filters: TriageFilters = useMemo(() => parseFilters(searchParams), [searchParams]);
 
-  const { data, isLoading, isError, error, refetch } = useTriagePostings(filters);
+  const page1 = useTriagePostings(filters);
+  const { data, isLoading, isError, error, refetch } = page1;
+
+  // PR #70 / Bestiary 5.13: Load More pagination. Mirrors /applied,
+  // /passed, /rejected. Second hook instance fetches the next page
+  // (limit=100) when the operator clicks Load more. No URL persistence —
+  // refresh resets to page 1.
+  const [extraOffset, setExtraOffset] = useState<number | null>(null);
+  // Reset extra-page state whenever the filter set changes (re-applying
+  // sort or chips invalidates the previous Load More'd window). The
+  // effect body only calls setState, so biome's useExhaustiveDependencies
+  // misreads ``filters`` as unnecessary — but ``filters`` IS the trigger.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: filters is the intentional reset trigger
+  useEffect(() => {
+    setExtraOffset(null);
+  }, [filters]);
+  const extra = useTriagePostings({ ...filters, offset: extraOffset ?? 0 }, extraOffset !== null);
   // PR #43: fire a second light query to drive the dynamic subtitle's
   // applied count. limit=1 is enough — we only need ``total`` on the
   // response. The query is cached separately from the main triage list.
@@ -65,8 +81,11 @@ function TriagePageInner() {
   });
   const recordAction = useRecordAction();
 
-  const items = data?.items ?? [];
+  const page1Items = data?.items ?? [];
+  const items =
+    extraOffset !== null && extra.data ? [...page1Items, ...extra.data.items] : page1Items;
   const total = data?.total ?? 0;
+  const hasMore = total > items.length;
 
   // PR #43: subtitle reads from the live query state. Both queries
   // start loading on first paint; render a placeholder until at least
@@ -223,6 +242,16 @@ function TriagePageInner() {
             onToggleReason={handleToggleReason}
             onAction={handleAction}
           />
+          {hasMore && (
+            <button
+              type="button"
+              onClick={() => setExtraOffset(items.length)}
+              disabled={extra.isLoading}
+              className="self-center rounded-md border border-border bg-surface px-3 py-1 text-[12px] hover:bg-accent disabled:opacity-50"
+            >
+              {extra.isLoading ? 'Loading…' : `Load more (${total - items.length} remaining)`}
+            </button>
+          )}
         </MainColumn>
 
         <DetailPanel
