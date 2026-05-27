@@ -145,6 +145,31 @@ describe('DetailPanel', () => {
     expect(screen.queryByText(/bullet one/)).not.toBeInTheDocument();
   });
 
+  // ── PR #76: Score field reads from posting.score (not hardcoded —) ──────
+
+  test('Score field renders the numeric score from posting.score', () => {
+    // Pre-PR-#76 the value was hardcoded ``"—"`` regardless of the
+    // posting payload. This regression-locks the wiring: the panel
+    // MUST read from posting.score, otherwise the silent placeholder
+    // returns.
+    mockState.data = makeDetail({ score: 91 });
+    wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
+
+    // Find the dt labeled "Score", read its sibling dd.
+    const scoreLabel = screen.getByText('Score');
+    const scoreValue = scoreLabel.nextElementSibling;
+    expect(scoreValue?.textContent).toBe('91');
+  });
+
+  test('Score field renders em-dash when posting.score is null', () => {
+    mockState.data = makeDetail({ score: null });
+    wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
+
+    const scoreLabel = screen.getByText('Score');
+    const scoreValue = scoreLabel.nextElementSibling;
+    expect(scoreValue?.textContent).toBe('—');
+  });
+
   test('toggle state resets when the selected posting id changes', () => {
     // Open the toggle on posting 1, then re-render with posting 2 selected.
     // The component is keyed on posting.id so showFullJd resets to false.
