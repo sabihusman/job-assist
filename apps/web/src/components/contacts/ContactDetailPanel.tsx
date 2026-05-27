@@ -28,6 +28,8 @@ import { X } from 'lucide-react';
 import { useEffect } from 'react';
 import { toast } from 'sonner';
 
+import { showErrorToast } from '@/lib/api/error-toast';
+
 import { ContactEditForm } from '@/components/contacts/ContactEditForm';
 import { CONTACT_SOURCE_LABELS } from '@/components/contacts/ContactsTable';
 import { LogOutreachForm } from '@/components/contacts/LogOutreachForm';
@@ -76,12 +78,9 @@ export function ContactDetailPanel({ contactId, onClose }: ContactDetailPanelPro
         toast.success(`✓ ${isArchived ? 'Unarchived' : 'Archived'}`);
       },
       onError: (err) => {
-        const isMutationError =
-          err && typeof err === 'object' && 'detail' in err && 'status' in err;
-        const detail = isMutationError
-          ? (err as unknown as { detail: string | null }).detail
-          : null;
-        toast.error(detail ?? `${isArchived ? 'Unarchive' : 'Archive'} failed.`);
+        // PR #73: centralized helper handles MutationError / Error /
+        // anything-else with auto-dismiss + manual close button.
+        showErrorToast(err, `Couldn't ${isArchived ? 'unarchive' : 'archive'} contact`);
       },
     });
   };

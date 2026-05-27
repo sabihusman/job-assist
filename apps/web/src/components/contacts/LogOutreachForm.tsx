@@ -23,6 +23,8 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
 
+import { showErrorToast } from '@/lib/api/error-toast';
+
 import { useOutreachLog } from '@/lib/api/contacts';
 import {
   MESSAGE_CHANNEL_LABELS,
@@ -82,12 +84,8 @@ export function LogOutreachForm({ contactId }: { contactId: string }) {
           reset();
         },
         onError: (err) => {
-          const isMutationError =
-            err && typeof err === 'object' && 'detail' in err && 'status' in err;
-          const detail = isMutationError
-            ? (err as unknown as { detail: string | null }).detail
-            : null;
-          toast.error(detail ?? 'Log failed.');
+          // PR #73: centralized helper. Auto-dismiss + structured detail.
+          showErrorToast(err, "Couldn't log outreach");
         },
       },
     );
