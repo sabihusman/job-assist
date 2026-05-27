@@ -843,10 +843,7 @@ async def test_companies_surfaces_ats_handle_and_notes_pr71(db_session: Any) -> 
 
     assert by_name["PausedCo_PR71"]["ats"] == "lever"
     assert by_name["PausedCo_PR71"]["ats_handle"] is None
-    assert (
-        by_name["PausedCo_PR71"]["notes"]
-        == "Paused: ATS handle unknown, soft-paused (PR #65)"
-    )
+    assert by_name["PausedCo_PR71"]["notes"] == "Paused: ATS handle unknown, soft-paused (PR #65)"
 
 
 # ── /outcomes ────────────────────────────────────────────────────────────────
