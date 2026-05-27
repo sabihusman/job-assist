@@ -147,6 +147,21 @@ function TriagePageInner() {
               toast.error(detail ?? 'Action couldn’t be completed.');
               return;
             }
+            // PR #68 (Bestiary 5.12): non-MutationError exceptions used
+            // to fall straight to the generic toast, which blackboxed
+            // the cache-key-collision TypeError for weeks (operator
+            // saw "Action couldn't be completed." with zero network
+            // activity). Log the actual error so the next non-HTTP
+            // crash in the mutation lifecycle announces itself.
+            if (err instanceof Error) {
+              console.error('[useRecordAction] non-HTTP failure:', err.message, err.stack);
+            } else {
+              console.error('[useRecordAction] non-HTTP failure (non-Error):', err);
+            }
+            if (process.env.NODE_ENV !== 'production' && err instanceof Error) {
+              toast.error(`Action crashed: ${err.message}`);
+              return;
+            }
             toast.error('Action couldn’t be completed.');
           },
         },

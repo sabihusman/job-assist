@@ -165,6 +165,67 @@ describe('useRecordAction', () => {
     });
   });
 
+  // ── PR #68 / Bestiary 5.12 cache-collision regression ─────────────────────
+  //
+  // Before PR #68, ``useSavedFilterCount`` shared the ``['postings', ...]``
+  // cache key with ``useTriagePostings`` / ``usePassedPostings`` etc.,
+  // but stored a bare ``number`` (the ``.total``) instead of the full
+  // ``PostingsListResponse``. ``useRecordAction.onMutate`` iterated every
+  // ``['postings', ...]`` entry and crashed on ``prev.items.filter`` for
+  // the numeric entries — TypeError thrown synchronously, mutationFn
+  // never ran, zero outbound requests.
+  //
+  // This test seeds BOTH a real list entry AND a numeric saved-filter
+  // entry under the same prefix. With the primary fix (distinct key)
+  // OR the defense-in-depth shape guard, onMutate must not crash and
+  // the POST must fire.
+
+  test('onMutate survives a heterogeneous ["postings", ...] cache (Bestiary 5.12)', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // Real list entry — the optimistic remove should still happen here.
+    const listKey = seedListCache(client, [fakePosting('a'), fakePosting('b')]);
+    // Mimic the bug-shape: a numeric entry under ``['postings', ...]``
+    // (pre-PR-#68 ``useSavedFilterCount`` cache shape). The primary fix
+    // moves saved-filter counts to ``['postings-count', ...]``, so this
+    // entry SHOULDN'T exist under ``['postings', ...]`` in production
+    // anymore — but if any future hook lands here, the shape guard
+    // protects ``onMutate`` from crashing.
+    client.setQueryData(['postings', { limit: 1, offset: 0, state: ['applied'] }], 716);
+
+    postMock.mockResolvedValue({
+      data: {
+        current: 'not_interested',
+        reason: 'wrong_role',
+        snooze_until: null,
+        current_at: new Date().toISOString(),
+      },
+      error: null,
+      response: new Response(null, { status: 200 }),
+    });
+
+    const { result } = renderHook(() => useRecordAction(), { wrapper: wrap(client) });
+    act(() => {
+      result.current.mutate({
+        postingId: 'a',
+        action_type: 'not_interested',
+        reason: 'wrong_role',
+      });
+    });
+
+    // Critical assertion: the mutation reaches the wire. Pre-fix this
+    // was zero because onMutate threw TypeError before mutationFn ran.
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(postMock).toHaveBeenCalledTimes(1);
+
+    // The list cache still got the optimistic update.
+    const cached = client.getQueryData<PostingsListResponse>(listKey);
+    expect(cached?.items.map((p) => p.id)).toEqual(['b']);
+    // The numeric entry survives untouched.
+    expect(client.getQueryData(['postings', { limit: 1, offset: 0, state: ['applied'] }])).toBe(
+      716,
+    );
+  });
+
   test('surfaces the FastAPI detail on the thrown error', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     seedListCache(client, [fakePosting('a')]);

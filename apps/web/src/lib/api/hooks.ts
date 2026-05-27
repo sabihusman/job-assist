@@ -28,6 +28,16 @@ import type {
 
 export const queryKeys = {
   postings: (params: Record<string, unknown> = {}) => ['postings', params] as const,
+  /**
+   * Saved-filter count badges. Bestiary 5.12: must NOT share the
+   * ``['postings', ...]`` prefix because the cached value is a bare
+   * ``number`` (just ``.total``) while the list hooks store full
+   * ``PostingsListResponse`` objects. ``useRecordAction.onMutate``
+   * iterates ``['postings', ...]`` to optimistically drop the acted-on
+   * row; if it finds a numeric entry under the same prefix it crashes
+   * on ``prev.items.filter`` and the mutation never reaches the wire.
+   */
+  postingsCount: (params: Record<string, unknown> = {}) => ['postings-count', params] as const,
   posting: (id: string) => ['posting', id] as const,
   calibration: () => ['calibration'] as const,
 };
@@ -201,6 +211,13 @@ export function useRecordAction() {
 
       for (const [key, prev] of snapshots) {
         if (!prev) continue;
+        // Bestiary 5.12: defense-in-depth shape guard. The primary fix
+        // is that ``useSavedFilterCount`` no longer shares the
+        // ``['postings', ...]`` cache key, so this loop only sees
+        // ``PostingsListResponse`` entries. But if a future hook ever
+        // lands under this prefix with a different shape, we skip it
+        // here instead of crashing on ``prev.items.filter``.
+        if (typeof prev !== 'object' || !('items' in prev) || !Array.isArray(prev.items)) continue;
         // Drop the acted-on posting from the cached list and bump the
         // total down by one. We don't try to be clever about which
         // filters this affects — list views consume their own filter,
@@ -225,9 +242,11 @@ export function useRecordAction() {
       }
     },
     onSettled: () => {
-      // Refetch fresh data from the server. Drives saved-filter
-      // count badges and the calibration card.
+      // Refetch fresh data from the server. Drives the list views, the
+      // saved-filter count badges in the Sidebar (separate key prefix
+      // since PR #68 / Bestiary 5.12), and the calibration card.
       qc.invalidateQueries({ queryKey: ['postings'] });
+      qc.invalidateQueries({ queryKey: ['postings-count'] });
       qc.invalidateQueries({ queryKey: queryKeys.calibration() });
     },
   });
@@ -243,7 +262,7 @@ export function useRecordAction() {
 export function useSavedFilterCount(filterParams: Record<string, unknown>) {
   const query: Record<string, unknown> = { ...filterParams, limit: 1, offset: 0 };
   return useQuery({
-    queryKey: queryKeys.postings(query),
+    queryKey: queryKeys.postingsCount(query),
     queryFn: async () => {
       const { data, error } = await api.GET('/postings', {
         params: { query: query as never },
