@@ -109,12 +109,24 @@ describe('CompaniesTable', () => {
     expect(within(alphaRow).queryByText('Paused')).toBeNull();
   });
 
-  test('paused notes surface via the link title attribute (tooltip)', () => {
+  test('paused notes render inline as visible text below the company name (PR #75)', () => {
+    // Pre-PR-#75 the notes were only in a ``title=`` hover tooltip,
+    // invisible to keyboard / mobile users. They now render inline.
     render(<CompaniesTable companies={COMPANIES} />);
-    const pausedLink = screen.getByRole('link', { name: 'Paused Co' });
-    expect(pausedLink).toHaveAttribute(
-      'title',
-      'Paused: ATS handle unknown, soft-paused until investigation completes',
-    );
+    expect(
+      screen.getByText('Paused: ATS handle unknown, soft-paused until investigation completes'),
+    ).toBeInTheDocument();
+  });
+
+  test('notes are absent from DOM when company.notes is null', () => {
+    // Live company (Alpha Co) has notes=null — no muted paragraph beneath
+    // its name. Guards against accidentally rendering an empty <p>.
+    render(<CompaniesTable companies={COMPANIES} />);
+    const alphaRow = screen.getByText('Alpha Co').closest('tr');
+    if (!alphaRow) throw new Error('Alpha Co row not found');
+    // The row should contain exactly one element with text starting with
+    // "Alpha" — the link itself. No notes paragraph below it.
+    const alphaLinkParent = screen.getByText('Alpha Co').parentElement;
+    expect(alphaLinkParent?.querySelectorAll('p').length ?? 0).toBe(0);
   });
 });

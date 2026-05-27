@@ -66,14 +66,20 @@ export function CompaniesTable({
             <Td>
               {/* PR #71: company name links to Triage filtered by this
                   company. ``target_company_id`` is already plumbed through
-                  parseFilters → toQuery → backend ``/postings`` filter. */}
-              <Link
-                href={`/?target_company_id=${c.id}&state=triage`}
-                className="font-medium text-foreground hover:underline focus-visible:underline focus-visible:outline-none"
-                title={c.notes ?? undefined}
-              >
-                {c.name}
-              </Link>
+                  parseFilters → toQuery → backend ``/postings`` filter.
+                  PR #75: notes render inline below the name (muted, 12px)
+                  instead of in a ``title=`` tooltip — keyboard / mobile
+                  users couldn't surface hover-only content. Mirrors the
+                  ContactDetailPanel "source under name" pattern. */}
+              <div className="flex flex-col">
+                <Link
+                  href={`/?target_company_id=${c.id}&state=triage`}
+                  className="font-medium text-foreground hover:underline focus-visible:underline focus-visible:outline-none"
+                >
+                  {c.name}
+                </Link>
+                {c.notes && <p className="mt-0.5 text-[12px] text-muted-foreground">{c.notes}</p>}
+              </div>
             </Td>
             <Td>
               <TierBadge tier={c.tier} />
