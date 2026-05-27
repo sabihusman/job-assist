@@ -8,8 +8,10 @@
  *   - `ats_set` lists the distinct ATSes seen on this company's
  *     postings — the company itself doesn't have an authoritative ATS
  *     field. In practice 1 entry per row.
- *   - The response does NOT include `status` (open/closed), notes,
- *     or `ats_handle`. The Companies page is read-only here.
+ *   - PR #71 added `ats` / `ats_handle` / `notes` so the Companies
+ *     page can surface paused-state. `ats_handle === null` while
+ *     `ats !== 'unknown'` is the canonical "soft-paused" signal
+ *     (PR #65 Atlassian case).
  */
 export type CompanyListItem = {
   id: string;
@@ -20,6 +22,9 @@ export type CompanyListItem = {
   ats_set: string[];
   active_postings: number;
   total_postings: number;
+  ats: string | null;
+  ats_handle: string | null;
+  notes: string | null;
 };
 
 export type CompaniesListResponse = {

@@ -19,6 +19,9 @@ const COMPANIES: CompanyListItem[] = [
     ats_set: ['greenhouse'],
     active_postings: 3,
     total_postings: 10,
+    ats: 'greenhouse',
+    ats_handle: 'alpha',
+    notes: null,
   },
   {
     id: 'c-2',
@@ -29,6 +32,24 @@ const COMPANIES: CompanyListItem[] = [
     ats_set: [],
     active_postings: 0,
     total_postings: 0,
+    ats: null,
+    ats_handle: null,
+    notes: null,
+  },
+  // Paused company: previously-known adapter, handle cleared, notes
+  // explain why (PR #65 Atlassian shape).
+  {
+    id: 'c-3',
+    name: 'Paused Co',
+    domain: null,
+    description: null,
+    tier: 3,
+    ats_set: [],
+    active_postings: 0,
+    total_postings: 0,
+    ats: 'lever',
+    ats_handle: null,
+    notes: 'Paused: ATS handle unknown, soft-paused until investigation completes',
   },
 ];
 
@@ -60,5 +81,40 @@ describe('CompaniesTable', () => {
     const betaRow = screen.getByText('Beta Co').closest('tr');
     if (!betaRow) throw new Error('Beta Co row not found');
     expect(within(betaRow).getAllByText('—').length).toBeGreaterThan(0);
+  });
+
+  // ── PR #71 ─────────────────────────────────────────────────────────────
+
+  test('company name links to Triage filtered by target_company_id', () => {
+    render(<CompaniesTable companies={COMPANIES} />);
+    const link = screen.getByRole('link', { name: 'Alpha Co' });
+    expect(link).toHaveAttribute('href', '/?target_company_id=c-1&state=triage');
+  });
+
+  test('Paused badge appears only when ats_handle is null AND ats is a known adapter', () => {
+    render(<CompaniesTable companies={COMPANIES} />);
+    // Paused Co qualifies: ats='lever', ats_handle=null
+    const pausedRow = screen.getByText('Paused Co').closest('tr');
+    if (!pausedRow) throw new Error('Paused Co row not found');
+    expect(within(pausedRow).getByText('Paused')).toBeInTheDocument();
+
+    // Beta Co has no ats at all → not "paused", just unconfigured.
+    const betaRow = screen.getByText('Beta Co').closest('tr');
+    if (!betaRow) throw new Error('Beta Co row not found');
+    expect(within(betaRow).queryByText('Paused')).toBeNull();
+
+    // Alpha Co has a live handle → not paused.
+    const alphaRow = screen.getByText('Alpha Co').closest('tr');
+    if (!alphaRow) throw new Error('Alpha Co row not found');
+    expect(within(alphaRow).queryByText('Paused')).toBeNull();
+  });
+
+  test('paused notes surface via the link title attribute (tooltip)', () => {
+    render(<CompaniesTable companies={COMPANIES} />);
+    const pausedLink = screen.getByRole('link', { name: 'Paused Co' });
+    expect(pausedLink).toHaveAttribute(
+      'title',
+      'Paused: ATS handle unknown, soft-paused until investigation completes',
+    );
   });
 });
