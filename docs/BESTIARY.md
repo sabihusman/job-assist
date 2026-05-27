@@ -556,6 +556,18 @@ Mitigation: for any admin endpoint that accepts large operator payloads (seeds, 
 
 **Discovered in:** Contacts seed-data investigation (2026-05-27). The Tippie alumni xlsx produced a 388-row JSON intermediate at ~525 KB; Railway rejected the full payload with the opaque 400 error. 100-row batches succeeded; 374 contacts ultimately seeded across 4 batches.
 
+### 5.16 CSS-hiding an interactive component doesn't hide it from the accessibility tree
+
+When a Radix Dialog / Sheet component's `open` state is true but the component is hidden via CSS (e.g., `lg:hidden`), Radix still propagates `aria-hidden` to the rest of the page (its accessibility-trap behavior). This breaks assistive tech and tooling — screen readers skip everything outside the (visually hidden!) component, and accessibility-aware test queries (`getByRole(..., { name: ... })`) can't find elements outside it.
+
+The fix: gate the `open` state by viewport via JavaScript, not just by CSS. If a Sheet should only exist at `< lg`, its `open` prop must become false at `>= lg` regardless of underlying state. Use `useMediaQuery` or a custom `useIsLgUp` / `useIsBelowBreakpoint` hook.
+
+Diagnostic smoke signal: **if a test query needs `hidden: true` to find an element a real user would see, the production DOM is broken** — the component is being aria-hidden inappropriately. Don't fix the test; fix the component.
+
+**Rule of thumb:** any Sheet/Dialog whose `open` state can be reached from a trigger at multiple viewports must gate `open` by viewport in JS, not just by CSS visibility. The Sidebar mobile drawer is safe (its only trigger is the `md:hidden` hamburger, so the open state can only flip at `< md`). The Triage DetailPanel was not safe (cards are clickable at every viewport, so `selectedId` could be set anywhere, opening the Sheet on desktop too).
+
+**Discovered in:** PR #77 (UX overhaul foundation, 2026-05-27). 8 E2E tests failing because Radix Dialog's `aria-hidden` trap was firing on desktop when the mobile Sheet's `open` state became true via card clicks — Playwright's `getByRole('button', { name: 'T1' })` timed out across `triage.spec.ts`. Fix: gate Sheet `open` by `useIsLgUp()`, not just `lg:hidden` CSS.
+
 ---
 
 ## 6. Privacy / Safety Bestiary
