@@ -15,6 +15,8 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
 
+import { showErrorToast } from '@/lib/api/error-toast';
+
 import { useContactUpdate } from '@/lib/api/contacts';
 import type { ContactDetail, ContactUpdate } from '@/lib/contacts/types';
 
@@ -73,12 +75,8 @@ export function ContactEditForm({ contact }: { contact: ContactDetail }) {
           setEdits({});
         },
         onError: (err) => {
-          const isMutationError =
-            err && typeof err === 'object' && 'detail' in err && 'status' in err;
-          const detail = isMutationError
-            ? (err as unknown as { detail: string | null }).detail
-            : null;
-          toast.error(detail ?? 'Save failed.');
+          // PR #73: centralized helper. Auto-dismiss + structured detail.
+          showErrorToast(err, "Couldn't save contact changes");
         },
       },
     );

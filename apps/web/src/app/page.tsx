@@ -10,6 +10,7 @@ import { DetailPanel } from '@/components/triage/DetailPanel';
 import { FilterRow } from '@/components/triage/FilterRow';
 import type { TriageCardAction } from '@/components/triage/TriageCard';
 import { TriageList } from '@/components/triage/TriageList';
+import { showErrorToast } from '@/lib/api/error-toast';
 import { useRecordAction, useTriagePostings } from '@/lib/api/hooks';
 import { useTriageKeyboard } from '@/lib/keyboard/useTriageKeyboard';
 import { parseFilters } from '@/lib/triage/filters';
@@ -152,36 +153,15 @@ function TriagePageInner() {
             toast.success(`✓ ${verb}`);
           },
           onError: (err) => {
-            // PR #58 post-mortem: the pre-fix toast was a generic
-            // "Action failed — try again", which buried the FastAPI
-            // ``detail`` body. That hid the wire-shape bug (sending
-            // ``kind`` instead of ``action_type``) for weeks because
-            // the 422 response was indistinguishable from any other
-            // failure. Now we surface ``detail`` verbatim so the next
-            // schema-shape regression announces itself.
-            const isMutationError =
-              err && typeof err === 'object' && 'detail' in err && 'status' in err;
-            if (isMutationError) {
-              const detail = (err as unknown as { detail: string | null }).detail;
-              toast.error(detail ?? 'Action couldn’t be completed.');
-              return;
-            }
-            // PR #68 (Bestiary 5.12): non-MutationError exceptions used
-            // to fall straight to the generic toast, which blackboxed
-            // the cache-key-collision TypeError for weeks (operator
-            // saw "Action couldn't be completed." with zero network
-            // activity). Log the actual error so the next non-HTTP
-            // crash in the mutation lifecycle announces itself.
-            if (err instanceof Error) {
-              console.error('[useRecordAction] non-HTTP failure:', err.message, err.stack);
-            } else {
-              console.error('[useRecordAction] non-HTTP failure (non-Error):', err);
-            }
-            if (process.env.NODE_ENV !== 'production' && err instanceof Error) {
-              toast.error(`Action crashed: ${err.message}`);
-              return;
-            }
-            toast.error('Action couldn’t be completed.');
+            // PR #73: the four-branch onError tower (MutationError vs
+            // Error vs dev vs prod) collapsed into a single helper.
+            // The behavior matrix is preserved: MutationError → detail,
+            // any other Error → "{fallback} — {err.message}" in BOTH
+            // dev and prod (Bestiary 5.12: prod-only invisibility hid
+            // the cache-collision TypeError for weeks), null → fallback.
+            // Plus the toast now auto-dismisses at 4500ms with a
+            // close button (Bestiary 5.14).
+            showErrorToast(err, "Couldn't update posting state — try refreshing");
           },
         },
       );

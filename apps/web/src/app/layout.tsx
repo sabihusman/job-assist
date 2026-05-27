@@ -46,7 +46,16 @@ export default function RootLayout({
         <ThemeProvider>
           <QueryProvider>
             {children}
-            <Toaster position="bottom-right" />
+            {/*
+              PR #73 / Bestiary 5.14:
+                - duration=2500 sets the global default for success/info.
+                - closeButton lets the operator manually dismiss an error
+                  toast early (or a success toast that lingers).
+                - Errors override to 4500ms in showErrorToast for read
+                  time. Sonner's library default for toast.error is
+                  Infinity, which is the bug this PR closes.
+            */}
+            <Toaster position="bottom-right" duration={2500} closeButton />
           </QueryProvider>
         </ThemeProvider>
       </body>

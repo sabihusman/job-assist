@@ -532,6 +532,18 @@ Same lesson as PR #67's frontend audit findings (5.11) — list pages with growa
 
 **Discovered in:** PR #69 follow-up (frontend audit, 2026-05-26). 696 of 716 pending postings were unreachable from the UI.
 
+### 5.14 Toast lifecycle defaults can be infinite — make timeout explicit
+
+When a toast library's default timeout is undefined or null, error toasts persist indefinitely until the user manually dismisses. This is technically intentional in some libraries (so the user always sees the error) but in practice creates a UX hole: operator clicks Pass on three cards rapidly, gets three persistent error toasts stacked, never sees the actual error message.
+
+Fix: set explicit per-toast-type timeouts. Error 4500ms (longer for read time), success 2500ms, manual dismiss available on both via X button.
+
+Same lesson as Bestiary 5.11 (frontend hardcoded limit > API cap silently shows empty state) — default library behavior matters, and "use the default" without explicit understanding of what that default does is a footgun.
+
+Centralizing the error path also closes a Bestiary 5.12 gap: non-`MutationError` exceptions used to surface their `err.message` only in dev (the `process.env.NODE_ENV !== 'production'` guard). The cache-collision TypeError that prompted PR #69 was invisible in production for weeks. The PR #73 helper surfaces `err.message` in both environments so the next non-HTTP regression announces itself.
+
+**Discovered in:** PR #69 follow-up (frontend audit, 2026-05-27). The persistent "Action couldn't be completed" toast was technically the library's intended behavior, but never auto-dismissing made the cache-collision bug worse than necessary.
+
 ---
 
 ## 6. Privacy / Safety Bestiary
