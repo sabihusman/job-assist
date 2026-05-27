@@ -15,10 +15,21 @@ import { persist } from 'zustand/middleware';
  * needs to share filtered Triage views as URLs.
  */
 type UiState = {
+  /** Desktop: collapsed = narrow icon-rail. Persisted. */
   sidebarCollapsed: boolean;
+  /**
+   * Mobile (<md): off-canvas drawer open/closed. Volatile — should
+   * always start closed on page load. The hamburger in Banner flips
+   * it; the backdrop / a route change closes it. Desktop ignores this.
+   * (UX overhaul PR 1.)
+   */
+  sidebarMobileOpen: boolean;
   paletteOpen: boolean;
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
+  openSidebarMobile: () => void;
+  closeSidebarMobile: () => void;
+  toggleSidebarMobile: () => void;
   openPalette: () => void;
   closePalette: () => void;
   setPaletteOpen: (open: boolean) => void;
@@ -28,16 +39,23 @@ export const useUiStore = create<UiState>()(
   persist(
     (set) => ({
       sidebarCollapsed: false,
+      sidebarMobileOpen: false,
       paletteOpen: false,
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
+      openSidebarMobile: () => set({ sidebarMobileOpen: true }),
+      closeSidebarMobile: () => set({ sidebarMobileOpen: false }),
+      toggleSidebarMobile: () => set((s) => ({ sidebarMobileOpen: !s.sidebarMobileOpen })),
       openPalette: () => set({ paletteOpen: true }),
       closePalette: () => set({ paletteOpen: false }),
       setPaletteOpen: (open) => set({ paletteOpen: open }),
     }),
     {
       name: 'job-assist:ui',
-      // Persist only the sidebar state; palette is volatile.
+      // Persist only the desktop sidebar state; palette + mobile drawer are
+      // volatile. The mobile drawer should always rehydrate closed —
+      // persisting "drawer was open on the last visit" would create a
+      // confusing first paint.
       partialize: (state) => ({ sidebarCollapsed: state.sidebarCollapsed }),
     },
   ),

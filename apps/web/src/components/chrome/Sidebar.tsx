@@ -5,14 +5,23 @@ import { Suspense, useEffect, useState } from 'react';
 import { SavedFilters } from '@/components/chrome/SavedFilters';
 import { SidebarItem } from '@/components/chrome/SidebarItem';
 import { NAV_ITEMS } from '@/components/chrome/nav-items';
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { useUiStore } from '@/lib/stores/ui';
 import { cn } from '@/lib/utils';
 
 /**
- * Left rail. Expanded = 224px (`w-56`), collapsed = ~52px just the
- * icons. Brand block, primary nav, SAVED FILTERS, sync-status footer.
+ * Left rail.
  *
- * `mounted` gate: the persisted `sidebarCollapsed` reads from
+ * Desktop (≥ md): in-place sidebar. Expanded = 224px (``w-56``),
+ * collapsed = 52px icon rail. Toggled by Banner's PanelLeft button,
+ * persisted across reloads.
+ *
+ * Mobile (< md): off-canvas drawer (UX overhaul PR 1). Hidden by
+ * default; Banner's hamburger flips ``sidebarMobileOpen`` and the
+ * Sheet renders. Backdrop click and a route change close it. The
+ * drawer ignores the collapsed flag — mobile always gets full labels.
+ *
+ * `mounted` gate: the persisted ``sidebarCollapsed`` reads from
  * localStorage, which doesn't exist server-side. To avoid a hydration
  * mismatch (server renders expanded, client snaps to collapsed) we
  * render the expanded default until the client has had a tick to
@@ -20,6 +29,8 @@ import { cn } from '@/lib/utils';
  */
 export function Sidebar() {
   const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed);
+  const sidebarMobileOpen = useUiStore((s) => s.sidebarMobileOpen);
+  const closeSidebarMobile = useUiStore((s) => s.closeSidebarMobile);
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
@@ -28,14 +39,47 @@ export function Sidebar() {
   const collapsed = mounted && sidebarCollapsed;
 
   return (
-    <aside
-      data-collapsed={collapsed}
-      className={cn(
-        'sticky top-0 z-30 flex h-screen shrink-0 flex-col border-r border-border bg-surface transition-[width] duration-150',
-        collapsed ? 'w-[52px]' : 'w-56',
-      )}
-      aria-label="Primary navigation"
-    >
+    <>
+      {/* Desktop sidebar — hidden below md. */}
+      <aside
+        data-collapsed={collapsed}
+        className={cn(
+          'sticky top-0 z-30 hidden h-screen shrink-0 flex-col border-r border-border bg-surface transition-[width] duration-150 md:flex',
+          collapsed ? 'w-[52px]' : 'w-56',
+        )}
+        aria-label="Primary navigation"
+      >
+        <SidebarContents collapsed={collapsed} />
+      </aside>
+
+      {/* Mobile drawer — Sheet sliding from the left at < md. */}
+      <Sheet open={sidebarMobileOpen} onOpenChange={(o) => !o && closeSidebarMobile()}>
+        <SheetContent side="left" className="w-64 p-0 md:hidden">
+          {/* Radix requires a Title for a11y; sr-only because the
+              brand block itself reads "Job Assist" visually. */}
+          <SheetTitle className="sr-only">Primary navigation</SheetTitle>
+          <SidebarContents collapsed={false} onNavigate={closeSidebarMobile} />
+        </SheetContent>
+      </Sheet>
+    </>
+  );
+}
+
+/**
+ * Shared sidebar body. Same markup for desktop and mobile drawer — the
+ * only difference is the wrapping container (``aside`` vs Sheet) and
+ * the on-navigate handler (mobile dismisses the drawer on route
+ * change; desktop is always visible so nothing to close).
+ */
+function SidebarContents({
+  collapsed,
+  onNavigate,
+}: {
+  collapsed: boolean;
+  onNavigate?: () => void;
+}) {
+  return (
+    <div className="flex h-full flex-col">
       {/* Brand */}
       <div className="flex h-12 items-center gap-2 px-3">
         <div
@@ -46,8 +90,8 @@ export function Sidebar() {
         </div>
         {!collapsed && (
           <div className="flex flex-col leading-tight">
-            <span className="text-[12px] font-bold uppercase tracking-wide">Job Assist</span>
-            <span className="font-mono text-[11px] text-muted-foreground">v0.3 · local</span>
+            <span className="text-sm font-bold uppercase tracking-wide">Job Assist</span>
+            <span className="font-mono text-xs text-muted-foreground">v0.3 · local</span>
           </div>
         )}
       </div>
@@ -62,17 +106,13 @@ export function Sidebar() {
             icon={item.icon}
             badge={item.badge}
             collapsed={collapsed}
+            onClick={onNavigate}
           />
         ))}
       </nav>
 
       {/* SAVED FILTERS */}
       <div className="px-2">
-        {/* SavedFilters reads `useSearchParams()` to highlight the active
-            filter row. That bails Next.js out of static prerendering
-            unless wrapped in Suspense, so we wrap here — the chrome
-            still ships static; the search-param read just becomes a
-            client-side hydration step. */}
         <Suspense fallback={null}>
           <SavedFilters collapsed={collapsed} />
         </Suspense>
@@ -82,7 +122,7 @@ export function Sidebar() {
       <div className="mt-auto border-t border-border px-3 py-2">
         <SyncStatus collapsed={collapsed} />
       </div>
-    </aside>
+    </div>
   );
 }
 

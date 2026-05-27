@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { DetailPanel } from '@/components/triage/DetailPanel';
@@ -55,6 +55,22 @@ function wrap(node: React.ReactNode) {
   return render(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
 }
 
+/**
+ * Scope queries to the desktop aside. PR 1 UX overhaul: DetailPanel
+ * now renders BOTH a desktop aside AND a mobile Sheet portal when a
+ * posting is selected. Both DOM trees contain the same body content,
+ * so unscoped queries find duplicates. Tests that don't care about
+ * which surface (i.e. anything except the empty state) should scope
+ * via this helper.
+ */
+// Radix Dialog (used internally by Sheet) marks everything outside
+// the dialog as ``aria-hidden="true"`` when open, including our
+// desktop aside. ``hidden: true`` re-includes aria-hidden elements
+// in the role match. Both surfaces render the same content; we pick
+// the aside because it's the source-of-truth desktop layout.
+const panel = () =>
+  within(screen.getByRole('complementary', { name: 'Posting details', hidden: true }));
+
 afterEach(() => {
   mockState.data = null;
   mockState.isLoading = false;
@@ -69,20 +85,23 @@ describe('DetailPanel', () => {
   test('renders the division-pending callout when division is null', () => {
     mockState.data = makeDetail({ division: null });
     wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
-    expect(screen.getByText(/division info pending/i)).toBeInTheDocument();
+    expect(panel().getByText(/division info pending/i)).toBeInTheDocument();
   });
 
   test('renders the markdown JD', () => {
     mockState.data = makeDetail();
     wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
-    expect(screen.getByRole('heading', { level: 2, name: /about the role/i }));
-    expect(screen.getByText(/bullet one/)).toBeInTheDocument();
+    expect(panel().getByRole('heading', { level: 2, name: /about the role/i, hidden: true }));
+    expect(panel().getByText(/bullet one/)).toBeInTheDocument();
   });
 
   test('Open JD anchor targets a new tab', () => {
     mockState.data = makeDetail();
     wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
-    const anchor = screen.getByRole('link', { name: /open job description in new tab/i });
+    const anchor = panel().getByRole('link', {
+      name: /open job description in new tab/i,
+      hidden: true,
+    });
     expect(anchor.getAttribute('target')).toBe('_blank');
     expect(anchor.getAttribute('href')).toBe('https://example.test/jd');
   });
@@ -94,11 +113,13 @@ describe('DetailPanel', () => {
       jd_summary_markdown: '**Scope**: Senior PM owns fraud signals.\n\n**Comp**: $200k-$250k.',
     });
     wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
-    expect(screen.getByText(/job description \(summary\)/i)).toBeInTheDocument();
-    expect(screen.getByText(/Senior PM owns fraud signals/i)).toBeInTheDocument();
+    expect(panel().getByText(/job description \(summary\)/i)).toBeInTheDocument();
+    expect(panel().getByText(/Senior PM owns fraud signals/i)).toBeInTheDocument();
     // Toggle is offered, but the full description is NOT yet rendered.
-    expect(screen.getByRole('button', { name: /show full description/i })).toBeInTheDocument();
-    expect(screen.queryByText(/bullet one/)).not.toBeInTheDocument();
+    expect(
+      panel().getByRole('button', { name: /show full description/i, hidden: true }),
+    ).toBeInTheDocument();
+    expect(panel().queryByText(/bullet one/)).not.toBeInTheDocument();
   });
 
   test('renders full JD when jd_summary_markdown is null', () => {
@@ -107,18 +128,18 @@ describe('DetailPanel', () => {
     // Plain heading (no "(summary)" suffix) — and the JD body is visible
     // immediately without any toggle.
     expect(
-      screen.getByRole('heading', { level: 4, name: /^job description$/i }),
+      panel().getByRole('heading', { level: 4, name: /^job description$/i, hidden: true }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/bullet one/)).toBeInTheDocument();
+    expect(panel().getByText(/bullet one/)).toBeInTheDocument();
     expect(
-      screen.queryByRole('button', { name: /show full description/i }),
+      panel().queryByRole('button', { name: /show full description/i, hidden: true }),
     ).not.toBeInTheDocument();
   });
 
   test('shows pending footnote when summary is null but full JD exists', () => {
     mockState.data = makeDetail({ jd_summary_markdown: null });
     wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
-    expect(screen.getByText(/summary pending/i)).toBeInTheDocument();
+    expect(panel().getByText(/summary pending/i)).toBeInTheDocument();
   });
 
   test('toggle expands the full JD below the summary', () => {
@@ -127,10 +148,12 @@ describe('DetailPanel', () => {
     });
     wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
     // Start collapsed.
-    expect(screen.queryByText(/bullet one/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /show full description/i }));
-    expect(screen.getByText(/bullet one/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /hide full description/i })).toBeInTheDocument();
+    expect(panel().queryByText(/bullet one/)).not.toBeInTheDocument();
+    fireEvent.click(panel().getByRole('button', { name: /show full description/i, hidden: true }));
+    expect(panel().getByText(/bullet one/)).toBeInTheDocument();
+    expect(
+      panel().getByRole('button', { name: /hide full description/i, hidden: true }),
+    ).toBeInTheDocument();
   });
 
   test('toggle collapses the full JD again on second click', () => {
@@ -138,11 +161,11 @@ describe('DetailPanel', () => {
       jd_summary_markdown: '**Scope**: short summary line.',
     });
     wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
-    const btn = screen.getByRole('button', { name: /show full description/i });
+    const btn = panel().getByRole('button', { name: /show full description/i, hidden: true });
     fireEvent.click(btn);
-    expect(screen.getByText(/bullet one/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /hide full description/i }));
-    expect(screen.queryByText(/bullet one/)).not.toBeInTheDocument();
+    expect(panel().getByText(/bullet one/)).toBeInTheDocument();
+    fireEvent.click(panel().getByRole('button', { name: /hide full description/i, hidden: true }));
+    expect(panel().queryByText(/bullet one/)).not.toBeInTheDocument();
   });
 
   // ── PR #76: Score field reads from posting.score (not hardcoded —) ──────
@@ -155,8 +178,9 @@ describe('DetailPanel', () => {
     mockState.data = makeDetail({ score: 91 });
     wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
 
-    // Find the dt labeled "Score", read its sibling dd.
-    const scoreLabel = screen.getByText('Score');
+    // Find the dt labeled "Score" inside the desktop aside, read its
+    // sibling dd.
+    const scoreLabel = panel().getByText('Score');
     const scoreValue = scoreLabel.nextElementSibling;
     expect(scoreValue?.textContent).toBe('91');
   });
@@ -165,7 +189,7 @@ describe('DetailPanel', () => {
     mockState.data = makeDetail({ score: null });
     wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
 
-    const scoreLabel = screen.getByText('Score');
+    const scoreLabel = panel().getByText('Score');
     const scoreValue = scoreLabel.nextElementSibling;
     expect(scoreValue?.textContent).toBe('—');
   });

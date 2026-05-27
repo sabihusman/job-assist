@@ -20,7 +20,12 @@ describe('Banner', () => {
     const user = userEvent.setup();
     useUiStore.setState({ paletteOpen: false });
     render(<Banner title="Triage" />);
-    await user.click(screen.getByRole('button', { name: /open command palette/i }));
+    // PR 1 UX overhaul: there are now two palette-trigger buttons —
+    // an icon-only square at <sm and the full 280px bar at ≥sm,
+    // chosen via responsive utilities. Clicking either dispatches
+    // the same store action; assert by clicking the first match.
+    const [trigger] = screen.getAllByRole('button', { name: /open command palette/i });
+    await user.click(trigger);
     expect(useUiStore.getState().paletteOpen).toBe(true);
   });
 });
