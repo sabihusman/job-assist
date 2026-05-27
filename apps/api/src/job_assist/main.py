@@ -2218,7 +2218,15 @@ async def list_companies(
                 # case); ``ats`` is the canonical adapter, distinct from
                 # ``ats_set`` which is what postings actually surfaced.
                 # ``notes`` carries the human reason for any pause.
-                "ats": tc.ats.value if tc.ats is not None else None,
+                # Defensive: ``tc.ats`` is an ``ATS`` enum in production
+                # but the test helper instantiates TargetCompany with a
+                # plain string and SQLAlchemy doesn't always coerce
+                # pre-commit. Handle both shapes.
+                "ats": (
+                    tc.ats.value
+                    if tc.ats is not None and hasattr(tc.ats, "value")
+                    else tc.ats
+                ),
                 "ats_handle": tc.ats_handle,
                 "notes": tc.notes,
             }
