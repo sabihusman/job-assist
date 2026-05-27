@@ -497,6 +497,16 @@ If the screenshot's SHA doesn't match HEAD, the screenshot is stale. Get fresh s
 
 **Discovered in:** PR #65 (Plaid + Atlassian data fix). The migration-check CI step appeared to fail in a screenshot, but the failure was pinned to a pre-rebase commit. The post-rebase run on the actual branch HEAD was green.
 
+### 5.11 Frontend hardcoded limit > API cap silently shows empty state
+
+When a frontend hook requests `?limit=500` but the API caps at 100 and returns 422, the typical React Query error fallthrough renders the empty state instead of an error state. The visible symptom: 'No data' when data actually exists.
+
+Two-part fix:
+1. Match frontend limits to API caps (or page below the cap).
+2. Surface API errors explicitly at the page level — never let a 422 collapse silently to an empty state. The error card needs to be a deliberate render path, not a missing else-branch.
+
+**Discovered in:** PR #66 follow-up audit (2026-05-26). The /passed page silently rendered 'No passed postings yet' while the API had 4 not_interested rows; the 422 from limit=500 was swallowed by React Query's empty default. Same pattern at /applied, /stats, /rejected.
+
 ---
 
 ## 6. Privacy / Safety Bestiary
