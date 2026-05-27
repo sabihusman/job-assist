@@ -544,6 +544,18 @@ Centralizing the error path also closes a Bestiary 5.12 gap: non-`MutationError`
 
 **Discovered in:** PR #69 follow-up (frontend audit, 2026-05-27). The persistent "Action couldn't be completed" toast was technically the library's intended behavior, but never auto-dismissing made the cache-collision bug worse than necessary.
 
+### 5.15 Railway proxy rejects large request bodies with opaque 400
+
+Railway's edge proxy enforces a request body size cap that fires before the FastAPI application sees the request. The error response is a plain 400 with body `"There was an error parsing the body"` — this string is NOT in the application code, which is the diagnostic giveaway. The actual cap was empirically ~525 KB for JSON bodies; 110 KB chunks land cleanly.
+
+The trap: the error message looks like FastAPI/Pydantic complaining about malformed JSON, so the natural diagnostic path is "check my JSON, validate the parser, etc." — none of which surface the real problem. The fix is batch the request, not fix the JSON.
+
+Mitigation: for any admin endpoint that accepts large operator payloads (seeds, bulk imports, batch updates), either:
+1. Build a `--batch-size N` flag into the operator script and POST in chunks of ~100 rows or ~100 KB
+2. Document the cap in RUNBOOK.md so the next operator doesn't burn an hour diagnosing
+
+**Discovered in:** Contacts seed-data investigation (2026-05-27). The Tippie alumni xlsx produced a 388-row JSON intermediate at ~525 KB; Railway rejected the full payload with the opaque 400 error. 100-row batches succeeded; 374 contacts ultimately seeded across 4 batches.
+
 ---
 
 ## 6. Privacy / Safety Bestiary
