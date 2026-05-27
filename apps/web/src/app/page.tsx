@@ -231,6 +231,16 @@ function TriagePageInner() {
           empty={!isLoading && !isError && items.length === 0}
           showing={items.length}
           total={total}
+          companyFilterActive={!!filters.target_company_id}
+          onClearCompanyFilter={() => {
+            // Strip ``target_company_id`` while preserving other filter
+            // params. Encoded via the URLSearchParams API so multi-value
+            // params (tier, ats, state) round-trip correctly.
+            const next = new URLSearchParams(searchParams.toString());
+            next.delete('target_company_id');
+            const qs = next.toString();
+            router.replace(qs ? `/?${qs}` : '/', { scroll: false });
+          }}
           onResetFilters={() => router.replace('/?state=triage', { scroll: false })}
           onRetry={() => refetch()}
         >
@@ -302,6 +312,8 @@ function MainColumn({
   empty,
   showing = 0,
   total = 0,
+  companyFilterActive = false,
+  onClearCompanyFilter,
   onResetFilters,
   onRetry,
   children,
@@ -311,12 +323,36 @@ function MainColumn({
   empty?: boolean;
   showing?: number;
   total?: number;
+  companyFilterActive?: boolean;
+  onClearCompanyFilter?: () => void;
   onResetFilters?: () => void;
   onRetry?: () => void;
   children?: React.ReactNode;
 }) {
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-4 px-6 py-4">
+      {companyFilterActive && (
+        // PR #71: scoped-to-one-company indicator. Clicking the × strips
+        // ``target_company_id`` from the URL and lands back on the full
+        // Triage queue. Generic copy (no company-name lookup) keeps the
+        // scope tight — operator knows what they clicked.
+        <div className="flex items-center gap-2">
+          <span
+            data-testid="company-filter-pill"
+            className="inline-flex h-6 items-center gap-2 rounded-full border border-border bg-accent/40 px-2 font-mono text-[11px] text-foreground"
+          >
+            Filtered to one company
+            <button
+              type="button"
+              aria-label="Clear company filter"
+              onClick={onClearCompanyFilter}
+              className="inline-flex h-4 w-4 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              ×
+            </button>
+          </span>
+        </div>
+      )}
       <FilterRow showing={showing} total={total} />
       <CalibrationCard />
 

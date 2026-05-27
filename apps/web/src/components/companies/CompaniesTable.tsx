@@ -1,11 +1,24 @@
 'use client';
 
+import Link from 'next/link';
 import { useMemo } from 'react';
 
 import { useAllOutcomes, useAppliedPostings } from '@/lib/api/applied';
 import { countAppliedByCompany, summarizeOutcomes } from '@/lib/companies/summaries';
 import type { CompanyListItem } from '@/lib/companies/types';
 import { cn } from '@/lib/utils';
+
+/**
+ * PR #71: a company is "soft-paused" when the operator has cleared the
+ * ATS handle (so the ingest probe stops scraping it) but kept the row
+ * in the target list with a ``notes`` field explaining why. Treat
+ * ``ats === null`` or ``ats === 'unknown'`` plus a ``null`` handle as
+ * "no adapter at all" (default state) rather than paused — pause is
+ * specifically "we had a working adapter and intentionally stopped".
+ */
+function isPaused(c: CompanyListItem): boolean {
+  return c.ats_handle === null && c.ats !== null && c.ats !== 'unknown';
+}
 
 /**
  * Companies table — read-only in #32c.
@@ -49,21 +62,31 @@ export function CompaniesTable({
       </thead>
       <tbody>
         {companies.map((c) => (
-          <tr key={c.id} className="border-t border-border">
-            <Td>{c.name}</Td>
+          <tr key={c.id} className="border-t border-border hover:bg-accent/30">
+            <Td>
+              {/* PR #71: company name links to Triage filtered by this
+                  company. ``target_company_id`` is already plumbed through
+                  parseFilters → toQuery → backend ``/postings`` filter. */}
+              <Link
+                href={`/?target_company_id=${c.id}&state=triage`}
+                className="font-medium text-foreground hover:underline focus-visible:underline focus-visible:outline-none"
+                title={c.notes ?? undefined}
+              >
+                {c.name}
+              </Link>
+            </Td>
             <Td>
               <TierBadge tier={c.tier} />
             </Td>
             <Td>
-              {c.ats_set.length === 0 ? (
-                <span className="text-muted-foreground">—</span>
-              ) : (
-                <div className="flex flex-wrap gap-1">
-                  {c.ats_set.map((ats) => (
-                    <AtsBadge key={ats} ats={ats} />
-                  ))}
-                </div>
-              )}
+              <div className="flex flex-wrap items-center gap-1">
+                {c.ats_set.length === 0 ? (
+                  <span className="text-muted-foreground">—</span>
+                ) : (
+                  c.ats_set.map((ats) => <AtsBadge key={ats} ats={ats} />)
+                )}
+                {isPaused(c) && <PausedBadge title={c.notes ?? 'Paused'} />}
+              </div>
             </Td>
             <Td align="right" mono>
               {c.active_postings}
@@ -145,6 +168,18 @@ function TierBadge({ tier }: { tier: number | null }) {
       )}
     >
       T{tier}
+    </span>
+  );
+}
+
+function PausedBadge({ title }: { title: string }) {
+  return (
+    <span
+      title={title}
+      aria-label={`Paused — ${title}`}
+      className="inline-flex rounded bg-pending/15 px-1.5 py-0 font-mono text-[10px] font-medium uppercase tracking-wide text-pending ring-1 ring-inset ring-pending/30"
+    >
+      Paused
     </span>
   );
 }

@@ -799,6 +799,56 @@ async def test_companies_no_n_plus_one(db_session: Any) -> None:
     assert counter.count <= 2, f"expected ≤2 queries, got {counter.count}"
 
 
+# ── PR #71: paused-state surfacing ─────────────────────────────────────────
+
+
+@_NEEDS_DB
+async def test_companies_surfaces_ats_handle_and_notes_pr71(db_session: Any) -> None:
+    """Companies response must include ``ats``, ``ats_handle``, ``notes``.
+
+    The frontend Companies table (PR #71) uses these to render a Paused
+    badge when an operator soft-pauses a target (PR #65 Atlassian case
+    — adapter known, handle cleared, notes field explains why).
+    """
+    live = TargetCompany(
+        name="LiveCo_PR71",
+        tier=1,
+        ats="greenhouse",
+        ats_handle="livehandle",
+        notes=None,
+    )
+    paused = TargetCompany(
+        name="PausedCo_PR71",
+        tier=2,
+        ats="lever",
+        ats_handle=None,
+        notes="Paused: ATS handle unknown, soft-paused (PR #65)",
+    )
+    db_session.add_all([live, paused])
+    await db_session.commit()
+
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp = await ac.get("/companies")
+    finally:
+        await _drop_override()
+
+    assert resp.status_code == 200
+    by_name = {c["name"]: c for c in resp.json()["items"]}
+
+    assert by_name["LiveCo_PR71"]["ats"] == "greenhouse"
+    assert by_name["LiveCo_PR71"]["ats_handle"] == "livehandle"
+    assert by_name["LiveCo_PR71"]["notes"] is None
+
+    assert by_name["PausedCo_PR71"]["ats"] == "lever"
+    assert by_name["PausedCo_PR71"]["ats_handle"] is None
+    assert (
+        by_name["PausedCo_PR71"]["notes"]
+        == "Paused: ATS handle unknown, soft-paused (PR #65)"
+    )
+
+
 # ── /outcomes ────────────────────────────────────────────────────────────────
 
 

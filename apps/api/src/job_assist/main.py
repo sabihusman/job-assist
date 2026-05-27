@@ -2212,6 +2212,15 @@ async def list_companies(
                 "ats_set": sorted(str(x) for x in (ats_arr or []) if x),
                 "active_postings": int(active_count or 0),
                 "total_postings": int(total_count or 0),
+                # PR #71: surface fields needed for the Companies page
+                # paused-state badge. ``ats_handle`` is NULL when the
+                # operator has soft-paused a company (PR #65 Atlassian
+                # case); ``ats`` is the canonical adapter, distinct from
+                # ``ats_set`` which is what postings actually surfaced.
+                # ``notes`` carries the human reason for any pause.
+                "ats": tc.ats.value if tc.ats is not None else None,
+                "ats_handle": tc.ats_handle,
+                "notes": tc.notes,
             }
         )
 
