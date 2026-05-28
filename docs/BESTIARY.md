@@ -578,6 +578,12 @@ A second lesson from the same investigation: the structured field you assume an 
 
 ---
 
+### 5.18 A lifecycle column is useless until something writes AND reads it
+
+job_posting had a closed_at column from day one, but nothing ever wrote it and no query filtered on it — so ~48% of the corpus was stale (removed from ATS boards) yet displayed as active. last_seen_at was the only real staleness signal, updated on every re-ingest, but unused for filtering. A lifecycle/status column needs both a writer (set it when the condition occurs) and a reader (filter on it) to do anything. A dead column is worse than no column — it implies a capability that doesn't exist. Discovered building stale-detection: the fix wasn't adding a column, it was wiring the one that already existed.
+
+---
+
 ## 6. Privacy / Safety Bestiary
 
 ### 6.1 xlsx files containing real PII never committed

@@ -212,6 +212,8 @@ async def discover_divisions(session: AsyncSession) -> DiscoverySummary:
             )
             .where(JobPosting.target_company_id.is_not(None))
             .where((JobPosting.department.is_not(None)) | (JobPosting.team.is_not(None)))
+            # Skip stale/closed postings (Bestiary 5.18).
+            .where(JobPosting.closed_at.is_(None))
         )
     ).all()
 

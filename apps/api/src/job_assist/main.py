@@ -240,6 +240,32 @@ async def trigger_ingest(
     }
 
 
+@app.post("/admin/postings/mark-stale", tags=["admin"])
+async def mark_stale_postings_endpoint(
+    db: DbSession,
+    stale_after_days: int = 7,
+) -> dict[str, int]:
+    """Mark postings stale (set ``closed_at``) when not seen on their ATS
+    for ``stale_after_days``.
+
+    Called by the daily ingest cron AFTER the per-board loop completes, so
+    every still-live posting has had its ``last_seen_at`` refreshed first.
+    Also serves as the one-time backfill (call once after deploy to close
+    the existing stale tail). Idempotent — already-closed rows are skipped.
+
+    Bestiary 5.18: ``closed_at`` is the lifecycle column; this is its
+    writer, ``GET /postings`` (default ``closed_at IS NULL``) its reader.
+
+    TODO: add authentication before exposing publicly. Dev-mode only.
+    """
+    from job_assist.services.ingestion import mark_stale_postings
+
+    if stale_after_days < 1:
+        raise HTTPException(status_code=422, detail="stale_after_days must be >= 1")
+    marked = await mark_stale_postings(db, stale_after_days=stale_after_days)
+    return {"marked_stale": marked, "stale_after_days": stale_after_days}
+
+
 # ── Admin — discover-ats batch ────────────────────────────────────────────────
 
 
@@ -1191,7 +1217,9 @@ async def reclassify_sweep_endpoint(
     from job_assist.services.scoring import SCORER_VERSION, score_posting
 
     # ── 1. Select candidates ──────────────────────────────────────────────
-    stmt = select(JobPosting)
+    # Skip stale/closed postings (Bestiary 5.18) — don't burn LLM calls
+    # reclassifying postings removed from their ATS board.
+    stmt = select(JobPosting).where(JobPosting.closed_at.is_(None))
     if payload.only_unclassified:
         stmt = stmt.where(
             or_(
@@ -1361,8 +1389,12 @@ async def score_sweep_endpoint(
     # ── 1. Select candidates ─────────────────────────────────────────────
     # Tier comes from target_company via OUTER JOIN — postings without a
     # matched company get NULL tier, which the scorer maps to 50 (neutral).
-    stmt = select(JobPosting, TargetCompany.tier).outerjoin(
-        TargetCompany, JobPosting.target_company_id == TargetCompany.id
+    stmt = (
+        select(JobPosting, TargetCompany.tier)
+        .outerjoin(TargetCompany, JobPosting.target_company_id == TargetCompany.id)
+        # Skip stale/closed postings (Bestiary 5.18) — no point scoring a
+        # removed posting that won't surface in Triage anyway.
+        .where(JobPosting.closed_at.is_(None))
     )
     if payload.only_unscored:
         stmt = stmt.where(JobPosting.fit_score.is_(None))
@@ -1594,6 +1626,7 @@ async def list_postings(
     per_company_cap: int = 3,
     limit: int = 20,
     offset: int = 0,
+    include_closed: bool = False,
 ) -> dict[str, Any]:
     """Paginated list of postings with the company/role/source/state nested.
 
@@ -1639,6 +1672,12 @@ async def list_postings(
 
     # Build the WHERE clause shared by COUNT and SELECT.
     where_clauses: list[Any] = []
+    # Stale-posting filter (Bestiary 5.18): by default hide postings the
+    # mark-stale sweep has closed (removed from their ATS board, not seen
+    # in 7+ days). ``include_closed=true`` opts back in to the full set.
+    # Appended to the shared list so it narrows COUNT and SELECT identically.
+    if not include_closed:
+        where_clauses.append(JobPosting.closed_at.is_(None))
     if tier:
         where_clauses.append(TargetCompany.tier.in_(tier))
     if remote_type:
