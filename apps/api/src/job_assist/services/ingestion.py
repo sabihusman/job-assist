@@ -133,6 +133,21 @@ class IngestionService:
                         job_posting.department = norm.department
                     if job_posting.team is None and norm.team is not None:
                         job_posting.team = norm.team
+                    # Self-heal salary on re-ingest (PR: Greenhouse salary fix).
+                    # Greenhouse rows ingested before JD-body salary extraction
+                    # have NULL salary; once the adapter starts populating it,
+                    # backfill on the next re-fetch. Fill-if-NULL only — never
+                    # overwrite an existing range (could be operator-corrected
+                    # or a prior good parse). Backfill the whole tuple together
+                    # so currency/period stay consistent with the numbers.
+                    if job_posting.salary_min is None and norm.salary_min is not None:
+                        job_posting.salary_min = norm.salary_min
+                        job_posting.salary_max = norm.salary_max
+                        job_posting.salary_currency = norm.salary_currency
+                        # ``salary_period`` is a str on NormalizedPosting but a
+                        # SalaryPeriod enum column; SQLAlchemy coerces on write.
+                        # Same enum-assignment pattern as the reclassify sweep.
+                        job_posting.salary_period = norm.salary_period  # type: ignore[assignment]
                     postings_updated += 1
 
                 # ── Auto-score (PR #56) ──────────────────────────────────────

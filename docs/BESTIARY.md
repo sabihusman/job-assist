@@ -568,6 +568,14 @@ Diagnostic smoke signal: **if a test query needs `hidden: true` to find an eleme
 
 **Discovered in:** PR #77 (UX overhaul foundation, 2026-05-27). 8 E2E tests failing because Radix Dialog's `aria-hidden` trap was firing on desktop when the mobile Sheet's `open` state became true via card clicks — Playwright's `getByRole('button', { name: 'T1' })` timed out across `triage.spec.ts`. Fix: gate Sheet `open` by `useIsLgUp()`, not just `lg:hidden` CSS.
 
+### 5.17 Entity-escaped HTML survives tag-stripping
+
+`strip_html` (selectolax-based) removes real HTML element tags but does NOT unescape HTML entities first. When a source API returns entity-escaped HTML (`&lt;h2&gt;` instead of `<h2>`), the escaped entities are not tags — `strip_html` leaves them as literal visible text. Result: "stripped" text still contains `<h2><strong>...` visible to the user. Fix: `html.unescape()` before `strip_html` so entities become real tags the stripper can remove.
+
+A second lesson from the same investigation: the structured field you assume an API has may only exist in its authenticated/enterprise tier. Greenhouse's public Job Board API exposes no pay field — structured comp lives only in the authenticated Harvest API. Pay data on the public API is embedded in JD body text and must be text-mined. Verify field availability against the actual API tier you call, not the vendor's general documentation.
+
+**Discovered in:** Greenhouse adapter fix (2026-05-28). Greenhouse content field is entity-escaped HTML; Ashby avoided it via a pre-cleaned descriptionPlain field. Salary assumed structured, found only in JD body text.
+
 ---
 
 ## 6. Privacy / Safety Bestiary
