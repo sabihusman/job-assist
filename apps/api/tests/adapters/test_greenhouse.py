@@ -152,6 +152,75 @@ class TestNormalizeHtmlStripping:
         assert "Lead the product roadmap" in result
 
 
+def _gh_job(content: str, *, job_id: int = 999, title: str = "Product Manager") -> dict[str, Any]:
+    """Minimal Greenhouse job payload for normalize() tests."""
+    return {
+        "id": job_id,
+        "title": title,
+        "location": {"name": "Remote"},
+        "absolute_url": "https://example.test/jobs/999",
+        "content": content,
+        "first_published": "2026-05-01T00:00:00Z",
+        "departments": [],
+    }
+
+
+class TestEntityEscapedHtml:
+    """Bestiary 5.17: Greenhouse content is entity-escaped HTML.
+
+    normalize() must html.unescape before strip_html so escaped tags
+    don't survive as literal visible text in jd_text.
+    """
+
+    def test_escaped_html_produces_clean_jd_text(self) -> None:
+        # Greenhouse delivers content like this — entities, not real tags.
+        escaped = (
+            "&lt;h2&gt;&lt;strong&gt;About Us&lt;/strong&gt;&lt;/h2&gt;"
+            "&lt;p&gt;We build &lt;a href=&quot;x&quot;&gt;things&lt;/a&gt;.&lt;/p&gt;"
+        )
+        norm = GreenhouseAdapter().normalize(
+            RawPosting(source_job_id="999", raw_payload=_gh_job(escaped)),
+            "ExampleCo",
+        )
+        # No literal angle brackets and no surviving entities.
+        assert "<" not in norm.jd_text
+        assert ">" not in norm.jd_text
+        assert "&lt;" not in norm.jd_text
+        assert "&gt;" not in norm.jd_text
+        # The actual prose survives.
+        assert "About Us" in norm.jd_text
+        assert "We build" in norm.jd_text
+        assert "things" in norm.jd_text
+
+
+class TestGreenhouseSalaryExtraction:
+    """JD-body salary text-mining (public Greenhouse API has no pay field)."""
+
+    def test_jd_body_pay_range_populates_salary(self) -> None:
+        # Pay-transparency board pattern: range embedded in (escaped) HTML.
+        escaped = (
+            "&lt;p&gt;The base pay range for this role is "
+            "$180,000&lt;span&gt;&amp;mdash;&lt;/span&gt;$248,000 USD.&lt;/p&gt;"
+        )
+        norm = GreenhouseAdapter().normalize(
+            RawPosting(source_job_id="999", raw_payload=_gh_job(escaped)),
+            "ExampleCo",
+        )
+        assert norm.salary_min == 180000
+        assert norm.salary_max == 248000
+        assert norm.salary_currency == "USD"
+
+    def test_no_pay_in_body_leaves_salary_none(self) -> None:
+        escaped = "&lt;p&gt;We are hiring a Product Manager. No comp listed.&lt;/p&gt;"
+        norm = GreenhouseAdapter().normalize(
+            RawPosting(source_job_id="999", raw_payload=_gh_job(escaped)),
+            "ExampleCo",
+        )
+        assert norm.salary_min is None
+        assert norm.salary_max is None
+        assert norm.salary_currency is None
+
+
 # ── HandleNotFoundError (Bestiary 5.9) ─────────────────────────────────────────
 
 

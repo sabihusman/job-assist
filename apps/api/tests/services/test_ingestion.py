@@ -137,3 +137,73 @@ async def test_handle_not_found_is_recorded_as_distinct_status(db_session: Any) 
     assert run.postings_updated == 0
     assert run.error_traceback is None  # not a stack-worthy failure
     assert "ghost-handle" in (run.error_message or "")
+
+
+# ── Salary self-heal on re-ingest (Greenhouse salary fix) ─────────────────────
+
+
+def _gh_job_with_content(content: str) -> dict[str, Any]:
+    """A single fixed Greenhouse job, varying only the content body.
+
+    content_hash derives from (name, title, locations) — all constant here —
+    so two payloads with different ``content`` resolve to the SAME posting
+    and exercise the update branch.
+    """
+    return {
+        "id": 555001,
+        "title": "Senior Product Manager",
+        "location": {"name": "Remote"},
+        "absolute_url": "https://example.test/jobs/555001",
+        "content": content,
+        "first_published": "2026-05-01T00:00:00Z",
+        "departments": [],
+    }
+
+
+@_NEEDS_DB
+async def test_salary_self_heals_on_reingest(db_session: Any) -> None:
+    """Existing row with NULL salary + re-ingest where the JD body now
+    carries a pay range → self-heal backfills salary_min/max/currency.
+    Mirrors the department/team self-heal contract.
+    """
+    service = IngestionService()
+    no_pay = "&lt;p&gt;We are hiring a Senior PM. Comp not listed.&lt;/p&gt;"
+    with_pay = (
+        "&lt;p&gt;We are hiring a Senior PM. Base pay "
+        "$190,000&lt;span&gt;&amp;mdash;&lt;/span&gt;$240,000 USD.&lt;/p&gt;"
+    )
+
+    # First ingest: no pay in body → salary NULL.
+    await service.ingest_source(_make_adapter([_gh_job_with_content(no_pay)]), "stripe", db_session)
+    row = (await db_session.execute(select(JobPosting))).scalars().one()
+    assert row.salary_min is None and row.salary_max is None
+
+    # Re-ingest same posting, now with a pay range → self-heal fills it.
+    await service.ingest_source(
+        _make_adapter([_gh_job_with_content(with_pay)]), "stripe", db_session
+    )
+    await db_session.refresh(row)
+    assert row.salary_min == 190000
+    assert row.salary_max == 240000
+    assert row.salary_currency == "USD"
+
+
+@_NEEDS_DB
+async def test_salary_self_heal_never_overwrites_existing(db_session: Any) -> None:
+    """Existing row with a NON-NULL salary must NOT be overwritten on
+    re-ingest, even if the new payload parses a different range — fill-if-
+    NULL only, same guard as department/team.
+    """
+    service = IngestionService()
+    pay_a = "&lt;p&gt;Base pay $190,000&lt;span&gt;&amp;mdash;&lt;/span&gt;$240,000 USD.&lt;/p&gt;"
+    pay_b = "&lt;p&gt;Base pay $300,000&lt;span&gt;&amp;mdash;&lt;/span&gt;$400,000 USD.&lt;/p&gt;"
+
+    await service.ingest_source(_make_adapter([_gh_job_with_content(pay_a)]), "stripe", db_session)
+    row = (await db_session.execute(select(JobPosting))).scalars().one()
+    assert row.salary_min == 190000  # set on first ingest
+
+    # Re-ingest with a different range — must be ignored (fill-if-NULL only).
+    await service.ingest_source(_make_adapter([_gh_job_with_content(pay_b)]), "stripe", db_session)
+    await db_session.refresh(row)
+    assert row.salary_min == 190000, "self-heal must not overwrite an existing salary"
+    assert row.salary_max == 240000

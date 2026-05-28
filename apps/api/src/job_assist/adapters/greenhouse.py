@@ -17,6 +17,8 @@ Each job object has:
 from __future__ import annotations
 
 import contextlib
+import html
+import logging
 from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any, ClassVar
@@ -37,9 +39,12 @@ from job_assist.adapters.normalization import (
     detect_seniority,
     normalize_org_field,
     normalize_title,
+    parse_compensation,
     parse_location,
     strip_html,
 )
+
+logger = logging.getLogger(__name__)
 
 # Re-exported for backward-compatible imports (tests, downstream code).
 __all__ = [
@@ -126,10 +131,29 @@ class GreenhouseAdapter:
         html_content: str = job.get("content") or ""
 
         norm_title = normalize_title(raw_title)
-        jd_text = strip_html(html_content)
+        # Bestiary 5.17: Greenhouse's ``content`` is ENTITY-ESCAPED HTML
+        # (``&lt;h2&gt;`` not ``<h2>``). strip_html only removes real tags,
+        # so we must unescape first — otherwise the escaped tags survive
+        # as literal visible text in jd_text and render raw in the UI.
+        jd_text = strip_html(html.unescape(html_content))
         locations_normalized, remote_type = parse_location(location_raw)
         seniority = detect_seniority(norm_title)
         role_fam = detect_role_family(norm_title)
+
+        # Salary: the public Greenhouse Job Board API exposes NO structured
+        # pay field (verified across ~1,700 jobs / 5 boards — only
+        # single_select/multi_select metadata). Pay-transparency boards put
+        # the range in the JD body text, so we text-mine the cleaned jd_text
+        # with the same parser Ashby uses on its comp summary. Best-effort:
+        # ``None`` when no range is present (the common case). This requires
+        # the unescape above to have run first.
+        salary_min, salary_max, salary_currency, salary_period_str = parse_compensation(jd_text)
+        salary_period = salary_period_str or "unknown"
+        if "$" in jd_text and salary_min is None and salary_max is None:
+            logger.warning(
+                "greenhouse.compensation.unparsed",
+                extra={"greenhouse_job_id": job.get("id"), "title": raw_title},
+            )
 
         # Greenhouse's ``departments`` is a list of {id, name, ...} entries.
         # Multiple departments per posting is technically allowed by the API
@@ -161,6 +185,10 @@ class GreenhouseAdapter:
             location_raw=location_raw,
             locations_normalized=locations_normalized,
             remote_type=remote_type,
+            salary_min=salary_min,
+            salary_max=salary_max,
+            salary_currency=salary_currency,
+            salary_period=salary_period,
             jd_text=jd_text,
             jd_text_hash=_sha256(jd_text),
             content_hash=compute_content_hash(
