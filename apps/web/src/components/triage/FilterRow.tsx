@@ -65,49 +65,59 @@ export function FilterRow({
   );
 
   return (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-      <ChipGroupRow
-        label="TIER"
-        current={filters.tier}
-        chips={TIER_CHIPS.map((c) => ({ wire: c.wire, label: c.label }))}
-        onToggle={(v) => pushFilters({ ...filters, tier: toggleInArray(filters.tier, v) })}
-      />
-      <ChipGroupRow
-        label="SOURCE"
-        current={filters.ats}
-        chips={ATS_CHIPS.map((c) => ({ wire: c.wire, label: c.label }))}
-        onToggle={(v) => pushFilters({ ...filters, ats: toggleInArray(filters.ats, v) })}
-      />
-      <ChipGroupRow
-        label="REMOTE"
-        current={filters.remote_type}
-        chips={REMOTE_CHIPS.map((c) => ({ wire: c.wire, label: c.label }))}
-        onToggle={(v) =>
-          pushFilters({ ...filters, remote_type: toggleInArray(filters.remote_type, v) })
-        }
-      />
-      <ChipGroupRow
-        label="FAMILY"
-        current={filters.role_family}
-        chips={FAMILY_CHIPS.map((wire) => ({ wire, label: FAMILY_LABELS[wire] }))}
-        onToggle={(v) =>
-          pushFilters({
-            ...filters,
-            role_family: toggleInArray(filters.role_family, v as RoleFamilyWire),
-          })
-        }
-      />
+    <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-center md:gap-x-6 md:gap-y-3">
+      {/* PR 2 UX overhaul: chip-groups bar.
+          - At < md: horizontal scroll, single row. Four chip groups at
+            vertical stacking would take 8+ rows of vertical real estate
+            before the list starts — annoying on mobile. Horizontal swipe
+            keeps the filter row to one row of height.
+          - At md+: contents fall out of this wrapper and the outer
+            container's ``md:flex-wrap`` takes over — the same multi-line
+            wrap behavior as before this PR. */}
+      <div className="-mx-2 flex snap-x snap-mandatory items-start gap-x-6 overflow-x-auto px-2 pb-1 md:m-0 md:flex-wrap md:overflow-visible md:p-0 md:pb-0">
+        <ChipGroupRow
+          label="TIER"
+          current={filters.tier}
+          chips={TIER_CHIPS.map((c) => ({ wire: c.wire, label: c.label }))}
+          onToggle={(v) => pushFilters({ ...filters, tier: toggleInArray(filters.tier, v) })}
+        />
+        <ChipGroupRow
+          label="SOURCE"
+          current={filters.ats}
+          chips={ATS_CHIPS.map((c) => ({ wire: c.wire, label: c.label }))}
+          onToggle={(v) => pushFilters({ ...filters, ats: toggleInArray(filters.ats, v) })}
+        />
+        <ChipGroupRow
+          label="REMOTE"
+          current={filters.remote_type}
+          chips={REMOTE_CHIPS.map((c) => ({ wire: c.wire, label: c.label }))}
+          onToggle={(v) =>
+            pushFilters({ ...filters, remote_type: toggleInArray(filters.remote_type, v) })
+          }
+        />
+        <ChipGroupRow
+          label="FAMILY"
+          current={filters.role_family}
+          chips={FAMILY_CHIPS.map((wire) => ({ wire, label: FAMILY_LABELS[wire] }))}
+          onToggle={(v) =>
+            pushFilters({
+              ...filters,
+              role_family: toggleInArray(filters.role_family, v as RoleFamilyWire),
+            })
+          }
+        />
+      </div>
 
       {/* PR #49: SortDropdown is right-aligned alongside the count label.
-          Wraps to its own row on narrow viewports thanks to the parent's
-          `flex-wrap`. Changing it preserves all other filters via the
-          spread — same idiom as the chip groups above. */}
-      <div className="ml-auto flex items-center gap-4">
+          PR 2: at <md it stays full-width below the chip row. At md+
+          the parent's ``md:flex-row + md:flex-wrap`` lets ``ml-auto``
+          push it right as before. */}
+      <div className="flex items-center justify-between gap-4 md:ml-auto md:justify-end">
         <SortDropdown
           value={filters.sort}
           onChange={(next: SortKey) => pushFilters({ ...filters, sort: next })}
         />
-        <div className="text-[12px] text-muted-foreground">
+        <div className="text-sm text-muted-foreground">
           showing {showing} of {total}
         </div>
       </div>
@@ -127,11 +137,15 @@ function ChipGroupRow<T extends string | number>({
   onToggle: (value: T) => void;
 }) {
   return (
-    <div className="flex items-center gap-2">
-      <span className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
+    // PR 2: ``shrink-0 snap-start`` keeps each chip group as one
+    // snap-target in the < md horizontal-scroll container. Removed
+    // ``flex-wrap`` from the chip wrapper inside — at < md the parent
+    // is single-row scrollable; at md+ the outer wrap handles overflow.
+    <div className="flex shrink-0 snap-start items-center gap-2 md:flex-wrap">
+      <span className="font-mono text-xs uppercase tracking-wide text-muted-foreground">
         {label}
       </span>
-      <div className="flex flex-wrap items-center gap-1.5">
+      <div className="flex items-center gap-1.5 md:flex-wrap">
         {chips.map((c) => {
           const selected = current.includes(c.wire);
           return (
@@ -142,7 +156,7 @@ function ChipGroupRow<T extends string | number>({
               data-selected={selected}
               aria-pressed={selected}
               className={cn(
-                'rounded px-2 py-0.5 text-xs ring-1 ring-inset transition-colors',
+                'shrink-0 rounded px-2 py-0.5 text-sm ring-1 ring-inset transition-colors',
                 selected
                   ? 'bg-accent text-foreground ring-border-strong'
                   : 'bg-surface text-muted-foreground ring-border hover:text-foreground',

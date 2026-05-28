@@ -92,49 +92,57 @@ export function TriageCard({
         <CompanyAvatar name={company.name} size={32} />
 
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          {/* Line 1 */}
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="truncate text-[14px] font-semibold">{company.name}</span>
-            <TierBadge tier={tier} />
-            <span aria-hidden="true" className="text-muted-foreground">
-              ·
-            </span>
-            <AtsBadge ats={posting.source.ats} />
-            <span aria-hidden="true" className="text-muted-foreground">
-              ·
-            </span>
-            <span className="inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground">
-              <Clock className="h-3 w-3" aria-hidden="true" />
-              {timeAgo(posting.first_seen_at)}
-            </span>
+          {/* PR 2: Row 1 reshuffled — company + identity badges on the
+              left, score badge + status pill pushed to the right. Score
+              on Row 1 was the primary density change from the audit
+              (was on the meta row, lost among location/salary). The
+              ``min-w-0`` on the left cluster + ``shrink-0`` on the
+              right cluster guarantees the score never gets clipped
+              even at very narrow viewports. */}
+          <div className="flex items-center gap-2">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+              <span className="truncate text-md font-semibold">{company.name}</span>
+              <TierBadge tier={tier} />
+              <AtsBadge ats={posting.source.ats} />
+              <span className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground">
+                <Clock className="h-3 w-3" aria-hidden="true" />
+                {timeAgo(posting.first_seen_at)}
+              </span>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <FitScoreBadge score={posting.score} />
+              {posting.state.current && <StatusPill state={posting.state.current} />}
+            </div>
           </div>
 
-          {/* Line 2 — company tagline, falls back to description excerpt. */}
+          {/* Row 2 — company tagline, falls back to description excerpt. */}
           {company.description && (
-            <span className="truncate text-[11px] text-muted-foreground">
-              {company.description}
-            </span>
+            <span className="truncate text-xs text-muted-foreground">{company.description}</span>
           )}
 
-          {/* Line 3 — role title */}
-          <span className="truncate text-[13px] font-semibold">{role.title}</span>
+          {/* Row 3 — role title (truncated; full title surfaces on hover
+              via the title= attribute so operators can disambiguate
+              without opening the detail panel). */}
+          <span className="truncate text-base font-semibold" title={role.title}>
+            {role.title}
+          </span>
 
-          {/* Line 4 — meta */}
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px] text-muted-foreground">
+          {/* Row 4 — meta (Score moved up to Row 1, so this row is
+              now Location · Salary · Remote only). */}
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-muted-foreground">
             {posting.location_raw && (
-              <span className="inline-flex items-center gap-1">
-                <MapPin className="h-3 w-3" aria-hidden="true" />
-                {posting.location_raw}
+              <span className="inline-flex min-w-0 items-center gap-1">
+                <MapPin className="h-3 w-3 shrink-0" aria-hidden="true" />
+                <span className="truncate">{posting.location_raw}</span>
               </span>
             )}
-            {posting.location_raw && posting.salary && <span aria-hidden="true">·</span>}
+            {posting.location_raw && posting.salary && (
+              <span aria-hidden="true" className="shrink-0">
+                ·
+              </span>
+            )}
             {posting.salary && <SalaryChip salary={posting.salary} />}
             {remote && <RemoteBadge remote={String(remote)} />}
-            {/* PR #57: fit-score badge replaces the legacy ``score —``
-                placeholder. Renders nothing when ``posting.score`` is
-                null — postings the score sweep hasn't visited yet stay
-                un-decorated rather than showing a zero. */}
-            <FitScoreBadge score={posting.score} />
           </div>
         </div>
       </button>
@@ -272,6 +280,52 @@ function timeAgo(iso: string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+/**
+ * PR 2: pill indicating the posting's current action state when one
+ * exists. Only renders for posting.state.current != null — fresh
+ * triage cards don't get a pill at all. The visual contract matches
+ * the AtsBadge / TierBadge family: mono uppercase 10px with semantic
+ * color tokens.
+ */
+function StatusPill({ state }: { state: ActionType }) {
+  // ``ActionType`` includes ``reset`` (the "clear my action on this
+  // posting" path) — that's a transient state we never actually want
+  // to display as a sticky label, so it falls through to the default
+  // muted style. ``rejected`` is a server-side outcome value that the
+  // posting.state shape can carry; lowercased here to match the
+  // ActionType-or-superset shape the API returns.
+  const cls = (
+    {
+      interested: 'bg-positive/15 text-positive ring-positive/30',
+      applied: 'bg-primary/15 text-primary ring-primary/30',
+      not_interested: 'bg-muted text-muted-foreground ring-border',
+      snoozed: 'bg-pending/15 text-pending ring-pending/30',
+      reset: 'bg-muted text-muted-foreground ring-border',
+    } satisfies Record<ActionType, string>
+  )[state];
+  const label = (
+    {
+      interested: 'INT',
+      applied: 'APP',
+      not_interested: 'PASS',
+      snoozed: 'SNZ',
+      reset: '—',
+    } satisfies Record<ActionType, string>
+  )[state];
+  return (
+    <span
+      data-testid="status-pill"
+      aria-label={`Status: ${state}`}
+      className={cn(
+        'rounded px-1.5 py-0 font-mono text-2xs font-medium uppercase tracking-wide ring-1 ring-inset',
+        cls,
+      )}
+    >
+      {label}
+    </span>
+  );
 }
 
 // Tier strip color choice keeps tier-1..4 visually distinct on hover.

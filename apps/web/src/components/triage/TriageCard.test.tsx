@@ -182,3 +182,63 @@ describe('avatar hue helper', () => {
     expect(avatarBg('Linear')).not.toBe(avatarBg('Stripe'));
   });
 });
+
+// ── PR 2 UX overhaul: row reshuffle + status pill ─────────────────────
+
+describe('TriageCard PR 2 layout', () => {
+  test('FitScoreBadge with a numeric score renders on row 1, not the meta row', () => {
+    const posting = makePosting({ score: 91 });
+    render(<ControlledTriageCard posting={posting} isSelected={false} onAction={() => {}} />);
+    // The badge surfaces an aria-label "Fit score 91" via FitScoreBadge.
+    // PR 2 contract: it must NOT live in the same flex cluster as the
+    // location row — assert it's a sibling of the company name.
+    const badge = screen.getByLabelText(/fit score/i);
+    const companyName = screen.getByText('TestCo');
+    // Walk up to a shared ancestor that holds both — they should share
+    // an immediate flex row at the top of the card (the row 1 wrapper).
+    const row1 = companyName.closest('div')?.parentElement;
+    expect(row1).not.toBeNull();
+    expect(row1).toContainElement(badge);
+    // The location row should NOT contain the badge anymore.
+    const locationText = screen.getByText('San Francisco, CA');
+    const locationRow = locationText.closest('div');
+    expect(locationRow).not.toContainElement(badge);
+  });
+
+  test('status pill renders only when posting.state.current is set', () => {
+    const withState = makePosting({
+      state: { current: 'applied', reason: null, snooze_until: null, current_at: null },
+    });
+    const { rerender } = render(
+      <ControlledTriageCard posting={withState} isSelected={false} onAction={() => {}} />,
+    );
+    expect(screen.getByTestId('status-pill')).toBeInTheDocument();
+    expect(screen.getByTestId('status-pill').textContent).toBe('APP');
+
+    // Re-render with no state → no pill.
+    const blank = makePosting();
+    rerender(<ControlledTriageCard posting={blank} isSelected={false} onAction={() => {}} />);
+    expect(screen.queryByTestId('status-pill')).toBeNull();
+  });
+
+  test('role title is truncated with a title= attribute for hover disambiguation', () => {
+    const posting = makePosting({
+      role: { ...makePosting().role, title: 'Very Long Role Title That Will Truncate Visually' },
+    });
+    render(<ControlledTriageCard posting={posting} isSelected={false} onAction={() => {}} />);
+    const titleSpan = screen.getByText(/Very Long Role Title/);
+    expect(titleSpan.getAttribute('title')).toBe(
+      'Very Long Role Title That Will Truncate Visually',
+    );
+    expect(titleSpan.className).toMatch(/truncate/);
+  });
+
+  test('action column still renders all four ActionButton variants (regression lock)', () => {
+    // PR 2 row reshuffle touched the body layout; the action column is
+    // a sibling and must remain intact.
+    const posting = makePosting();
+    render(<ControlledTriageCard posting={posting} isSelected={false} onAction={() => {}} />);
+    const toolbar = screen.getByRole('toolbar', { name: 'Actions' });
+    expect(within(toolbar).getAllByRole('button')).toHaveLength(4);
+  });
+});

@@ -59,9 +59,14 @@ export function DetailPanel({
 
   return (
     <>
-      {/* Desktop in-place panel — visible at lg+. */}
+      {/* Desktop in-place panel — visible at lg+.
+          PR 2: ``sticky top-12`` (Banner is h-12) keeps the panel in
+          view as the operator scrolls the list. Pre-PR-2 the aside was
+          a sibling flex child with fixed height but no sticky, so
+          clicking a card lower in the list rendered the panel above
+          the viewport and forced a scroll-back to see details. */}
       <aside
-        className="hidden h-[calc(100vh-3rem)] w-[460px] shrink-0 flex-col border-l border-border bg-surface lg:flex"
+        className="sticky top-12 hidden h-[calc(100vh-3rem)] w-[460px] shrink-0 flex-col self-start border-l border-border bg-surface lg:flex"
         aria-label="Posting details"
       >
         {body}
