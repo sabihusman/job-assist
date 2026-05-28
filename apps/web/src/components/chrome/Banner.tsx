@@ -64,9 +64,18 @@ export function Banner({
         <PanelLeft className="h-4 w-4" />
       </button>
 
-      <div className="flex min-w-0 flex-col leading-tight">
+      {/* PR 2 UX overhaul: dropped ``truncate`` from the subtitle. Pre-PR-2,
+          "716 pending · 0 applied" clipped to "716 pending · 0 ..." at every
+          viewport because ``min-w-0`` + ``truncate`` let the parent shrink
+          below content width while the 280px ⌘K bar took the rest. The
+          natural width of the longest expected subtitle is ~140px — plenty
+          of room next to a 280px search bar at the viewports where that
+          search bar is even shown (≥sm). ``min-w-0`` stays on the container
+          so very long pending counts still allow other siblings to shrink
+          first. Title keeps ``truncate`` defensively. */}
+      <div className="flex min-w-0 flex-1 flex-col leading-tight">
         <h1 className="truncate text-md font-semibold">{title}</h1>
-        {subtitle && <p className="truncate text-base text-muted-foreground">{subtitle}</p>}
+        {subtitle && <p className="text-base text-muted-foreground">{subtitle}</p>}
       </div>
 
       <div className="ml-auto flex items-center gap-3">

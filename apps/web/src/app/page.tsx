@@ -5,6 +5,7 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 import { AppShell } from '@/components/chrome/AppShell';
+import { EmptyState } from '@/components/shared/EmptyState';
 import { CalibrationCard } from '@/components/triage/CalibrationCard';
 import { DetailPanel } from '@/components/triage/DetailPanel';
 import { FilterRow } from '@/components/triage/FilterRow';
@@ -351,7 +352,25 @@ function MainColumn({
       ) : loading ? (
         <LoadingSkeleton />
       ) : empty ? (
-        <EmptyState onReset={onResetFilters} />
+        // PR 2: migrated from a local 11-line ad-hoc EmptyState to the
+        // PR #77 shared primitive. Same testId so existing E2E and
+        // unit assertions still find it.
+        <EmptyState
+          testId="empty-state"
+          title="No postings match your filters."
+          description="Try removing some filters or come back tomorrow."
+          action={
+            onResetFilters && (
+              <button
+                type="button"
+                onClick={onResetFilters}
+                className="inline-flex h-8 items-center rounded-md border border-border bg-surface px-3 text-sm hover:bg-accent"
+              >
+                Reset filters
+              </button>
+            )
+          }
+        />
       ) : (
         children
       )}
@@ -369,28 +388,5 @@ function LoadingSkeleton() {
         />
       ))}
     </div>
-  );
-}
-
-function EmptyState({ onReset }: { onReset?: () => void }) {
-  return (
-    <section
-      data-testid="empty-state"
-      className="flex flex-col items-center gap-3 rounded-md border border-border bg-card px-6 py-12 text-center"
-    >
-      <h2 className="text-sm font-semibold">No postings match your filters.</h2>
-      <p className="text-[13px] text-muted-foreground">
-        Try removing some filters or come back tomorrow.
-      </p>
-      {onReset && (
-        <button
-          type="button"
-          onClick={onReset}
-          className="inline-flex h-8 items-center rounded-md border border-border bg-surface px-3 text-sm hover:bg-accent"
-        >
-          Reset filters
-        </button>
-      )}
-    </section>
   );
 }

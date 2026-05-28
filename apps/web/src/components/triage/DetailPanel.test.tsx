@@ -82,6 +82,31 @@ describe('DetailPanel', () => {
     expect(screen.getByText(/select a posting to see details/i)).toBeInTheDocument();
   });
 
+  // ── PR 2: desktop aside is sticky-positioned ────────────────────────────
+  //
+  // Pre-PR-2 the aside scrolled with the page because it was a sibling
+  // flex child without ``position: sticky``. Clicking a card lower in
+  // the list rendered the panel above the viewport. This regression
+  // lock asserts the sticky + top offset stays on the aside — losing
+  // either silently re-introduces the operator-facing friction.
+  test('desktop aside has sticky top-12 classes (PR 2 sticky detail panel)', () => {
+    wrap(<DetailPanel selectedId={null} onClose={() => {}} onAction={() => {}} />);
+    // <aside> exposes as role "complementary", not "region", when it
+    // has aria-label. The panel() helper used elsewhere in this file
+    // works around this with hidden:true; the regression we're testing
+    // here is the class string itself, so query by name attribute.
+    const aside = screen.getByLabelText('Posting details');
+    const cls = aside.getAttribute('class') ?? '';
+    expect(cls).toContain('sticky');
+    // Banner is h-12; the aside's top offset must match so it pins
+    // directly below the banner.
+    expect(cls).toContain('top-12');
+    // ``self-start`` keeps the sticky calc honest in a flex parent —
+    // without it the aside stretches to the row height of the longest
+    // sibling and sticky has nothing to stick against.
+    expect(cls).toContain('self-start');
+  });
+
   test('renders the division-pending callout when division is null', () => {
     mockState.data = makeDetail({ division: null });
     wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);

@@ -108,4 +108,27 @@ describe('FilterRow', () => {
     const url = replaceMock.mock.calls[0]?.[0] as string;
     expect(url).toContain('ats=workday');
   });
+
+  // ── PR 2: chip-groups bar scrolls horizontally at <md ───────────────────
+  //
+  // The chip-groups wrapper has ``overflow-x-auto`` + ``snap-*``
+  // unconditionally (the <md state) and ``md:overflow-visible`` +
+  // ``md:flex-wrap`` overriding at md+. jsdom can't measure layout,
+  // but the className contract is the regression lock — the
+  // responsive class set is the only thing standing between the
+  // operator and an 8-row vertical chip stack on mobile.
+  test('chip-groups wrapper has overflow-x-auto + snap classes for <md scroll', () => {
+    setParams('');
+    render(<FilterRow showing={0} total={0} />);
+    // Walk up from a known chip to find the chip-groups wrapper.
+    const tierChip = screen.getByRole('button', { name: 'T1' });
+    const wrapper = tierChip.closest('[class*="overflow-x-auto"]');
+    expect(wrapper).not.toBeNull();
+    const cls = wrapper?.getAttribute('class') ?? '';
+    expect(cls).toContain('snap-x');
+    expect(cls).toContain('snap-mandatory');
+    // md+ overrides so the wrap behavior returns at desktop sizes.
+    expect(cls).toContain('md:overflow-visible');
+    expect(cls).toContain('md:flex-wrap');
+  });
 });
