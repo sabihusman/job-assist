@@ -22,11 +22,15 @@ per-run timestamps (last_seen_at, fetched_at).
 from __future__ import annotations
 
 import traceback
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from sqlalchemy.engine import CursorResult
 
 from job_assist.adapters.base import Adapter, HandleNotFoundError
 from job_assist.db.models.ingest_run import IngestRun
@@ -121,6 +125,14 @@ class IngestionService:
                     postings_new += 1
                 else:
                     job_posting.last_seen_at = datetime.now(tz=UTC)
+                    # Reappearance: a posting that was marked stale
+                    # (``closed_at`` set by the mark-stale sweep) but now
+                    # shows up again on the ATS is a live reposting —
+                    # re-open it. We just refreshed last_seen_at above, so
+                    # clear closed_at to match. Without this, a reposted
+                    # role would stay hidden forever.
+                    if job_posting.closed_at is not None:
+                        job_posting.closed_at = None
                     if job_posting.jd_text_hash != norm.jd_text_hash:
                         job_posting.jd_text = norm.jd_text
                         job_posting.jd_text_hash = norm.jd_text_hash
@@ -254,3 +266,48 @@ class IngestionService:
             logger.exception("ingestion.failed", handle=handle, ats=adapter.ats)
 
         return run
+
+
+# ── Stale-posting detection ────────────────────────────────────────────────────
+
+# A posting not seen on its ATS board for this many days is treated as
+# removed/filled and marked closed. Conservative: the daily ingest re-fetches
+# every active board, so a still-live posting gets last_seen_at bumped daily.
+# A 7-day floor tolerates a board being unreachable for a few consecutive
+# days (transient ATS outage) without wrongly closing its postings — they
+# only close after a full week of no sighting.
+STALE_AFTER_DAYS = 7
+
+
+async def mark_stale_postings(
+    session: AsyncSession,
+    stale_after_days: int = STALE_AFTER_DAYS,
+) -> int:
+    """Mark postings stale: set ``closed_at=now()`` where the posting is
+    still open but hasn't been seen on its ATS in ``stale_after_days``.
+
+    Bestiary 5.18: ``closed_at`` existed since day one but nothing wrote it
+    and no query read it, so removed-from-board postings showed as active
+    forever. This is the writer; ``list_postings`` (default
+    ``closed_at IS NULL``) is the reader.
+
+    Idempotent: rows already closed (``closed_at IS NOT NULL``) are skipped,
+    so re-running never re-stamps an existing closure timestamp. The
+    reappearance path (ingest update branch clears ``closed_at`` when a
+    posting is seen again) is the inverse of this.
+
+    Returns the number of rows newly marked closed.
+    """
+    now = datetime.now(tz=UTC)
+    cutoff = now - timedelta(days=stale_after_days)
+    result = await session.execute(
+        update(JobPosting)
+        .where(JobPosting.closed_at.is_(None))
+        .where(JobPosting.last_seen_at < cutoff)
+        .values(closed_at=now)
+    )
+    await session.commit()
+    # An UPDATE yields a CursorResult; .rowcount isn't on the base Result type.
+    marked = cast("CursorResult[Any]", result).rowcount or 0
+    logger.info("mark_stale_postings.done", marked=marked, stale_after_days=stale_after_days)
+    return marked

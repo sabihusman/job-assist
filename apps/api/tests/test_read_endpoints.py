@@ -551,6 +551,41 @@ async def test_postings_no_n_plus_one(db_session: Any) -> None:
     assert counter.count <= 2, f"expected ≤2 queries, got {counter.count}"
 
 
+@_NEEDS_DB
+async def test_postings_excludes_closed_by_default(db_session: Any) -> None:
+    """Stale-posting filter (Bestiary 5.18): closed postings are hidden by
+    default; ``include_closed=true`` brings them back; ``total`` (COUNT)
+    respects the same filter as the page (SELECT)."""
+    c = _company(name="ClosedFilterCo")
+    db_session.add(c)
+    await db_session.flush()
+    # 2 open + 3 closed, same company.
+    for closed in (False, False, True, True, True):
+        jp = _posting(target_company_id=c.id, closed=closed)
+        db_session.add(jp)
+        await db_session.flush()
+        db_session.add(_posting_source(job_posting_id=jp.id))
+    await db_session.commit()
+
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            # Default: only the 2 open postings, and total counts only those.
+            default_resp = await ac.get("/postings?per_company_cap=0")
+            # include_closed=true: all 5 surface, total counts all.
+            all_resp = await ac.get("/postings?per_company_cap=0&include_closed=true")
+    finally:
+        await _drop_override()
+
+    default_body = default_resp.json()
+    assert default_body["total"] == 2, "COUNT must exclude closed by default"
+    assert len(default_body["items"]) == 2
+
+    all_body = all_resp.json()
+    assert all_body["total"] == 5, "include_closed=true must count closed too"
+    assert len(all_body["items"]) == 5
+
+
 # ── /postings/{id} ───────────────────────────────────────────────────────────
 
 

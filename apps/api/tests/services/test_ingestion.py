@@ -207,3 +207,86 @@ async def test_salary_self_heal_never_overwrites_existing(db_session: Any) -> No
     await db_session.refresh(row)
     assert row.salary_min == 190000, "self-heal must not overwrite an existing salary"
     assert row.salary_max == 240000
+
+
+# ── Stale-posting detection (Bestiary 5.18) ───────────────────────────────────
+
+import uuid  # noqa: E402
+from datetime import UTC, datetime, timedelta  # noqa: E402
+
+from job_assist.services.ingestion import mark_stale_postings  # noqa: E402
+
+
+def _bare_posting(*, last_seen_days_ago: int, closed: bool = False) -> JobPosting:
+    """A minimal JobPosting with a controllable last_seen_at age.
+
+    last_seen_at = first_seen_at = now - last_seen_days_ago. (last_seen_at is
+    NOT NULL on the model — there is no NULL case to handle; the mark-stale
+    query compares it against a cutoff, never against NULL.)
+    """
+    now = datetime.now(tz=UTC)
+    seen = now - timedelta(days=last_seen_days_ago)
+    suffix = uuid.uuid4().hex[:10]
+    return JobPosting(
+        canonical_company_name="StaleCo",
+        normalized_title="senior product manager",
+        raw_title="Senior Product Manager",
+        remote_type="remote",
+        role_family="product_management",
+        seniority_level="senior_pm",
+        jd_text="JD body.",
+        jd_text_hash="0" * 64,
+        content_hash=f"hash-{suffix}",
+        first_seen_at=seen,
+        last_seen_at=seen,
+        closed_at=(now if closed else None),
+    )
+
+
+@_NEEDS_DB
+async def test_mark_stale_postings(db_session: Any) -> None:
+    """8d-stale open posting → closed; 2d-recent → stays open; already-closed
+    → not re-stamped."""
+    old = _bare_posting(last_seen_days_ago=8)
+    recent = _bare_posting(last_seen_days_ago=2)
+    already = _bare_posting(last_seen_days_ago=30, closed=True)
+    already_closed_at = already.closed_at
+    db_session.add_all([old, recent, already])
+    await db_session.commit()
+
+    marked = await mark_stale_postings(db_session, stale_after_days=7)
+    assert marked == 1, f"only the 8d-stale open posting should be marked; got {marked}"
+
+    await db_session.refresh(old)
+    await db_session.refresh(recent)
+    await db_session.refresh(already)
+    assert old.closed_at is not None, "8d-stale posting must be closed"
+    assert recent.closed_at is None, "2d-recent posting must stay open"
+    assert already.closed_at == already_closed_at, "already-closed must not be re-stamped"
+
+
+@_NEEDS_DB
+async def test_reappearance_clears_closed_at(db_session: Any) -> None:
+    """A closed posting that reappears on the ATS (re-ingested with a fresh
+    sighting) must be re-opened — closed_at cleared."""
+    service = IngestionService()
+    content = "&lt;p&gt;Senior PM role.&lt;/p&gt;"
+
+    # First ingest creates the row.
+    await service.ingest_source(
+        _make_adapter([_gh_job_with_content(content)]), "stripe", db_session
+    )
+    row = (await db_session.execute(select(JobPosting))).scalars().one()
+
+    # Simulate the posting having been marked stale.
+    row.closed_at = datetime.now(tz=UTC) - timedelta(days=10)
+    await db_session.commit()
+    await db_session.refresh(row)
+    assert row.closed_at is not None
+
+    # Re-ingest the same posting (still on the board) → reappearance re-opens it.
+    await service.ingest_source(
+        _make_adapter([_gh_job_with_content(content)]), "stripe", db_session
+    )
+    await db_session.refresh(row)
+    assert row.closed_at is None, "reappeared posting must have closed_at cleared"

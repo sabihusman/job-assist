@@ -323,6 +323,9 @@ async def sweep_jd_summaries(
             await session.execute(
                 select(JobPosting.id)
                 .where(JobPosting.jd_summary_markdown.is_(None))
+                # Skip stale/closed postings (Bestiary 5.18) — no point
+                # spending a Gemini call summarizing a removed posting.
+                .where(JobPosting.closed_at.is_(None))
                 .where(
                     JobPosting.jd_summary_enrichment_attempt_count
                     < settings.jd_summary_enrich_max_attempts

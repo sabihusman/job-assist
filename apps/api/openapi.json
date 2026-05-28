@@ -129,6 +129,54 @@
         }
       }
     },
+    "/admin/postings/mark-stale": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Mark Stale Postings Endpoint",
+        "description": "Mark postings stale (set ``closed_at``) when not seen on their ATS\nfor ``stale_after_days``.\n\nCalled by the daily ingest cron AFTER the per-board loop completes, so\nevery still-live posting has had its ``last_seen_at`` refreshed first.\nAlso serves as the one-time backfill (call once after deploy to close\nthe existing stale tail). Idempotent \u2014 already-closed rows are skipped.\n\nBestiary 5.18: ``closed_at`` is the lifecycle column; this is its\nwriter, ``GET /postings`` (default ``closed_at IS NULL``) its reader.\n\nTODO: add authentication before exposing publicly. Dev-mode only.",
+        "operationId": "mark_stale_postings_endpoint_admin_postings_mark_stale_post",
+        "parameters": [
+          {
+            "name": "stale_after_days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 7,
+              "title": "Stale After Days"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "title": "Response Mark Stale Postings Endpoint Admin Postings Mark Stale Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/discover-ats/run": {
       "post": {
         "summary": "Discover Ats Run",
@@ -1178,6 +1226,16 @@
               "type": "integer",
               "default": 0,
               "title": "Offset"
+            }
+          },
+          {
+            "name": "include_closed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Closed"
             }
           }
         ],

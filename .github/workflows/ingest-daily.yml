@@ -55,3 +55,16 @@ jobs:
         run: |
           echo "Plan size: ${{ steps.plan.outputs.count }} companies"
           python3 .github/workflows/scripts/run_daily_ingest.py < /tmp/ingest_plan.json
+
+      # Mark postings stale AFTER the board loop, so every still-live posting
+      # has had its last_seen_at refreshed this run first. Postings not seen
+      # in 7+ days get closed_at set and drop out of the default Triage view
+      # (Bestiary 5.18). Reposted roles re-open automatically on the next
+      # sighting (ingest update branch clears closed_at). Runs even if a
+      # board or two failed above — a 7-day floor tolerates transient gaps.
+      - name: Mark stale postings
+        if: always()
+        run: |
+          resp=$(curl -fsS --max-time 60 -X POST "$API_URL/admin/postings/mark-stale")
+          echo "$resp"
+          echo "$resp" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(f"::notice::marked {d[\"marked_stale\"]} postings stale")'
