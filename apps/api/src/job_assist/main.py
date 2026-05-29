@@ -347,6 +347,100 @@ async def reeval_hard_rules_endpoint(db: DbSession) -> dict[str, Any]:
     }
 
 
+@app.post("/admin/postings/reparse-salary", tags=["admin"])
+async def reparse_salary_endpoint(db: DbSession) -> dict[str, Any]:
+    """Re-run ``parse_compensation`` on ``jd_text`` for open Greenhouse-sourced
+    postings and **overwrite** salary (correction backfill).
+
+    The salary text-mining lives in the Greenhouse adapter (PR #80 — Ashby
+    feeds the parser a clean compensationTierSummary, no body mining). The
+    parser fix in PR #88 (range ordering, multi-currency scoping, magnitude +
+    ratio sanity) corrects future parses, but the ingest self-heal is
+    fill-if-NULL by design (test_salary_self_heal_never_overwrites_existing
+    pins that), so existing rows with non-NULL WRONG salary (the 18 inverted
+    ranges + the $142M-style garbage) stay wrong without this endpoint.
+
+    Behaviour:
+      * Targets open postings (``closed_at IS NULL``) whose source ats is
+        ``greenhouse`` (EXISTS subquery on PostingSource — a posting can
+        carry multiple source rows; we just need any to match).
+      * Writes only when the new parse DIFFERS from the stored value, so
+        already-correct rows don't churn.
+      * When the new parse returns ``None`` (rejected by the magnitude or
+        range-ratio guards — e.g. the ``$142,400,000`` garble), salary is
+        **set to NULL** rather than leaving the old garbage in place.
+
+    Re-run ``POST /admin/postings/reeval-hard-rules`` after this to recompute
+    ``salary_floor``/``salary_ceiling`` failures against the corrected values.
+
+    TODO: add authentication before exposing publicly. Dev-mode only.
+    """
+    from sqlalchemy import exists, select
+
+    from job_assist.adapters.normalization import parse_compensation
+    from job_assist.db.models import JobPosting, PostingSource
+
+    greenhouse_source = exists(
+        select(PostingSource.id).where(
+            PostingSource.job_posting_id == JobPosting.id,
+            PostingSource.ats == "greenhouse",
+        )
+    )
+    rows = (
+        (
+            await db.execute(
+                select(JobPosting).where(JobPosting.closed_at.is_(None)).where(greenhouse_source)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    evaluated = 0
+    changed = 0
+    inversions_fixed = 0
+    rejected_to_null = 0
+
+    for p in rows:
+        evaluated += 1
+        new_min, new_max, new_currency, new_period = parse_compensation(p.jd_text or "")
+        new_period_str = new_period or "unknown"
+
+        old_min, old_max = p.salary_min, p.salary_max
+        was_inverted = old_min is not None and old_max is not None and old_min > old_max
+        # salary_period is a SalaryPeriod enum on DB-loaded rows; compare on str.
+        old_period_str = str(getattr(p.salary_period, "value", p.salary_period))
+
+        if (
+            new_min == old_min
+            and new_max == old_max
+            and new_currency == p.salary_currency
+            and new_period_str == old_period_str
+        ):
+            continue  # already correct — no churn
+
+        p.salary_min = new_min
+        p.salary_max = new_max
+        p.salary_currency = new_currency
+        # ``salary_period`` is a non-null enum column; SQLAlchemy coerces the
+        # string value on assignment (same pattern the ingest update branch
+        # uses for self-heal).
+        p.salary_period = new_period_str  # type: ignore[assignment]
+        changed += 1
+        if new_min is None:
+            rejected_to_null += 1
+        if was_inverted and new_min is not None and new_max is not None and new_min <= new_max:
+            inversions_fixed += 1
+
+    await db.commit()
+    return {
+        "evaluated": evaluated,
+        "changed": changed,
+        "inversions_fixed": inversions_fixed,
+        "rejected_to_null": rejected_to_null,
+    }
+
+
 # ── Admin — discover-ats batch ────────────────────────────────────────────────
 
 

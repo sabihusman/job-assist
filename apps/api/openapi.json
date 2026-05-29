@@ -201,6 +201,30 @@
         }
       }
     },
+    "/admin/postings/reparse-salary": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Reparse Salary Endpoint",
+        "description": "Re-run ``parse_compensation`` on ``jd_text`` for open Greenhouse-sourced\npostings and **overwrite** salary (correction backfill).\n\nThe salary text-mining lives in the Greenhouse adapter (PR #80 \u2014 Ashby\nfeeds the parser a clean compensationTierSummary, no body mining). The\nparser fix in PR #88 (range ordering, multi-currency scoping, magnitude +\nratio sanity) corrects future parses, but the ingest self-heal is\nfill-if-NULL by design (test_salary_self_heal_never_overwrites_existing\npins that), so existing rows with non-NULL WRONG salary (the 18 inverted\nranges + the $142M-style garbage) stay wrong without this endpoint.\n\nBehaviour:\n  * Targets open postings (``closed_at IS NULL``) whose source ats is\n    ``greenhouse`` (EXISTS subquery on PostingSource \u2014 a posting can\n    carry multiple source rows; we just need any to match).\n  * Writes only when the new parse DIFFERS from the stored value, so\n    already-correct rows don't churn.\n  * When the new parse returns ``None`` (rejected by the magnitude or\n    range-ratio guards \u2014 e.g. the ``$142,400,000`` garble), salary is\n    **set to NULL** rather than leaving the old garbage in place.\n\nRe-run ``POST /admin/postings/reeval-hard-rules`` after this to recompute\n``salary_floor``/``salary_ceiling`` failures against the corrected values.\n\nTODO: add authentication before exposing publicly. Dev-mode only.",
+        "operationId": "reparse_salary_endpoint_admin_postings_reparse_salary_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Reparse Salary Endpoint Admin Postings Reparse Salary Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/discover-ats/run": {
       "post": {
         "summary": "Discover Ats Run",

@@ -717,6 +717,131 @@ async def test_reeval_hard_rules_endpoint(db_session: Any) -> None:
     assert nullsal.hard_rule_failed is None
 
 
+# ── reparse-salary backfill (PR feat/reparse-salary-backfill) ────────────────
+
+
+@_NEEDS_DB
+async def test_reparse_salary_corrects_inverted_overwrites_garbage_no_churn(
+    db_session: Any,
+) -> None:
+    """POST /admin/postings/reparse-salary on Greenhouse-sourced open postings:
+    * inverted range (old min > max from a US+CAD JD)  → corrected
+    * $142M-style garbage (no other range in body)     → set to NULL
+    * already-correct row                              → no churn
+    """
+    c = _company(name="ReparseCo")
+    db_session.add(c)
+    await db_session.flush()
+
+    # Real-world failure-mode source text (audit findings).
+    inverted_jd = (
+        "compensation (any location): $189,000-236,200 USD for US employees "
+        "outside SF, and $178,600-223,200 CAD for Canada."
+    )
+    # Garbled $142M with no other range in the body — new parser rejects to None.
+    garbage_jd = "Comp for this role is $142,400,000 base. No other range listed."
+    # A correctly-stored row whose jd_text parses to the same values it has.
+    clean_jd = "Base pay: $180,000 - $275,000 USD plus equity."
+
+    inverted = _posting(target_company_id=c.id, salary_max=178_600)
+    inverted.jd_text = inverted_jd
+    inverted.salary_min = 189_000  # old wrong value the parser will fix
+    inverted.salary_currency = "USD"
+    inverted.salary_period = "annual"  # type: ignore[assignment]
+
+    garbage = _posting(target_company_id=c.id, salary_max=178_000)
+    garbage.jd_text = garbage_jd
+    garbage.salary_min = 142_400_000  # old garbage the parser rejects
+    garbage.salary_currency = "USD"
+    garbage.salary_period = "annual"  # type: ignore[assignment]
+
+    clean = _posting(target_company_id=c.id, salary_max=275_000)
+    clean.jd_text = clean_jd
+    clean.salary_min = 180_000  # already correct
+    clean.salary_currency = "USD"
+    clean.salary_period = "annual"  # type: ignore[assignment]
+
+    db_session.add_all([inverted, garbage, clean])
+    await db_session.flush()
+    db_session.add_all(
+        [
+            _posting_source(job_posting_id=inverted.id, ats="greenhouse"),
+            _posting_source(job_posting_id=garbage.id, ats="greenhouse"),
+            _posting_source(job_posting_id=clean.id, ats="greenhouse"),
+        ]
+    )
+    await db_session.commit()
+
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp = await ac.post("/admin/postings/reparse-salary")
+    finally:
+        await _drop_override()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["evaluated"] == 3
+    assert body["changed"] == 2  # inverted + garbage; clean stays
+    assert body["inversions_fixed"] == 1
+    assert body["rejected_to_null"] == 1
+
+    await db_session.refresh(inverted)
+    await db_session.refresh(garbage)
+    await db_session.refresh(clean)
+
+    # Inverted → US range (both ends), ordered.
+    assert inverted.salary_min == 189_000
+    assert inverted.salary_max == 236_200
+    assert inverted.salary_currency == "USD"
+    assert inverted.salary_min <= inverted.salary_max
+
+    # Garbage → nulled (no plausible range).
+    assert garbage.salary_min is None
+    assert garbage.salary_max is None
+    assert garbage.salary_currency is None
+
+    # Clean → unchanged.
+    assert clean.salary_min == 180_000
+    assert clean.salary_max == 275_000
+
+
+@_NEEDS_DB
+async def test_reparse_salary_skips_non_greenhouse_sources(
+    db_session: Any,
+) -> None:
+    """Only Greenhouse-sourced postings are reparsed — Ashby feeds a clean
+    compensationTierSummary to the parser, not the JD body, so it doesn't
+    have this failure mode. An Ashby posting with stored garbage is left
+    alone by this endpoint (its correctness lives in the adapter)."""
+    c = _company(name="AshbySkipCo")
+    db_session.add(c)
+    await db_session.flush()
+
+    ashby = _posting(target_company_id=c.id, salary_max=178_000)
+    ashby.jd_text = "Whatever JD body, $142,400,000 stray."
+    ashby.salary_min = 142_400_000
+    ashby.salary_currency = "USD"
+    ashby.salary_period = "annual"  # type: ignore[assignment]
+    db_session.add(ashby)
+    await db_session.flush()
+    db_session.add(_posting_source(job_posting_id=ashby.id, ats="ashby"))
+    await db_session.commit()
+
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp = await ac.post("/admin/postings/reparse-salary")
+    finally:
+        await _drop_override()
+
+    assert resp.status_code == 200
+    assert resp.json()["evaluated"] == 0  # ashby row not in scope
+
+    await db_session.refresh(ashby)
+    assert ashby.salary_min == 142_400_000  # untouched
+
+
 # ── /postings/{id} ───────────────────────────────────────────────────────────
 
 
