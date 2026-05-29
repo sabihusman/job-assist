@@ -1,6 +1,6 @@
 """Shared normalization helpers reused across ATS adapters.
 
-These are pure functions over strings / payload dicts — no ATS-specific
+These are pure functions over strings / payload dicts - no ATS-specific
 state. Each adapter is free to bypass them if its source carries
 better-quality structured data than the regex heuristics here.
 """
@@ -40,7 +40,7 @@ def normalize_org_field(raw: str | None) -> str | None:
       * strip surrounding whitespace
       * collapse empty-after-strip to ``None``
       * truncate to 200 chars (defensive; real ATS data is rarely > 50)
-      * preserve case — these are authored values, not classifications
+      * preserve case - these are authored values, not classifications
 
     ``None`` passes through untouched.
     """
@@ -179,7 +179,7 @@ def compute_content_hash(
     normalized_title: str,
     locations_normalized: list[dict[str, Any]],
 ) -> str:
-    """Stable hash over (company, title, locations) — identifies a unique role."""
+    """Stable hash over (company, title, locations) - identifies a unique role."""
     payload = json.dumps(
         {
             "company": canonical_company_name,
@@ -209,62 +209,112 @@ def compute_content_hash(
 #   "€100K"                     → (100000, 100000, "EUR", "annual")
 #   "C$120K - C$150K"           -> (120000, 150000, "CAD", "annual")
 
-# Match a number anchored to one of the supported currency glyphs, so that
-# stray digits elsewhere in the summary (e.g. "Q3 2026") don't get picked up.
-_COMP_NUMBER_RE = re.compile(r"[$£€]\s*(\d[\d,]*(?:\.\d+)?)\s*(K)?", re.IGNORECASE)
 _COMP_HOURLY_RE = re.compile(r"/\s*(hr|hour)\b", re.IGNORECASE)
+
+# Range-aware matcher (PR salary-parser-precision). Captures a currency-
+# anchored FLOOR and an OPTIONAL ceiling after a dash / "to". The ceiling's
+# own currency glyph is optional because real JDs write "$189,000-236,200"
+# (only the floor is $-anchored). An optional ``/hr`` | ``/year`` unit is
+# consumed between the number and the separator so "$50/hr - $75/hr" parses
+# as one range, not two singles. A leading ``C`` (C$) marks Canadian dollars.
+# The separator class includes the literal hyphen plus en-dash (-) and
+# em-dash (-) via escapes, so the source file stays ASCII (ruff RUF001).
+_COMP_RANGE_RE = re.compile(
+    r"(?P<lead>C)?(?P<glyph>[$£€])\s*"
+    r"(?P<floor>\d[\d,]*(?:\.\d+)?)\s*(?P<fsuf>[KM])?"
+    r"(?:\s*/\s*(?:hr|hour|yr|year))?"
+    r"(?:"
+    r"\s*(?:[-\u2013\u2014]|to)\s*"  # hyphen, en-dash, em-dash, or 'to'
+    r"C?[$£€]?\s*(?P<ceil>\d[\d,]*(?:\.\d+)?)\s*(?P<csuf>[KM])?"
+    r"(?:\s*/\s*(?:hr|hour|yr|year))?"
+    r")?",
+    re.IGNORECASE,
+)
+
+# Magnitude sanity bounds. A garbled source ($142,400,000) or a stray small
+# dollar mention ("$10 fee") shouldn't masquerade as a salary. Annual base
+# pay for the roles we track sits well inside [$10k, $1M]; hourly inside
+# [$10, $1k].
+_ANNUAL_MIN, _ANNUAL_MAX = 10_000, 1_000_000
+_HOURLY_MIN, _HOURLY_MAX = 10, 1_000
+# A real salary band's ends are close; a >6x spread means we paired numbers
+# from two different things (typo "$147,00"=14,700 vs 117,600 → 8x; or a
+# garbled figure). Reject those rather than emit a nonsense range.
+_MAX_RANGE_RATIO = 6.0
+
+
+def _suffix_mult(suffix: str | None) -> int:
+    if not suffix:
+        return 1
+    return 1_000_000 if suffix.upper() == "M" else 1_000  # K
 
 
 def parse_compensation(
     summary: str | None,
 ) -> tuple[int | None, int | None, str | None, str | None]:
-    """Parse a compensation-summary string into structured fields.
+    """Parse a compensation string into ``(salary_min, salary_max, currency,
+    period)``. Never raises; returns all-``None`` when nothing trustworthy is
+    found.
 
-    Returns ``(salary_min, salary_max, currency, period)``. Any input the
-    parser doesn't understand returns all four ``None`` — never raises.
+    Robust against the failure modes seen feeding the full Greenhouse JD body
+    (PR #80) rather than a clean comp summary:
+      * multi-currency JDs (a USD range AND a CAD range) - scoped to a single
+        range, preferring USD, instead of pairing the USD floor with the CAD
+        floor;
+      * range ceilings that lack their own ``$`` ("$189,000-236,200");
+      * garbled / typo'd figures ($142,400,000; "$147,00") - rejected by
+        magnitude + range-ratio sanity checks;
+      * always returns ``salary_min <= salary_max``.
     """
     if not summary or not summary.strip():
         return None, None, None, None
 
     s = summary.strip()
+    hourly = bool(_COMP_HOURLY_RE.search(s))
+    period = "hourly" if hourly else "annual"
+    lo_bound, hi_bound = (_HOURLY_MIN, _HOURLY_MAX) if hourly else (_ANNUAL_MIN, _ANNUAL_MAX)
 
-    # Currency: check C$ before plain $ so Canadian dollars aren't shadowed
-    # by USD. £ / € are unambiguous.
-    currency: str | None
-    if "C$" in s:
-        currency = "CAD"
-    elif "$" in s:
-        currency = "USD"
-    elif "£" in s:
-        currency = "GBP"
-    elif "€" in s:
-        currency = "EUR"
-    else:
-        currency = None
-
-    # Period: only meaningful if we found a currency anchor.
-    period: str | None = None
-    if currency is not None:
-        period = "hourly" if _COMP_HOURLY_RE.search(s) else "annual"
-
-    # Extract every currency-anchored number in the string.
-    nums: list[int] = []
-    for raw_num, k_suffix in _COMP_NUMBER_RE.findall(s):
-        cleaned = raw_num.replace(",", "")
+    # Candidate = (lo, hi, currency, is_range, order). Collect every parseable
+    # range/value, then pick the best one (a real range, USD, earliest).
+    candidates: list[tuple[int, int, str, bool, int]] = []
+    for order, m in enumerate(_COMP_RANGE_RE.finditer(s)):
         try:
-            value = float(cleaned)
+            floor = int(float(m.group("floor").replace(",", "")) * _suffix_mult(m.group("fsuf")))
         except ValueError:
             continue
-        if k_suffix:
-            value *= 1000
-        nums.append(int(value))
+        ceil_raw = m.group("ceil")
+        is_range = ceil_raw is not None
+        if is_range:
+            try:
+                ceil = int(float(ceil_raw.replace(",", "")) * _suffix_mult(m.group("csuf")))
+            except ValueError:
+                continue
+        else:
+            ceil = floor
+        lo, hi = (floor, ceil) if floor <= ceil else (ceil, floor)
 
-    if not nums:
+        # Currency for THIS candidate.
+        glyph = m.group("glyph")
+        if glyph == "£":
+            currency = "GBP"
+        elif glyph == "€":
+            currency = "EUR"
+        else:  # "$"
+            trailing = s[m.end() : m.end() + 5].upper()
+            currency = "CAD" if (m.group("lead") or "CAD" in trailing) else "USD"
+
+        # Sanity: plausible magnitude + plausible spread.
+        if lo < lo_bound or hi > hi_bound:
+            continue
+        if lo > 0 and hi / lo > _MAX_RANGE_RATIO:
+            continue
+        candidates.append((lo, hi, currency, is_range, order))
+
+    if not candidates:
         return None, None, None, None
 
-    if len(nums) == 1:
-        salary_min = salary_max = nums[0]
-    else:
-        salary_min, salary_max = nums[0], nums[1]
-
-    return salary_min, salary_max, currency, period
+    # Prefer a real range over a lone number; then USD over other currencies;
+    # then the earliest occurrence (the comp range usually leads the JD).
+    candidates.sort(key=lambda c: (not c[3], c[2] != "USD", c[4]))
+    lo, hi, currency, _is_range, _order = candidates[0]
+    return lo, hi, currency, period

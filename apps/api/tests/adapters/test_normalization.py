@@ -55,3 +55,76 @@ class TestParseCompensation:
         """Adapter contract: parse_compensation must never raise."""
         for garbage in ("\x00", "$$$", "K$K$", "$$K", "0.0.0", "—"):
             parse_compensation(garbage)  # just must not raise
+
+
+class TestParseCompensationPrecision:
+    """Failure modes from feeding the full Greenhouse JD body (PR #80) to a
+    parser designed for clean comp summaries. Real source text from the
+    production audit (salary-parser-precision)."""
+
+    def test_range_is_always_ordered_min_le_max(self) -> None:
+        # Ceiling stated before floor → must still come out ordered.
+        assert parse_compensation("$236,200 - $189,000 USD") == (
+            189_000,
+            236_200,
+            "USD",
+            "annual",
+        )
+
+    def test_en_dash_ceiling_without_dollar_is_captured(self) -> None:
+        """The ceiling "236,200" has no $ of its own. The old parser missed it
+        and grabbed the next $-anchored number instead."""
+        assert parse_compensation("$189,000–236,200 USD") == (
+            189_000,
+            236_200,
+            "USD",
+            "annual",
+        )
+
+    def test_multi_currency_scopes_to_usd_not_cross_currency_floors(self) -> None:
+        """Real Mercury JD: US range + CAD range. Must return the USD range
+        (both ends), NOT pair the US floor with the CAD floor (which inverted
+        to 189,000 > 178,600)."""
+        jd = (
+            "compensation (any location): $189,000–236,200 USD for US "
+            "employees outside SF, and $178,600–223,200 CAD for Canada."
+        )
+        assert parse_compensation(jd) == (189_000, 236_200, "USD", "annual")
+
+    def test_garbled_high_figure_skipped_for_next_real_range(self) -> None:
+        """Real Mercury JD: a garbled $142,400,000 leads, the real SF range
+        $128,200-$160,200 follows. Reject the >$1M garble, take the real one."""
+        jd = "San Francisco: $142,400,000 - $178,000 outside SF: $128,200-$160,200"
+        assert parse_compensation(jd) == (128_200, 160_200, "USD", "annual")
+
+    def test_implausible_ratio_rejected_to_none(self) -> None:
+        """Real Brex typo: "$147,00" parses to 14,700 → 8x spread vs 117,600.
+        Reject rather than emit a nonsense range; no other range → None."""
+        assert parse_compensation("salary is $117,600 - $147,00 CAD") == (
+            None,
+            None,
+            None,
+            None,
+        )
+
+    def test_over_one_million_rejected(self) -> None:
+        assert parse_compensation("$142,400,000 base") == (None, None, None, None)
+
+    def test_stray_small_dollar_amount_ignored(self) -> None:
+        """A "$10 fee" mention must not become a salary; the real range wins."""
+        jd = "We saved customers $10 in fees. Comp: $150,000–$190,000."
+        assert parse_compensation(jd) == (150_000, 190_000, "USD", "annual")
+
+    def test_real_range_preferred_over_lone_number(self) -> None:
+        """A lone $-number earlier in the text shouldn't beat a real range."""
+        jd = "Equity grant around $90,000. Base pay: $160,000 - $200,000."
+        assert parse_compensation(jd) == (160_000, 200_000, "USD", "annual")
+
+    def test_clean_single_currency_range_unchanged(self) -> None:
+        # Regression guard: the common correct case is untouched.
+        assert parse_compensation("$180,000 - $275,000 USD") == (
+            180_000,
+            275_000,
+            "USD",
+            "annual",
+        )
