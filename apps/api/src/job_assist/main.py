@@ -6,7 +6,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 import structlog
@@ -264,6 +264,87 @@ async def mark_stale_postings_endpoint(
         raise HTTPException(status_code=422, detail="stale_after_days must be >= 1")
     marked = await mark_stale_postings(db, stale_after_days=stale_after_days)
     return {"marked_stale": marked, "stale_after_days": stale_after_days}
+
+
+@app.post("/admin/postings/reeval-hard-rules", tags=["admin"])
+async def reeval_hard_rules_endpoint(db: DbSession) -> dict[str, Any]:
+    """Re-evaluate ``apply_hard_rules`` across all OPEN postings and rewrite
+    ``hard_rule_failed`` + ``hard_rules_evaluated_at`` (PR C).
+
+    Run this after changing the salary floor/ceiling (or any hard-rule knob)
+    in Settings (``PUT /operator/profile``) so existing postings reflect the
+    new thresholds — ingest only evaluates rows as they arrive. Also doubles
+    as the one-time backfill: call once after deploy to populate the column
+    for the pre-existing corpus.
+
+    Only open postings are evaluated (``closed_at IS NULL``) — composes with
+    the same filter ``GET /postings`` applies, and there's no point scoring a
+    removed posting. Pure function, no LLM/network; one pass + one commit.
+
+    TODO: add authentication before exposing publicly. Dev-mode only.
+    """
+    from sqlalchemy import select
+
+    from job_assist.db.models import ClosedChannel, JobPosting, OperatorProfile, TargetCompany
+    from job_assist.triage.config import hard_rule_config_from_profile
+    from job_assist.triage.hard_rules import apply_hard_rules
+
+    op_row = await db.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
+    operator_profile = op_row.scalar_one_or_none()
+    if operator_profile is None:
+        raise HTTPException(
+            status_code=400,
+            detail="operator_profile is unseeded; cannot evaluate hard rules",
+        )
+    config = hard_rule_config_from_profile(operator_profile)
+
+    # Preload active (sealed) closed-channel rows into a dict keyed by
+    # target_company_id — one query, no per-posting lookup (avoids N+1).
+    cc_rows = (
+        (await db.execute(select(ClosedChannel).where(ClosedChannel.unsealed_at.is_(None))))
+        .scalars()
+        .all()
+    )
+    closed_by_company: dict[Any, ClosedChannel] = {
+        cc.target_company_id: cc for cc in cc_rows if cc.target_company_id is not None
+    }
+
+    # Open postings + their tier-bearing company (OUTER JOIN — postings with
+    # no matched company still get evaluated; target_company=None is valid).
+    rows = (
+        await db.execute(
+            select(JobPosting, TargetCompany)
+            .outerjoin(TargetCompany, JobPosting.target_company_id == TargetCompany.id)
+            .where(JobPosting.closed_at.is_(None))
+        )
+    ).all()
+
+    now = datetime.now(tz=UTC)
+    evaluated = 0
+    passed = 0
+    by_rule: dict[str, int] = {}
+    for posting, target_company in rows:
+        verdict = apply_hard_rules(
+            posting,
+            target_company,
+            closed_by_company.get(posting.target_company_id),
+            config,
+        )
+        posting.hard_rule_failed = None if verdict.passed else verdict.failed_rule
+        posting.hard_rules_evaluated_at = now
+        evaluated += 1
+        if verdict.passed:
+            passed += 1
+        else:
+            by_rule[verdict.failed_rule] = by_rule.get(verdict.failed_rule, 0) + 1
+
+    await db.commit()
+    return {
+        "evaluated": evaluated,
+        "passed": passed,
+        "failed": evaluated - passed,
+        "by_rule": by_rule,
+    }
 
 
 # ── Admin — discover-ats batch ────────────────────────────────────────────────
@@ -1627,6 +1708,7 @@ async def list_postings(
     limit: int = 20,
     offset: int = 0,
     include_closed: bool = False,
+    include_filtered: bool = False,
 ) -> dict[str, Any]:
     """Paginated list of postings with the company/role/source/state nested.
 
@@ -1678,6 +1760,13 @@ async def list_postings(
     # Appended to the shared list so it narrows COUNT and SELECT identically.
     if not include_closed:
         where_clauses.append(JobPosting.closed_at.is_(None))
+    # Hard-rule filter (PR C): by default hide postings that failed a hard
+    # rule (salary floor/ceiling, geo, staffing firm, etc.). NULL = passed or
+    # not-yet-evaluated, both of which surface. ``include_filtered=true`` opts
+    # back in. Stacks with the closed_at clause above via AND — a posting must
+    # be BOTH open AND pass-hard-rules to show by default.
+    if not include_filtered:
+        where_clauses.append(JobPosting.hard_rule_failed.is_(None))
     if tier:
         where_clauses.append(TargetCompany.tier.in_(tier))
     if remote_type:

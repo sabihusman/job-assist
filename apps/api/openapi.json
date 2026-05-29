@@ -177,6 +177,30 @@
         }
       }
     },
+    "/admin/postings/reeval-hard-rules": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Reeval Hard Rules Endpoint",
+        "description": "Re-evaluate ``apply_hard_rules`` across all OPEN postings and rewrite\n``hard_rule_failed`` + ``hard_rules_evaluated_at`` (PR C).\n\nRun this after changing the salary floor/ceiling (or any hard-rule knob)\nin Settings (``PUT /operator/profile``) so existing postings reflect the\nnew thresholds \u2014 ingest only evaluates rows as they arrive. Also doubles\nas the one-time backfill: call once after deploy to populate the column\nfor the pre-existing corpus.\n\nOnly open postings are evaluated (``closed_at IS NULL``) \u2014 composes with\nthe same filter ``GET /postings`` applies, and there's no point scoring a\nremoved posting. Pure function, no LLM/network; one pass + one commit.\n\nTODO: add authentication before exposing publicly. Dev-mode only.",
+        "operationId": "reeval_hard_rules_endpoint_admin_postings_reeval_hard_rules_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Reeval Hard Rules Endpoint Admin Postings Reeval Hard Rules Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/discover-ats/run": {
       "post": {
         "summary": "Discover Ats Run",
@@ -1236,6 +1260,16 @@
               "type": "boolean",
               "default": false,
               "title": "Include Closed"
+            }
+          },
+          {
+            "name": "include_filtered",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Filtered"
             }
           }
         ],

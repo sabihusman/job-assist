@@ -429,3 +429,77 @@ class TestSeniorityLevels:
         cfg = HardRuleConfig(seniority_levels_included=())
         result = apply_hard_rules(posting, _target(), None, cfg)
         assert result.passed is True
+
+
+# ── OperatorProfile → HardRuleConfig mapper (PR C) ────────────────────────────
+
+
+class TestHardRuleConfigFromProfile:
+    """The mapper bridges the persisted OperatorProfile (JSONB list[str]) to
+    the frozen HardRuleConfig (tuple[str, ...]) ``apply_hard_rules`` expects."""
+
+    @staticmethod
+    def _profile(**overrides: Any) -> Any:
+        from job_assist.db.models import OperatorProfile
+
+        now = datetime.now(tz=UTC)
+        defaults: dict[str, Any] = {
+            "id": 1,
+            "looking_for_text": "PM roles",
+            "role_keywords": [],
+            "geo_whitelist": ["Remote", "NYC"],
+            "salary_floor_usd": 120_000,
+            "salary_ceiling_usd": 260_000,
+            "applicant_cap": 400,
+            "seniority_levels_included": ["senior_pm", "lead_pm"],
+            "staffing_firm_blocklist": ["Robert Half"],
+            "created_at": now,
+            "updated_at": now,
+        }
+        defaults.update(overrides)
+        return OperatorProfile(**defaults)
+
+    def test_maps_all_fields_to_tuples(self) -> None:
+        from job_assist.triage.config import hard_rule_config_from_profile
+
+        cfg = hard_rule_config_from_profile(self._profile())
+        assert cfg.salary_floor_usd == 120_000
+        assert cfg.salary_ceiling_usd == 260_000
+        assert cfg.applicant_cap == 400
+        assert cfg.geo_whitelist == ("Remote", "NYC")
+        assert cfg.seniority_levels_included == ("senior_pm", "lead_pm")
+        assert cfg.staffing_firm_blocklist == ("Robert Half",)
+
+    def test_null_ceiling_and_seniority_map_to_none_and_empty(self) -> None:
+        from job_assist.triage.config import hard_rule_config_from_profile
+
+        cfg = hard_rule_config_from_profile(
+            self._profile(salary_ceiling_usd=None, seniority_levels_included=None)
+        )
+        assert cfg.salary_ceiling_usd is None
+        assert cfg.seniority_levels_included == ()
+
+    def test_built_config_drives_apply_hard_rules(self) -> None:
+        """End-to-end: a profile with a high floor filters a low-salary posting."""
+        from job_assist.triage.config import hard_rule_config_from_profile
+
+        # geo_whitelist matches the default posting location ("New York, NY")
+        # so the salary_floor rule (priority 5) is the deciding one, not geo (4).
+        cfg = hard_rule_config_from_profile(
+            self._profile(salary_floor_usd=150_000, geo_whitelist=["New York"])
+        )
+        posting = _posting(salary_max=90_000)
+        result = apply_hard_rules(posting, _target(), None, cfg)
+        assert result.passed is False
+        assert result.failed_rule == "salary_floor"
+
+    def test_null_salary_posting_always_passes(self) -> None:
+        """Tolerate-unknowns: NULL salary passes even with a high floor."""
+        from job_assist.triage.config import hard_rule_config_from_profile
+
+        cfg = hard_rule_config_from_profile(
+            self._profile(salary_floor_usd=200_000, geo_whitelist=["New York"])
+        )
+        posting = _posting(salary_max=None, salary_currency=None)
+        result = apply_hard_rules(posting, _target(), None, cfg)
+        assert result.passed is True

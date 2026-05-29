@@ -602,6 +602,14 @@ Discovered in: PR B enrichment-reliability work, after the manual 1,730-row JD-s
 
 ---
 
+### 5.21 Partial credit for a disqualifying mismatch lets wrong items rank high
+
+The scorer gave role_family mismatch partial credit (ADJACENT=60, other=10 of 100) inside a weighted composite. A wrong-role posting (program_management) at a Tier-1 company in-geo still scored ~75 — high enough to dominate Best Fit — because the other 75% of weight (tier, geo, seniority) carried it despite the role being disqualifying. Fixing the classifier alone made it WORSE: correctly relabeling other(10)→program_management(60) raised the mismatched score. Lesson: a disqualifying attribute needs a hard gate (cap the composite), not partial credit inside a weighted sum. Weighted sums are for trading off comparable factors; a wrong-role posting isn't a weaker-PM posting, it's a non-candidate. Gate it, don't weight it.
+
+Discovered in: PR C triage-quality work — capping the composite at 40 for any role_family not in PREFERRED_FAMILIES (product_management, product_owner).
+
+---
+
 ## 6. Privacy / Safety Bestiary
 
 ### 6.1 xlsx files containing real PII never committed

@@ -146,7 +146,10 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
   }
 
   return (
-    <SettingsSection heading="Hard rule thresholds" description="Filters applied before triage.">
+    <SettingsSection
+      heading="Hard rule thresholds"
+      description="Filters postings with disclosed salary, location, or applicant count outside your thresholds. Postings without disclosed salary (most listings) are always kept."
+    >
       <form onSubmit={handleSubmit(onSaveClick)} className="flex flex-col gap-8">
         <SettingsRow
           label="Maximum applicant count"
@@ -170,7 +173,7 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
 
         <SettingsRow
           label="Salary floor (annual USD)"
-          sub="Drop postings whose max salary falls below this."
+          sub="Hide postings whose disclosed max salary is below this. Postings without a listed salary are kept."
         >
           <Controller
             control={control}
@@ -191,7 +194,7 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
 
         <SettingsRow
           label="Salary ceiling (annual USD)"
-          sub="Drop postings whose minimum salary exceeds this. Set to 0 to disable."
+          sub="Hide postings whose disclosed min salary exceeds this. Set to 0 to disable. Postings without a listed salary are kept."
         >
           <Controller
             control={control}

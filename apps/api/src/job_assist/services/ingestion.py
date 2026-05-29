@@ -33,11 +33,13 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import CursorResult
 
 from job_assist.adapters.base import Adapter, HandleNotFoundError
+from job_assist.db.models.closed_channel import ClosedChannel
 from job_assist.db.models.ingest_run import IngestRun
 from job_assist.db.models.job_posting import JobPosting
 from job_assist.db.models.operator_profile import OperatorProfile
 from job_assist.db.models.posting_source import PostingSource
 from job_assist.db.models.target_company import TargetCompany
+from job_assist.triage.config import hard_rule_config_from_profile
 
 logger = structlog.get_logger(__name__)
 
@@ -81,6 +83,25 @@ class IngestionService:
             # defaults if any extractor needs a field that isn't set.
             op_row = await session.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
             operator_profile = op_row.scalar_one_or_none()
+
+            # ── Hard-rule inputs (PR C) ──────────────────────────────────────
+            # Build the HardRuleConfig + load the active ClosedChannel ONCE per
+            # run (one company per handle), mirroring the operator_profile read
+            # so the per-posting eval below stays O(1) — no N+1. ``None`` config
+            # when the profile is unseeded → the eval is skipped per-posting.
+            hard_rule_config = (
+                hard_rule_config_from_profile(operator_profile)
+                if operator_profile is not None
+                else None
+            )
+            active_closed_channel = None
+            if target_company is not None:
+                cc_row = await session.execute(
+                    select(ClosedChannel)
+                    .where(ClosedChannel.target_company_id == target_company.id)
+                    .where(ClosedChannel.unsealed_at.is_(None))
+                )
+                active_closed_channel = cc_row.scalar_one_or_none()
 
             # ── Fetch ─────────────────────────────────────────────────────────
             raw_postings = await adapter.fetch_postings(handle)
@@ -184,6 +205,33 @@ class IngestionService:
                     except Exception as exc:
                         logger.warning(
                             "ingestion.scoring_failed",
+                            posting_id=str(job_posting.id) if job_posting.id else None,
+                            error=str(exc)[:300],
+                        )
+
+                # ── Hard-rule eligibility (PR C) ─────────────────────────────
+                # Wire the previously-orphaned apply_hard_rules into the corpus.
+                # Persist the failed RuleName (or NULL = passed) so /postings can
+                # filter cheaply and the operator can see WHY a row was hidden.
+                # Same Bestiary contract as scoring: a filter failure must NEVER
+                # cascade to fail the ingest run — log + continue.
+                if hard_rule_config is not None:
+                    try:
+                        from job_assist.triage.hard_rules import apply_hard_rules
+
+                        verdict = apply_hard_rules(
+                            job_posting,
+                            target_company,
+                            active_closed_channel,
+                            hard_rule_config,
+                        )
+                        job_posting.hard_rule_failed = (
+                            None if verdict.passed else verdict.failed_rule
+                        )
+                        job_posting.hard_rules_evaluated_at = datetime.now(tz=UTC)
+                    except Exception as exc:
+                        logger.warning(
+                            "ingestion.hard_rules_failed",
                             posting_id=str(job_posting.id) if job_posting.id else None,
                             error=str(exc)[:300],
                         )
