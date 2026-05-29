@@ -18,6 +18,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -470,3 +471,20 @@ async def test_404_mid_pagination_does_not_raise() -> None:
     finally:
         await client.aclose()
     assert len(postings) == 1
+
+
+async def test_timeout_propagates_not_swallowed() -> None:
+    """Bestiary 5.19: a retry-exhausted timeout on the listing POST
+    PROPAGATES — it must NOT be swallowed as ``[]``. Otherwise a populated
+    tenant silently turns empty and stale-detection closes its postings.
+    (Per-detail timeouts stay lenient — covered by the listing path only.)"""
+    client = AsyncMock(spec=httpx.AsyncClient)
+    adapter = WorkdayAdapter(
+        adapter_config={"wd_number": "wd5", "site": "External"},
+        client=client,
+    )
+    # Replace the (retrying) _post with a direct raise — simulates retry
+    # exhaustion without the tenacity backoff delay.
+    adapter._post = AsyncMock(side_effect=httpx.ReadTimeout("slow board"))  # type: ignore[method-assign]
+    with pytest.raises(httpx.TimeoutException):
+        await adapter.fetch_postings("jpmc")

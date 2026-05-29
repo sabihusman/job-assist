@@ -256,6 +256,21 @@ async def test_non_200_non_404_still_returns_empty() -> None:
     assert await adapter.fetch_postings("teapot") == []
 
 
+@pytest.mark.asyncio
+async def test_timeout_propagates_not_swallowed() -> None:
+    """Bestiary 5.19: a retry-exhausted timeout PROPAGATES — it must NOT be
+    swallowed as ``[]``. A populated board silently turning empty would let
+    stale-detection close every posting on it. ``_get`` already retries +
+    reraises; this asserts ``fetch_postings`` doesn't bury the result."""
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    adapter = GreenhouseAdapter(client=mock_client)
+    # Replace the (retrying) _get with a direct raise — simulates retry
+    # exhaustion without the tenacity backoff delay.
+    adapter._get = AsyncMock(side_effect=httpx.ReadTimeout("slow board"))  # type: ignore[method-assign]
+    with pytest.raises(httpx.TimeoutException):
+        await adapter.fetch_postings("anthropic")
+
+
 # ── Integration tests ──────────────────────────────────────────────────────────
 
 

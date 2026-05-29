@@ -254,7 +254,9 @@ class WorkdayAdapter:
         cfg = adapter_config or {}
         self.wd_number: str = str(cfg.get("wd_number") or "wd1")
         self.site: str = str(cfg.get("site") or "External")
-        self._client = client or httpx.AsyncClient(timeout=30.0, follow_redirects=True)
+        # 60s (not 30s): large tenants paginate many detail fetches; align
+        # all adapters on one headroom value. See Bestiary 5.19.
+        self._client = client or httpx.AsyncClient(timeout=60.0, follow_redirects=True)
         self._owns_client = client is None
 
     async def __aenter__(self) -> WorkdayAdapter:
@@ -306,10 +308,12 @@ class WorkdayAdapter:
             "offset": offset,
             "searchText": "",
         }
-        try:
-            resp = await self._post(url, body)
-        except (httpx.HTTPError, httpx.TimeoutException):
-            return []
+        # Bestiary 5.19: a retry-exhausted timeout/HTTPError PROPAGATES (it is
+        # not swallowed as ``[]``). A page-fetch failure must not look like
+        # "end of pagination" / "empty board" — that truncates or empties the
+        # board, and stale-detection would then close the un-fetched
+        # postings. The orchestrator records the raised error as ``failed``.
+        resp = await self._post(url, body)
         if resp.status_code == 404 and offset == 0:
             # Bestiary 5.9 — 404 on the listing's first page = stale
             # handle / wrong tenant. Mid-pagination 404 is treated as
@@ -329,6 +333,12 @@ class WorkdayAdapter:
         return [p for p in postings if isinstance(p, dict)]
 
     async def _fetch_detail(self, handle: str, external_path: str) -> dict[str, Any]:
+        # Unlike the listing fetch, a per-detail failure stays lenient
+        # (returns ``{}``): the posting still enters the pipeline from the
+        # list row, so ``last_seen_at`` refreshes and stale-detection is not
+        # misled — only this row's JD/salary is degraded. Re-raising here
+        # would fail an entire board over one slow detail page (Bestiary 5.19
+        # scope boundary: re-raise only where the WHOLE board would vanish).
         url = _build_detail_url(handle, self.wd_number, self.site, external_path)
         try:
             resp = await self._get(url)

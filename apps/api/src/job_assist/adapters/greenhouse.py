@@ -74,7 +74,9 @@ class GreenhouseAdapter:
     parser_version: ClassVar[str] = "greenhouse-v1"
 
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
-        self._client = client or httpx.AsyncClient(timeout=30.0, follow_redirects=True)
+        # 60s (not 30s): large boards (e.g. Anthropic ~400 postings) can
+        # exceed 30s from Railway's network path. See Bestiary 5.19.
+        self._client = client or httpx.AsyncClient(timeout=60.0, follow_redirects=True)
         self._owns_client = client is None
 
     async def __aenter__(self) -> GreenhouseAdapter:
@@ -104,15 +106,15 @@ class GreenhouseAdapter:
     async def fetch_postings(self, handle: str) -> list[RawPosting]:
         """Return all active postings for *handle*.
 
-        Returns ``[]`` on network errors and non-200 / non-404 responses.
-        Raises :class:`HandleNotFoundError` on 404 — stale handle signal.
-        See Bestiary 5.9.
+        Returns ``[]`` only on non-200 / non-404 responses. Raises
+        :class:`HandleNotFoundError` on 404 (stale handle signal, Bestiary
+        5.9), and PROPAGATES a retry-exhausted timeout/HTTPError rather than
+        swallowing it as ``[]`` (Bestiary 5.19) — a transient failure must
+        not masquerade as an empty board, or stale-detection would close
+        every posting on it. The orchestrator records it as ``failed``.
         """
         url = _API_URL.format(handle=handle)
-        try:
-            resp = await self._get(url)
-        except (httpx.HTTPError, httpx.TimeoutException):
-            return []
+        resp = await self._get(url)
         if resp.status_code == 404:
             raise HandleNotFoundError(ats=self.ats, handle=handle, url=url)
         if resp.status_code != 200:

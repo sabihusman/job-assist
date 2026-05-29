@@ -92,7 +92,10 @@ class AshbyAdapter:
     parser_version: ClassVar[str] = "ashby-v1"
 
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
-        self._client = client or httpx.AsyncClient(timeout=30.0, follow_redirects=True)
+        # 60s (not 30s): Ashby's largest boards (Notion, Plaid, Ramp, Vanta)
+        # return ~2MB payloads that intermittently exceed 30s from Railway's
+        # network path. See Bestiary 5.19.
+        self._client = client or httpx.AsyncClient(timeout=60.0, follow_redirects=True)
         self._owns_client = client is None
 
     async def __aenter__(self) -> AshbyAdapter:
@@ -124,12 +127,15 @@ class AshbyAdapter:
 
         Filters out rows with ``isListed=false`` or ``isInternal=true`` so
         unpublished or employees-only roles never enter our pipeline.
+
+        Bestiary 5.19: a retry-exhausted timeout/HTTPError PROPAGATES — it is
+        NOT swallowed as ``[]``. Returning an empty list on a transient
+        network failure is indistinguishable from a genuinely empty board,
+        and (with stale-detection) would falsely close every posting on it.
+        The orchestrator records the raised error as ``status='failed'``.
         """
         url = _API_URL.format(handle=handle)
-        try:
-            resp = await self._get(url)
-        except (httpx.HTTPError, httpx.TimeoutException):
-            return []
+        resp = await self._get(url)
         if resp.status_code == 404:
             # Bestiary 5.9 — distinguish stale handle from generic empty.
             raise HandleNotFoundError(ats=self.ats, handle=handle, url=url)

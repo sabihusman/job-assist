@@ -177,6 +177,16 @@ class TestFetchPostings:
         adapter = _make_adapter(payload={"apiVersion": "1"})
         assert await adapter.fetch_postings("example") == []
 
+    async def test_timeout_propagates_not_swallowed(self) -> None:
+        """Bestiary 5.19: a retry-exhausted timeout PROPAGATES — it must NOT
+        be swallowed as ``[]``. This is the exact failure that hit Notion /
+        Plaid / Ramp (~2MB boards) on the PR-A re-ingest: a 30s timeout
+        returned empty, and stale-detection then closed live postings."""
+        adapter = _make_adapter()
+        adapter._get = AsyncMock(side_effect=httpx.ReadTimeout("slow board"))  # type: ignore[method-assign]
+        with pytest.raises(httpx.TimeoutException):
+            await adapter.fetch_postings("notion")
+
 
 # ── Integration ───────────────────────────────────────────────────────────────
 
