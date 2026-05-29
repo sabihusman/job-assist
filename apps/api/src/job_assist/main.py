@@ -1438,6 +1438,12 @@ async def score_sweep_endpoint(
         ``scored_at NULLS FIRST, first_seen_at ASC, id ASC`` so previously
         scored rows get refreshed in oldest-first order.
 
+    Batched-loop termination: stop when ``remaining == 0`` for
+    ``only_unscored=True`` (the backlog has drained). For
+    ``only_unscored=False`` every open posting is always re-selectable, so
+    ``processed`` and ``remaining`` never fall below ``limit`` — stop on
+    ``changed == 0`` (scores have converged) instead.
+
     On per-row scoring failure: log + skip + continue. The row's previous
     ``fit_score`` is preserved (the score is decoration; the sweep must
     never wipe data on a transient failure).
@@ -1537,10 +1543,31 @@ async def score_sweep_endpoint(
     _ = bucket_for_score  # imported for docstring referencing; CASE is the
     #                     # actual aggregator here.
 
+    # ── 3. Convergence signal ────────────────────────────────────────────
+    # ``remaining`` = open postings the next identical call would still
+    # select, beyond what this batch covered. For only_unscored=True it's the
+    # true leftover backlog (computed POST-commit, so the rows just scored are
+    # already excluded) → loop until 0. For only_unscored=False every open row
+    # is perpetually re-selectable, so this stays > 0 across stateless calls
+    # and is NOT a stop signal — callers converge on ``changed == 0`` instead.
+    # See ScoreSweepResponse.remaining. (We hit the non-terminating loop live:
+    # a only_unscored=False caller looping on ``processed < limit`` ran 950+
+    # idempotent batches before being killed.)
+    remaining_stmt = (
+        select(func.count()).select_from(JobPosting).where(JobPosting.closed_at.is_(None))
+    )
+    if payload.only_unscored:
+        remaining_stmt = remaining_stmt.where(JobPosting.fit_score.is_(None))
+        remaining = (await db.execute(remaining_stmt)).scalar_one()
+    else:
+        total_open = (await db.execute(remaining_stmt)).scalar_one()
+        remaining = max(0, total_open - processed)
+
     return ScoreSweepResponse(
         processed=processed,
         changed=changed,
         skipped=skipped,
+        remaining=remaining,
         distribution=ScoreDistribution(
             by_bucket={row.bucket: row.cnt for row in dist_rows},
         ),

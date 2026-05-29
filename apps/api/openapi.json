@@ -1011,7 +1011,7 @@
           "admin"
         ],
         "summary": "Score Sweep Endpoint",
-        "description": "Score up to ``limit`` postings using the heuristic fit-scoring model.\n\nSelection order (PR #56):\n  * ``only_unscored=True`` (default) \u2014 postings with ``fit_score IS NULL``,\n    ordered ``first_seen_at ASC, id ASC`` (stable tiebreaker per the\n    bestiary \u2014 postings sharing a same-second first_seen_at land in a\n    deterministic order across runs).\n  * ``only_unscored=False`` \u2014 all postings, ordered\n    ``scored_at NULLS FIRST, first_seen_at ASC, id ASC`` so previously\n    scored rows get refreshed in oldest-first order.\n\nOn per-row scoring failure: log + skip + continue. The row's previous\n``fit_score`` is preserved (the score is decoration; the sweep must\nnever wipe data on a transient failure).\n\n``distribution`` in the response is a coarse-bucket snapshot of the\nFULL table (not just the rows this sweep touched) taken AFTER the\nsweep, so the operator sees the cumulative effect.\n\nTODO: add authentication before exposing publicly. Dev-mode only today.",
+        "description": "Score up to ``limit`` postings using the heuristic fit-scoring model.\n\nSelection order (PR #56):\n  * ``only_unscored=True`` (default) \u2014 postings with ``fit_score IS NULL``,\n    ordered ``first_seen_at ASC, id ASC`` (stable tiebreaker per the\n    bestiary \u2014 postings sharing a same-second first_seen_at land in a\n    deterministic order across runs).\n  * ``only_unscored=False`` \u2014 all postings, ordered\n    ``scored_at NULLS FIRST, first_seen_at ASC, id ASC`` so previously\n    scored rows get refreshed in oldest-first order.\n\nBatched-loop termination: stop when ``remaining == 0`` for\n``only_unscored=True`` (the backlog has drained). For\n``only_unscored=False`` every open posting is always re-selectable, so\n``processed`` and ``remaining`` never fall below ``limit`` \u2014 stop on\n``changed == 0`` (scores have converged) instead.\n\nOn per-row scoring failure: log + skip + continue. The row's previous\n``fit_score`` is preserved (the score is decoration; the sweep must\nnever wipe data on a transient failure).\n\n``distribution`` in the response is a coarse-bucket snapshot of the\nFULL table (not just the rows this sweep touched) taken AFTER the\nsweep, so the operator sees the cumulative effect.\n\nTODO: add authentication before exposing publicly. Dev-mode only today.",
         "operationId": "score_sweep_endpoint_admin_score_sweep_post",
         "requestBody": {
           "content": {
@@ -2795,6 +2795,11 @@
             "title": "Skipped",
             "description": "Postings where the scoring function raised; previous score preserved."
           },
+          "remaining": {
+            "type": "integer",
+            "title": "Remaining",
+            "description": "Open postings the NEXT identical call would still select, beyond the ones this batch covered. STOP CONDITION for a batched loop:\n  * only_unscored=True (drain the unscored backlog) \u2014 this is the true leftover count; loop until ``remaining == 0``.\n  * only_unscored=False (full re-score) \u2014 every open posting is always re-selectable, so this stays > 0 across stateless calls and is NOT a termination signal; stop on ``changed == 0`` instead (the scores have converged). Looping on ``processed < limit`` here never terminates."
+          },
           "distribution": {
             "$ref": "#/components/schemas/ScoreDistribution",
             "description": "Full-table fit_score-bucket snapshot taken after the sweep."
@@ -2805,6 +2810,7 @@
           "processed",
           "changed",
           "skipped",
+          "remaining",
           "distribution"
         ],
         "title": "ScoreSweepResponse",

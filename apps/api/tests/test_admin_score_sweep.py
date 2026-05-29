@@ -178,6 +178,72 @@ async def test_sweep_processes_exactly_limit_rows(
 
 @_NEEDS_DB
 @pytest.mark.asyncio
+async def test_sweep_remaining_drains_to_zero_only_unscored(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``remaining`` is the unambiguous stop signal for only_unscored=True:
+    10 unscored rows, limit=4 → remaining 6 → 2 → 0 across three batches.
+
+    Regression guard for the live non-terminating loop: a caller that loops
+    until ``remaining == 0`` must actually terminate."""
+    from job_assist.main import app
+
+    _patch_score(monkeypatch, score_value=75)
+    await _seed_operator_profile(db_session)
+
+    tc = _company()
+    db_session.add(tc)
+    await db_session.flush()
+    for _ in range(10):
+        db_session.add(_posting(target_company_id=tc.id))
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        seen: list[int] = []
+        for _ in range(10):  # hard cap so a regression can't loop forever
+            r = await _post_sweep(client, limit=4, only_unscored=True)
+            assert r.status_code == 200
+            seen.append(r.json()["remaining"])
+            if r.json()["remaining"] == 0:
+                break
+    assert seen == [6, 2, 0]
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_sweep_remaining_nonzero_for_full_rescore(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """only_unscored=False: every open posting is always re-selectable, so
+    ``remaining`` = total_open - processed and never reaches 0 across calls.
+    The stop signal there is ``changed == 0`` — asserted on the second run."""
+    from job_assist.main import app
+
+    _patch_score(monkeypatch, score_value=75)
+    await _seed_operator_profile(db_session)
+
+    tc = _company()
+    db_session.add(tc)
+    await db_session.flush()
+    for _ in range(5):
+        db_session.add(_posting(target_company_id=tc.id))
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        r1 = await _post_sweep(client, limit=2, only_unscored=False)
+        assert r1.status_code == 200
+        d1 = r1.json()
+        # 5 open, 2 processed → remaining = 3 (and would stay > 0 forever).
+        assert d1["processed"] == 2
+        assert d1["remaining"] == 3
+
+        # Convergence signal: re-scoring the same rows yields no change.
+        r2 = await _post_sweep(client, limit=2, only_unscored=False)
+        assert r2.json()["changed"] == 0
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
 async def test_sweep_idempotent_second_run(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
