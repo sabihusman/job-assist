@@ -659,21 +659,29 @@ async def test_reeval_hard_rules_endpoint(db_session: Any) -> None:
     """POST /admin/postings/reeval-hard-rules re-evaluates open postings and
     rewrites hard_rule_failed. Seeds the operator_profile (singleton) so the
     mapper has a row to read."""
+    from sqlalchemy import select
+
     from job_assist.db.models import OperatorProfile
 
-    db_session.add(
-        OperatorProfile(
-            id=1,
-            looking_for_text="PM",
-            role_keywords=[],
-            geo_whitelist=["Remote"],
-            salary_floor_usd=150_000,
-            salary_ceiling_usd=None,
-            applicant_cap=500,
-            seniority_levels_included=None,
-            staffing_firm_blocklist=[],
-        )
-    )
+    # Upsert the singleton — the test DB is already seeded with id=1, so a
+    # plain insert would violate the PK. Overwrite the rule fields the test
+    # depends on so it's deterministic regardless of seeded defaults.
+    profile = (
+        await db_session.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
+    ).scalar_one_or_none()
+    fields = {
+        "geo_whitelist": ["Remote"],
+        "salary_floor_usd": 150_000,
+        "salary_ceiling_usd": None,
+        "applicant_cap": 500,
+        "seniority_levels_included": None,
+        "staffing_firm_blocklist": [],
+    }
+    if profile is None:
+        db_session.add(OperatorProfile(id=1, looking_for_text="PM", role_keywords=[], **fields))
+    else:
+        for key, value in fields.items():
+            setattr(profile, key, value)
     c = _company(name="ReevalCo")
     db_session.add(c)
     await db_session.flush()
