@@ -30,7 +30,7 @@ from job_assist.adapters.ashby import AshbyAdapter
 from job_assist.adapters.base import RawPosting
 
 _FIXTURE_PATH = pathlib.Path(__file__).parent.parent / "fixtures" / "ashby_synthetic.json"
-_FIXTURE: dict[str, Any] = json.loads(_FIXTURE_PATH.read_text())
+_FIXTURE: dict[str, Any] = json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))
 _JOBS: list[dict[str, Any]] = _FIXTURE["jobs"]
 
 # Index of the row that should be filtered out (isListed=false, isInternal=true).

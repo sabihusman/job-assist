@@ -34,7 +34,7 @@ from job_assist.adapters.greenhouse import (
 )
 
 _FIXTURE_PATH = pathlib.Path(__file__).parent.parent / "fixtures" / "greenhouse_stripe.json"
-_FIXTURE: dict[str, Any] = json.loads(_FIXTURE_PATH.read_text())
+_FIXTURE: dict[str, Any] = json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))
 
 _NEEDS_DB = pytest.mark.skipif(
     not os.getenv("TEST_DATABASE_URL"),
