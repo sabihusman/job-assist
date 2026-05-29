@@ -584,6 +584,16 @@ job_posting had a closed_at column from day one, but nothing ever wrote it and n
 
 ---
 
+### 5.19 Silent timeout swallow extends 5.9's failure mode dangerously
+
+PR #64 (Bestiary 5.9) fixed silent 404 swallow in ATS adapters, distinguishing handle_not_found from success. But the timeout/HTTPError path was left swallowing as [], surfacing as "success, fetched=0." With PR A (stale-detection via last_seen_at), this becomes catastrophic: a board that times out for 7+ consecutive days has all its postings falsely marked closed. The same pattern (large response, slow upstream, fixed timeout) hit Ashby's biggest boards (Notion, Plaid, Ramp ~2MB payloads, intermittent 30-50s response). Lesson: when fixing silent-failure patterns, fix ALL failure paths, not just the most-likely one. A retry-exhausted exception is operator-actionable data, not "success with no results."
+
+Scope nuance: re-raise only where swallowing makes the WHOLE board vanish (listing/page-level fetches in all five adapters). Per-detail fetches (Workday/iCIMS) stay lenient — the posting still enters the pipeline from its list row, so last_seen_at refreshes and stale-detection is not misled; only that one row's JD/salary is degraded. Re-raising there would fail an entire board over one slow detail page.
+
+Discovered in: PR A backfill verification, when re-ingest of Notion/Plaid/Ramp returned fetched=0 despite Ashby upstream being healthy (timed out at 30s; succeeded at 60s).
+
+---
+
 ## 6. Privacy / Safety Bestiary
 
 ### 6.1 xlsx files containing real PII never committed

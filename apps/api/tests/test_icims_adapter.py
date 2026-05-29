@@ -13,6 +13,7 @@ real iCIMS handle ingested after merge is the truth check.
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -459,21 +460,24 @@ async def test_fetch_postings_handles_429_with_retry() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetch_postings_returns_empty_when_listing_5xx_persists() -> None:
-    """Persistent 503 → tenacity exhausts retries → returns []. The run
-    surface (IngestRun.status='failed') is the operator-facing signal,
-    not a per-source row."""
+async def test_fetch_postings_raises_when_listing_5xx_persists() -> None:
+    """Persistent 503 → tenacity exhausts retries → the error PROPAGATES
+    (Bestiary 5.19), it is NOT swallowed as []. The orchestrator records
+    IngestRun.status='failed' from the raised error; a silent [] would
+    instead read as "success, empty board" and let stale-detection close
+    every posting on it."""
 
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503)
 
     transport = httpx.MockTransport(handler)
     client = httpx.AsyncClient(transport=transport)
-    async with ICIMSAdapter(client=client) as adapter:
-        postings = await adapter.fetch_postings("acmecorp")
-    await client.aclose()
-
-    assert postings == []
+    try:
+        async with ICIMSAdapter(client=client) as adapter:
+            with pytest.raises(httpx.HTTPError):
+                await adapter.fetch_postings("acmecorp")
+    finally:
+        await client.aclose()
 
 
 @pytest.mark.asyncio
@@ -635,3 +639,17 @@ async def test_404_mid_pagination_does_not_raise() -> None:
             await adapter.fetch_postings("real-tenant")
     finally:
         await client.aclose()
+
+
+async def test_timeout_propagates_not_swallowed() -> None:
+    """Bestiary 5.19: a retry-exhausted timeout on the listing fetch
+    PROPAGATES — it must NOT be swallowed as ``[]``. Otherwise a populated
+    tenant silently turns empty and stale-detection closes its postings.
+    (Per-detail timeouts stay lenient — only the listing path re-raises.)"""
+    client = AsyncMock(spec=httpx.AsyncClient)
+    adapter = ICIMSAdapter(client=client)
+    # Replace the (retrying) _get with a direct raise — simulates retry
+    # exhaustion without the tenacity backoff delay.
+    adapter._get = AsyncMock(side_effect=httpx.ReadTimeout("slow board"))  # type: ignore[method-assign]
+    with pytest.raises(httpx.TimeoutException):
+        await adapter.fetch_postings("real-tenant")

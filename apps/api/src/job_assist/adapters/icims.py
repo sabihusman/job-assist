@@ -329,7 +329,9 @@ class ICIMSAdapter:
         self.careers_url_override: str | None = (
             str(cfg.get("careers_url")) if cfg.get("careers_url") else None
         )
-        self._client = client or httpx.AsyncClient(timeout=30.0, follow_redirects=True)
+        # 60s (not 30s): large tenants paginate many detail fetches; align
+        # all adapters on one headroom value. See Bestiary 5.19.
+        self._client = client or httpx.AsyncClient(timeout=60.0, follow_redirects=True)
         self._owns_client = client is None
 
     async def __aenter__(self) -> ICIMSAdapter:
@@ -374,12 +376,15 @@ class ICIMSAdapter:
         — the careers URL doesn't resolve to a tenant. Mid-pagination
         404 is treated as an empty page (rare; tenant disappearing).
         See Bestiary 5.9.
+
+        Bestiary 5.19: a retry-exhausted timeout/HTTPError PROPAGATES (not
+        swallowed as ``[]``). A listing-fetch failure must not look like
+        "end of pagination" / "empty board" — that truncates or empties the
+        board, and stale-detection would then close the un-fetched postings.
+        The orchestrator records the raised error as ``failed``.
         """
         url = _build_listing_url(careers_url, offset)
-        try:
-            resp = await self._get(url)
-        except (httpx.HTTPError, httpx.TimeoutException):
-            return []
+        resp = await self._get(url)
         if resp.status_code == 404 and offset == 0:
             raise HandleNotFoundError(ats=self.ats, handle=handle, url=url)
         if resp.status_code != 200:
@@ -387,6 +392,12 @@ class ICIMSAdapter:
         return _extract_listing_rows(resp.text or "")
 
     async def _fetch_detail_html(self, careers_url: str, source_job_id: str, slug: str) -> str:
+        # Unlike the listing fetch, a per-detail failure stays lenient
+        # (returns ``""``): the posting still enters the pipeline from the
+        # listing row, so ``last_seen_at`` refreshes and stale-detection is
+        # not misled — only this row's JD/salary is degraded. Re-raising here
+        # would fail an entire board over one slow detail page (Bestiary 5.19
+        # scope boundary: re-raise only where the WHOLE board would vanish).
         url = _build_detail_url(careers_url, source_job_id, slug)
         try:
             resp = await self._get(url)

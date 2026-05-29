@@ -182,6 +182,15 @@ class TestFetchPostings:
         assert len(raws) == 1
         assert raws[0].source_job_id == _FIXTURE[0]["id"]
 
+    async def test_timeout_propagates_not_swallowed(self) -> None:
+        """Bestiary 5.19: a retry-exhausted timeout PROPAGATES — it must NOT
+        be swallowed as ``[]``. Otherwise a populated board silently turns
+        empty and stale-detection closes every posting on it."""
+        adapter = _make_adapter()
+        adapter._get = AsyncMock(side_effect=httpx.ReadTimeout("slow board"))  # type: ignore[method-assign]
+        with pytest.raises(httpx.TimeoutException):
+            await adapter.fetch_postings("ramp")
+
 
 # ── Integration tests ─────────────────────────────────────────────────────────
 

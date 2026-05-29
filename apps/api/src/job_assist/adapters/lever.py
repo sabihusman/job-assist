@@ -88,7 +88,9 @@ class LeverAdapter:
     parser_version: ClassVar[str] = "lever-v1"
 
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
-        self._client = client or httpx.AsyncClient(timeout=30.0, follow_redirects=True)
+        # 60s (not 30s): large boards can exceed 30s from Railway's network
+        # path; align all adapters on one headroom value. See Bestiary 5.19.
+        self._client = client or httpx.AsyncClient(timeout=60.0, follow_redirects=True)
         self._owns_client = client is None
 
     async def __aenter__(self) -> LeverAdapter:
@@ -118,17 +120,16 @@ class LeverAdapter:
     async def fetch_postings(self, handle: str) -> list[RawPosting]:
         """Return all active postings for *handle*.
 
-        Returns ``[]`` on network errors and non-200 / non-404 responses
-        (the historical silent-failure pattern is preserved for those).
-        Raises :class:`HandleNotFoundError` on 404 specifically — that's
-        an operator-actionable signal that the tenant left Lever or the
-        configured ``ats_handle`` is wrong. See Bestiary 5.9.
+        Returns ``[]`` only on non-200 / non-404 responses. Raises
+        :class:`HandleNotFoundError` on 404 — an operator-actionable signal
+        that the tenant left Lever or the ``ats_handle`` is wrong (Bestiary
+        5.9). PROPAGATES a retry-exhausted timeout/HTTPError instead of
+        swallowing it as ``[]`` (Bestiary 5.19): a transient failure must
+        not look like an empty board, or stale-detection would close every
+        posting on it. The orchestrator records it as ``failed``.
         """
         url = _API_URL.format(handle=handle)
-        try:
-            resp = await self._get(url)
-        except (httpx.HTTPError, httpx.TimeoutException):
-            return []
+        resp = await self._get(url)
         if resp.status_code == 404:
             raise HandleNotFoundError(ats=self.ats, handle=handle, url=url)
         if resp.status_code != 200:
