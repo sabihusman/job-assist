@@ -47,6 +47,18 @@ class ScoreSweepResponse(BaseModel):
     skipped: int = Field(
         description="Postings where the scoring function raised; previous score preserved."
     )
+    remaining: int = Field(
+        description=(
+            "Open postings the NEXT identical call would still select, beyond the ones "
+            "this batch covered. STOP CONDITION for a batched loop:\n"
+            "  * only_unscored=True (drain the unscored backlog) — this is the true "
+            "leftover count; loop until ``remaining == 0``.\n"
+            "  * only_unscored=False (full re-score) — every open posting is always "
+            "re-selectable, so this stays > 0 across stateless calls and is NOT a "
+            "termination signal; stop on ``changed == 0`` instead (the scores have "
+            "converged). Looping on ``processed < limit`` here never terminates."
+        )
+    )
     distribution: ScoreDistribution = Field(
         description="Full-table fit_score-bucket snapshot taken after the sweep."
     )
