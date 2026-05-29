@@ -827,6 +827,7 @@ dependencies = [
     { name = "google-auth-oauthlib" },
     { name = "google-genai" },
     { name = "httpx" },
+    { name = "openpyxl" },
     { name = "pgvector" },
     { name = "psycopg2-binary" },
     { name = "pydantic" },
@@ -845,7 +846,6 @@ dependencies = [
 dev = [
     { name = "httpx" },
     { name = "mypy" },
-    { name = "openpyxl" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -865,6 +865,7 @@ requires-dist = [
     { name = "google-auth-oauthlib", specifier = ">=1.2.0" },
     { name = "google-genai", specifier = ">=0.3.0" },
     { name = "httpx", specifier = ">=0.27.0" },
+    { name = "openpyxl", specifier = ">=3.1.0" },
     { name = "pgvector", specifier = ">=0.3.6" },
     { name = "psycopg2-binary", specifier = ">=2.9.0" },
     { name = "pydantic", specifier = ">=2.9.0" },
@@ -883,7 +884,6 @@ requires-dist = [
 dev = [
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "mypy", specifier = ">=1.13.0" },
-    { name = "openpyxl", specifier = ">=3.1.0" },
     { name = "pytest", specifier = ">=8.3.0" },
     { name = "pytest-asyncio", specifier = ">=0.24.0" },
     { name = "pytest-cov", specifier = ">=6.0.0" },

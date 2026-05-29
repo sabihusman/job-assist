@@ -34,6 +34,13 @@ dependencies = [
     "sentry-sdk[fastapi]>=2.18.0",
     # CLI
     "typer>=0.15.0",
+    # Excel export (feat/triage-export-xlsx). Used by both the runtime
+    # ``GET /postings/export.xlsx`` endpoint AND the operator-local
+    # ``scripts/tippie_to_contacts_json.py`` (PR #39). Promoted from
+    # ``[dependency-groups] dev`` here so Railway installs it for the
+    # export endpoint — a dev-only entry would 500 in production while
+    # passing every local test.
+    "openpyxl>=3.1.0",
 ]
 
 [dependency-groups]
@@ -46,10 +53,6 @@ dev = [
     "ruff>=0.7.0",
     "mypy>=1.13.0",
     "types-requests>=2.32.0",
-    # Used by scripts/tippie_to_contacts_json.py (PR #39) — operator-local
-    # tool, never runs in the Railway container, so it stays out of the
-    # runtime ``dependencies`` list.
-    "openpyxl>=3.1.0",
 ]
 
 [project.scripts]
@@ -98,6 +101,16 @@ plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
 module = ["selectolax.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# openpyxl doesn't ship a py.typed marker. Stubs (types-openpyxl) exist on
+# PyPI but they lag the library by several minor versions and pin the
+# style/utils submodules incorrectly. The xlsx export call sites use a
+# narrow surface (Workbook, Font, PatternFill, Alignment, get_column_letter)
+# — all already validated at runtime by the export test (services/
+# postings_export.py + scripts/tippie_to_contacts_json.py).
+module = ["openpyxl.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
