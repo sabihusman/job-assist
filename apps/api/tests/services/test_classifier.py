@@ -25,6 +25,7 @@ import pytest
 from job_assist.services.classifier import (
     _FALLBACK_ROLE_FAMILY,
     _FALLBACK_SENIORITY,
+    _SYSTEM_PROMPT,
     _VALID_ROLE_FAMILIES,
     _VALID_SENIORITY_LEVELS,
     CLASSIFIER_VERSION,
@@ -41,9 +42,56 @@ def test_classifier_version_is_non_empty() -> None:
     assert isinstance(CLASSIFIER_VERSION, str)
 
 
-def test_classifier_version_is_v2_era() -> None:
+def test_classifier_version_is_llm_era() -> None:
     """Version string must indicate the LLM era (not the old regex era)."""
-    assert "v2" in CLASSIFIER_VERSION or "gemini" in CLASSIFIER_VERSION.lower()
+    assert "gemini" in CLASSIFIER_VERSION.lower()
+
+
+def test_classifier_version_is_precision_prompt_v3() -> None:
+    """v3 is the precision-tightened prompt; tracking which rows were
+    classified under it is the whole point of the version bump."""
+    assert "v3" in CLASSIFIER_VERSION
+
+
+# ── _SYSTEM_PROMPT precision criteria (regression guard, Bestiary 5.21) ───────
+
+
+def test_prompt_has_ownership_discriminator() -> None:
+    """The prompt must separate roadmap OWNERSHIP (PM) from build/design/
+    support/analyze (not PM) — the core fix for over-assignment."""
+    p = _SYSTEM_PROMPT.lower()
+    assert "discriminator" in p
+    assert "own" in p and "roadmap" in p
+
+
+def test_prompt_does_not_force_a_pm_bucket() -> None:
+    """The v2 'aggressive fit' / 'force a PM-ladder bucket' framing is gone;
+    the model is told ``other`` is correct for most non-PM roles."""
+    p = _SYSTEM_PROMPT.lower()
+    assert "do not force" in p or "do not force a pm bucket" in p
+    assert "aggressive" not in p
+
+
+def test_prompt_has_negative_criteria_section() -> None:
+    assert "NEGATIVE CRITERIA" in _SYSTEM_PROMPT
+
+
+@pytest.mark.parametrize(
+    "anchor",
+    [
+        "Product Designer",  # designer with 'product' in title → not PM
+        "Design Engineer",
+        "Software Engineer",
+        "AI Operations Manager",
+        "Senior IT Engineer",
+        "Customer Success Manager",
+        "Performance Analyst",
+    ],
+)
+def test_prompt_lists_known_mislabels_as_negative_anchors(anchor: str) -> None:
+    """Every role family the v2 prompt mislabeled as product_management must
+    now appear as an explicit negative anchor in the prompt."""
+    assert anchor in _SYSTEM_PROMPT
 
 
 # ── build_classify_prompt ─────────────────────────────────────────────────────

@@ -10,20 +10,31 @@ Version history
 ───────────────
   v1 (regex)      — regex heuristic in normalization.py; never wrote a
                     ``classifier_version``; rows have NULL classifier_version.
-  v2 (this file)  — Gemini Flash Lite with few-shot examples; written to
-                    ``classifier_version`` on every sweep row.
+  v2 (gemini)     — Gemini Flash Lite, "aggressive fit" prompt. Over-assigned
+                    ``product_management``: ~33% of PM-tagged rows were
+                    actually engineers / designers / IT / ops / CSM, scoring
+                    88-100 and bypassing the scorer's role_family gate
+                    (Bestiary 5.21). The recall win cost precision.
+  v3 (this file)  — precision-tightened prompt. Explicit DISCRIMINATOR (owns
+                    a roadmap vs builds/designs/supports/analyzes) + NEGATIVE
+                    criteria + negative few-shots. ``other`` reframed as the
+                    correct answer for most non-PM roles, not a last resort.
 
 Prompt design
 ─────────────
-The prompt is aggressive about fitting into the 5 ``role_family`` buckets:
+The prompt prioritizes PRECISION over fit:
   * Enumerate ALL 5 values explicitly so the model never invents a 6th.
-  * Few-shot examples cover the edge cases that fall through the regex:
-    PMM, TPM, growth PM, ops-with-PM-scope, AI/ML-PM-adjacent.
-  * ``other`` is reserved for genuine non-PM roles (pure engineering,
-    operations, sales) where zero PM vocabulary appears.
+  * A single DISCRIMINATOR question separates ownership (PM) from
+    build/design/support/analyze (not PM) — a "Product" in the title does
+    NOT imply product_management (Product Designer, Product Operations).
+  * Explicit NEGATIVE criteria + negative few-shots for the roles the v2
+    prompt mislabeled: engineers, designers, IT/DevOps, ops-managers,
+    Customer Success, analysts, eng-managers.
+  * The model is told NOT to force a PM bucket; ``other`` is correct for
+    the majority of non-PM roles.
 
-For seniority the same aggression applies: force a PM-ladder bucket;
-  * ``unknown`` only when the JD has NO level signal at all.
+For seniority: ``unknown`` when the JD has no level signal OR the role is
+not on the PM ladder (role_family = other).
 
 Mock seam
 ─────────
@@ -51,7 +62,7 @@ logger = logging.getLogger(__name__)
 
 # ── Version / model constants ─────────────────────────────────────────────────
 
-CLASSIFIER_VERSION = "gemini-flash-lite-v2"
+CLASSIFIER_VERSION = "gemini-flash-lite-v3"
 _MODEL_NAME = "gemini-2.5-flash-lite"
 
 # Valid enum values — kept in sync with db/enums.py. The defensive parser
@@ -69,46 +80,93 @@ _FALLBACK_SENIORITY = "unknown"
 # ── System prompt ─────────────────────────────────────────────────────────────
 
 _SYSTEM_PROMPT = """\
-You are classifying job postings for a PM job-search tool. Your job is to
-assign EXACTLY ONE value for each of two dimensions.
+You are classifying job postings for a PM job-search tool. Assign EXACTLY
+ONE value for each of two dimensions. Accuracy matters more than fit: when a
+role is genuinely NOT a product-management-ladder role, classify it as
+``other`` (or the correct adjacent bucket). Do NOT force a posting into a PM
+bucket — a precise ``other`` is far better than a wrong ``product_management``.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DIMENSION 1 — role_family
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Choose one of these FIVE values. Do not invent a sixth.
 
-  product_management  — owns a product roadmap and works directly with
-                        engineering. Includes "Growth PM", "AI PM",
-                        "Platform PM", "ML Product Manager", and any
-                        title containing "Product Manager" or "Head of
+THE DISCRIMINATOR: does the role OWN a product — its strategy, roadmap,
+discovery, and prioritization for a product or feature area — and decide
+WHAT to build and WHY? That is a Product Manager. Roles that BUILD, DESIGN,
+SUPPORT, SELL, or ANALYZE someone else's product are NOT product managers,
+even when their title contains the word "Product".
+
+  product_management  — OWNS product strategy / roadmap / discovery for a
+                        product or feature area; decides what to build and
+                        why; works with engineering + design as the
+                        decision-maker. Includes "Product Manager", "Senior/
+                        Group/Principal PM", "Growth PM", "AI PM", "Platform
+                        PM", "Head of Product". The title almost always
+                        contains "Product Manager" or "Head/VP/Director of
                         Product".
   product_owner       — Agile PO role, backlog management, sprint-level
                         scope. Usually titled "Product Owner".
   product_marketing   — go-to-market, messaging, positioning, launches.
                         Includes "PMM", "Product Marketing Manager",
                         "Senior PMM".
-  program_management  — cross-functional coordination without a product
-                        roadmap. Includes "TPM", "Technical Program
-                        Manager", "Program Manager", "Operations PM"
-                        where the JD is about process + coordination
-                        rather than product vision.
-  other               — use ONLY when the role has zero product scope:
-                        pure software engineering, pure data science,
-                        pure sales, recruiting, etc.
+  program_management  — cross-functional coordination / operations / process
+                        WITHOUT owning a product roadmap. Includes "TPM",
+                        "Technical Program Manager", "Program Manager",
+                        "Product Operations", "AI Operations", and other
+                        "... Operations" or ops-manager roles whose JD is
+                        about process + coordination rather than product
+                        ownership.
+  other               — anything that is not one of the four above. This is
+                        the CORRECT answer for the majority of non-PM roles,
+                        not a last resort.
+
+NEGATIVE CRITERIA — these are NOT product_management. Classify as shown:
+  • Software / AI / ML / data / infrastructure / platform ENGINEERS
+    (any "Engineer" title without "Product Manager", incl. "Design
+    Engineer", "Applied AI Engineer", "Prompt Engineer") → other
+  • DESIGNERS of every kind, INCLUDING "Product Designer", "Staff Product
+    Designer", "UX/UI Designer" → other  (design is not product management)
+  • "Product Operations", "AI Operations", "Operations Manager", and other
+    ops / coordination roles → program_management  (operations, not product
+    ownership)
+  • IT / DevOps / SRE / Security engineers ("Senior IT Engineer", etc.) → other
+  • Customer Success / Account Management / Sales roles ("Customer Success
+    Manager", "Account Executive") → other
+  • Data / BI / performance ANALYSTS ("Performance Analyst", "Data
+    Analyst") → other
+  • Content / video / brand / creative roles → other (or product_marketing
+    only if the JD is genuinely go-to-market / messaging)
+  • Engineering MANAGERS (manage engineers, not a product roadmap) → other
+A title containing "Product" (Product Designer, Product Operations, Product
+Engineer) is NOT automatically product_management — apply the discriminator.
 
 FEW-SHOT EXAMPLES (role_family):
+  POSITIVE:
   "Senior PMM, Growth" + JD about messaging → product_marketing
   "TPM, Infrastructure" + JD about cross-team coordination → program_management
   "Growth PM" + JD about A/B tests and funnel metrics → product_management
-  "AI Product Strategist" + JD about ML platform roadmap → product_management
-  "Director of Product Operations" + JD about process improvement, no roadmap → program_management
+  "AI Product Strategist" + JD about owning the ML platform roadmap → product_management
   "Product Owner" + JD about sprint backlog → product_owner
-  "Staff Software Engineer" + JD about coding → other
+  NEGATIVE (do NOT mislabel these as product_management):
+  "Senior Product Designer" + JD about design systems / Figma → other
+  "Design Engineer, Brand" + JD about building UI → other
+  "Software Engineer, AI Workflows" + JD about writing code → other
+  "Applied AI Engineer" / "Prompt Engineer" + JD about model/eval work → other
+  "AI Operations Manager" + JD about running ops / agentic workflows → program_management
+  "Product Operations Specialist" + JD about process + tooling, no roadmap → program_management
+  "Senior IT Engineer, Enterprise Systems" + JD about internal IT → other
+  "Customer Success Manager, Strategic" + JD about account retention → other
+  "CX Automation Performance Analyst" + JD about dashboards / metrics → other
+  "Engineering Manager" + JD about managing an eng team → other
+  "Video Lead, Stories" + JD about producing video content → other
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DIMENSION 2 — seniority_level
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Choose one of these SEVEN values. This is a PM career ladder:
+Choose one of these SEVEN values along the PM career ladder. If role_family
+is ``other`` and the JD has no clear level signal, ``unknown`` is fine — do
+not invent a level for a non-PM role.
 
   intern        — internship, co-op, student program
   apm           — associate PM, rotational PM, new-grad PM
@@ -121,9 +179,8 @@ Choose one of these SEVEN values. This is a PM career ladder:
                   a dual-track ladder where Principal = Staff)
   principal_pm  — "Principal PM", "Distinguished PM", "Fellow PM"
                   at the very top of the IC track
-  unknown       — use ONLY when the JD contains NO level signal
-                  whatsoever (no years-of-experience, no title qualifier,
-                  no description of scope that implies a level)
+  unknown       — the JD contains NO level signal whatsoever, OR the role
+                  is not on the PM ladder (role_family = other)
 
 FEW-SHOT EXAMPLES (seniority_level):
   "Senior PM" → senior_pm
@@ -134,7 +191,7 @@ FEW-SHOT EXAMPLES (seniority_level):
   "PM Intern" → intern
   "Product Manager" with JD saying "10+ years" → senior_pm or lead_pm
     (pick based on scope described)
-  Role with no level signal → unknown
+  Non-PM role (role_family = other) → unknown
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT — respond ONLY with this JSON, no prose:
