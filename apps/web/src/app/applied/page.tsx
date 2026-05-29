@@ -59,7 +59,7 @@ function AppliedPageInner() {
     (page1.error as Error)?.message ?? (extra.error as Error)?.message ?? 'Unknown error';
 
   return (
-    <div className="flex min-w-0 flex-col gap-4 px-6 py-4">
+    <div className="flex min-w-0 flex-col gap-4 px-4 py-4 md:px-6">
       <div className="flex items-center justify-between">
         <p className="text-[13px] text-muted-foreground">
           {page1.data ? `${items.length} of ${total} active` : '…'}
@@ -92,7 +92,7 @@ function AppliedPageInner() {
 
 function PageFallback() {
   return (
-    <div className="flex min-w-0 flex-col gap-4 px-6 py-4">
+    <div className="flex min-w-0 flex-col gap-4 px-4 py-4 md:px-6">
       <div className="h-6 w-64 animate-pulse rounded bg-surface-2" />
       <LoadingSkeleton />
     </div>
