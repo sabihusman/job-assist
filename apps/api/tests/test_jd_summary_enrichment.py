@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -403,6 +403,62 @@ async def test_sweep_respects_limit_parameter(
     summary = await sweep_jd_summaries(db_session, limit=2)
     assert summary.total == 2
     assert summary.enriched == 2
+
+
+# ── 10 — ordering (Bestiary 5.20) ─────────────────────────────────────────────
+@_NEEDS_DB
+async def test_sweep_orders_by_attempts_then_first_seen(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sweep must process never-tried-first (attempt_count ASC), then
+    oldest-first within a tier (first_seen_at ASC) — Bestiary 5.20. The old
+    ``first_seen_at DESC`` ordering starved the backlog tail.
+
+    Setup: one attempt=2 row that is globally the OLDEST, plus three
+    attempt=0 rows (oldest/mid/newest). With ``limit=2`` the sweep must pick
+    the two LOWEST-attempt + oldest rows — the attempt=0 oldest and mid —
+    proving attempt_count is the primary key (the attempt=2 row is skipped
+    despite being globally oldest) and first_seen_at is the tiebreaker.
+    """
+    company = _company()
+    db_session.add(company)
+    await db_session.flush()
+
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+
+    def _at(attempt: int, days: int) -> JobPosting:
+        p = _posting(target_company_id=company.id, attempt_count=attempt)
+        p.first_seen_at = base + timedelta(days=days)
+        return p
+
+    a2_oldest = _at(2, 0)  # lowest first_seen but highest attempt → last
+    a0_old = _at(0, 1)  # ← expected #1 (attempt0, oldest in tier)
+    a0_mid = _at(0, 2)  # ← expected #2
+    a0_new = _at(0, 3)  # attempt0 newest → not reached at limit=2
+    db_session.add_all([a2_oldest, a0_old, a0_mid, a0_new])
+    await db_session.flush()
+    ids = {
+        "a2_oldest": a2_oldest.id,
+        "a0_old": a0_old.id,
+        "a0_mid": a0_mid.id,
+        "a0_new": a0_new.id,
+    }
+    await db_session.commit()
+
+    _patch_generate(monkeypatch, "**Scope**: ordered.")
+
+    summary = await sweep_jd_summaries(db_session, limit=2)
+    assert summary.total == 2
+    assert summary.enriched == 2
+
+    # Read back which rows actually got a summary.
+    rows = (await db_session.execute(select(JobPosting))).scalars().all()
+    enriched_ids = {r.id for r in rows if r.jd_summary_markdown is not None}
+
+    assert enriched_ids == {ids["a0_old"], ids["a0_mid"]}, (
+        "sweep must process the two attempt=0 oldest rows first; "
+        "the attempt=2 row (globally oldest) and the attempt=0 newest must wait"
+    )
 
 
 # ── 10. Migration: four columns exist ────────────────────────────────────────

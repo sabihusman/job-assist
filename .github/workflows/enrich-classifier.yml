@@ -1,0 +1,105 @@
+name: Reclassify postings
+
+# Fires once a day at 07:30 UTC against POST /admin/reclassify/sweep.
+# Runs after the daily ingest (06:00) and company enrichment (07:00), and
+# BEFORE division (08:00) + JD-summary (08:30) enrichment — so the night's
+# new postings get LLM-classified before the summaries are generated.
+#
+# Why this cron exists (Bestiary 5.20): the Gemini classifier previously
+# ran ONLY when triggered manually. New postings were regex-classified at
+# ingest and stayed that way forever — anything the regex bucketed as
+# role_family='other' or seniority='unknown' never got an LLM upgrade. This
+# cron sweeps those regex-failures daily so the inflow stays classified.
+#
+# only_unclassified=true touches only the regex-failure buckets
+# (role_family='other' OR seniority='unknown'); confident regex calls are
+# left as-is. Selection is never-classified-first (classified_at ASC NULLS
+# FIRST, first_seen_at ASC). Closed/stale postings are already excluded by
+# the sweep query (PR A). The sweep rescoring step keeps fit_score in sync.
+#
+# CRITICAL: unlike the other enrich-* crons (which POST with no body), this
+# endpoint requires a JSON request body — POSTing without one returns 422.
+# The body below is mandatory.
+#
+# Secrets required (already configured in repo settings):
+#   API_URL — Railway production base URL. Same secret used by every
+#             other workflow that hits the API.
+#
+# Pause: Actions tab → Reclassify postings → "···" → Disable workflow.
+# Manual trigger: Actions tab → Reclassify postings → Run workflow.
+
+on:
+  schedule:
+    # 07:30 UTC = 01:30 US Central — between company (07:00) and division
+    # (08:00) enrichment, after the night's ingest has landed.
+    - cron: '30 7 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# A second firing while one is still going gets queued, not cancelled. The
+# sweep is idempotent (re-running with the same LLM response yields the same
+# values; changed=0), so overlap is safe — queueing just keeps logs clean.
+concurrency:
+  group: enrich-classifier
+  cancel-in-progress: false
+
+jobs:
+  reclassify:
+    name: Run classifier sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_URL: ${{ secrets.API_URL }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Trigger classifier sweep
+        id: sweep
+        run: |
+          # Body and status captured separately so a non-200 still gets
+          # logged before the step exits 1. The Content-Type header + body
+          # are REQUIRED — the endpoint has no body default and 422s without
+          # them (unlike the other enrich-* crons).
+          status=$(curl -sS --max-time 540 \
+            -o /tmp/reclassify.json -w "%{http_code}" \
+            -X POST "$API_URL/admin/reclassify/sweep" \
+            -H "Content-Type: application/json" \
+            -d '{"limit": 50, "only_unclassified": true}')
+
+          if [ "$status" != "200" ]; then
+            echo "Sweep failed with HTTP $status"
+            cat /tmp/reclassify.json
+            exit 1
+          fi
+
+          echo "Sweep succeeded:"
+          python3 -m json.tool < /tmp/reclassify.json
+
+      - name: Surface counters in the workflow summary
+        if: always() && hashFiles('/tmp/reclassify.json') != ''
+        run: |
+          python3 <<'PYEOF' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          try:
+              d = json.loads(pathlib.Path("/tmp/reclassify.json").read_text())
+          except Exception as exc:
+              print(f"## Classifier sweep\n\nCould not parse response: {exc}")
+              raise SystemExit(0)
+          print("## Classifier sweep")
+          print()
+          print(f"- Processed: **{d.get('processed', 0)}**")
+          print(f"- Changed: **{d.get('changed', 0)}**")
+          print(f"- Skipped (LLM error, original preserved): {d.get('skipped', 0)}")
+          dist = d.get("distribution") or {}
+          if isinstance(dist, dict):
+              for field in ("role_family", "seniority"):
+                  counts = dist.get(field)
+                  if isinstance(counts, dict) and counts:
+                      print()
+                      print(f"### {field} (full-table snapshot, post-sweep)")
+                      for key, val in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+                          print(f"- {key}: {val}")
+          PYEOF

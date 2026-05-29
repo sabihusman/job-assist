@@ -330,7 +330,15 @@ async def sweep_jd_summaries(
                     JobPosting.jd_summary_enrichment_attempt_count
                     < settings.jd_summary_enrich_max_attempts
                 )
-                .order_by(JobPosting.first_seen_at.desc())
+                # Bestiary 5.20: never-tried first (attempt_count ASC), oldest
+                # within each tier (first_seen_at ASC). Drains the backlog
+                # instead of letting newest-first (the old first_seen_at DESC)
+                # perpetually starve the old tail, and avoids re-hammering rows
+                # that already burned attempts on a transient failure.
+                .order_by(
+                    JobPosting.jd_summary_enrichment_attempt_count.asc(),
+                    JobPosting.first_seen_at.asc(),
+                )
                 .limit(limit)
             )
         )
