@@ -32,7 +32,7 @@ export default function CompaniesPage() {
         ) : items.length === 0 ? (
           <EmptyState />
         ) : (
-          <div className="rounded-md border border-border bg-card">
+          <div className="overflow-x-auto rounded-md border border-border bg-card">
             <CompaniesTable companies={items} />
           </div>
         )}
