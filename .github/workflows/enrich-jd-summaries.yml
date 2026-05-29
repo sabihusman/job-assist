@@ -6,10 +6,12 @@ name: Enrich JD summaries
 # prompt sees the parent rows — and well before the next ingest cycle at
 # 06:00 UTC the following day.
 #
-# The sweep itself is capped at 100 rows per call to keep one workflow run
-# inside both Gemini's free-tier RPM budget (15/min) and the 15-minute
-# job timeout. Backfilling all existing postings takes multiple days; the
-# operator can hit the endpoint manually if they want to accelerate it.
+# The sweep is capped at 150 rows per call (?limit=150). Measured throughput
+# is ~2.1s/row with no rate-limiting observed (the configured Gemini key is
+# not bound by the free-tier 15 RPM ceiling), so 150 rows ≈ 5-6 min — well
+# inside the 540s curl cap and the 15-minute job timeout. 150 sits above the
+# ~12-15/day ingest inflow so any residual backlog drains rather than holds
+# (Bestiary 5.20). The sweep orders never-tried-then-oldest first.
 #
 # Secrets required (already configured in repo settings):
 #   API_URL — Railway production base URL. Same secret used by every
@@ -53,7 +55,7 @@ jobs:
           # logged before the step exits 1.
           status=$(curl -sS --max-time 540 \
             -o /tmp/jd_summary.json -w "%{http_code}" \
-            -X POST "$API_URL/enrichment/jd-summaries/sweep")
+            -X POST "$API_URL/enrichment/jd-summaries/sweep?limit=150")
 
           if [ "$status" != "200" ]; then
             echo "Sweep failed with HTTP $status"

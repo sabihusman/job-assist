@@ -594,6 +594,14 @@ Discovered in: PR A backfill verification, when re-ingest of Notion/Plaid/Ramp r
 
 ---
 
+### 5.20 Newest-first enrichment ordering silently starves the backlog
+
+The jd-summary cron ordered first_seen_at DESC with a daily limit of 100. As the corpus grew faster than 100/day could process, new postings perpetually jumped the queue and the old tail was never reached — ~1,730 postings (most of the corpus) sat unsummarized while the cron reported success daily. The fix: order by attempt_count ASC (never-tried first), first_seen_at ASC (oldest within tier), and size the limit above daily inflow so backlog drains rather than holds. A cron that only ever services the front of a growing queue isn't "keeping up" — it's falling behind invisibly. Also added: a classifier cron, which never existed at all — new postings were regex-classified at ingest and never LLM-upgraded unless manually swept.
+
+Discovered in: PR B enrichment-reliability work, after the manual 1,730-row JD-summary drain exposed that the cron ordering would have rebuilt the same backlog.
+
+---
+
 ## 6. Privacy / Safety Bestiary
 
 ### 6.1 xlsx files containing real PII never committed
