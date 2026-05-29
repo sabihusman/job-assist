@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 
 import structlog
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import Text, and_, cast, true
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1382,7 +1382,7 @@ async def reclassify_sweep_endpoint(
     """
     from datetime import UTC, datetime
 
-    from sqlalchemy import cast, func, or_, select, text
+    from sqlalchemy import func, or_, select, text
 
     from job_assist.db.models import JobPosting
     from job_assist.db.models.operator_profile import OperatorProfile
@@ -1850,11 +1850,11 @@ async def list_postings(
 
     TODO: add authentication before exposing publicly.
     """
-    from sqlalchemy import func, or_, select
+    from sqlalchemy import func, select
     from sqlalchemy.orm import aliased
 
     from job_assist.db.models import JobPosting, PostingAction, PostingSource, TargetCompany
-    from job_assist.services.posting_actions import latest_action_lateral
+    from job_assist.services.postings_query import PostingsViewSpec, build_view_parts
 
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="limit must be 1..100")
@@ -1873,165 +1873,35 @@ async def list_postings(
     # since the UI may flip the checkbox before the user picks snoozed.
     _ = PostingAction  # imported for the lateral builder; mypy-only ref
 
-    # Build the WHERE clause shared by COUNT and SELECT.
-    where_clauses: list[Any] = []
-    # Stale-posting filter (Bestiary 5.18): by default hide postings the
-    # mark-stale sweep has closed (removed from their ATS board, not seen
-    # in 7+ days). ``include_closed=true`` opts back in to the full set.
-    # Appended to the shared list so it narrows COUNT and SELECT identically.
-    if not include_closed:
-        where_clauses.append(JobPosting.closed_at.is_(None))
-    # Hard-rule filter (PR C): by default hide postings that failed a hard
-    # rule (salary floor/ceiling, geo, staffing firm, etc.). NULL = passed or
-    # not-yet-evaluated, both of which surface. ``include_filtered=true`` opts
-    # back in. Stacks with the closed_at clause above via AND — a posting must
-    # be BOTH open AND pass-hard-rules to show by default.
-    if not include_filtered:
-        where_clauses.append(JobPosting.hard_rule_failed.is_(None))
-    if tier:
-        where_clauses.append(TargetCompany.tier.in_(tier))
-    if remote_type:
-        where_clauses.append(JobPosting.remote_type.in_(remote_type))
-    if role_family:
-        # Case-insensitive match per spec. role_family is a PG enum type;
-        # lower() needs an explicit CAST to text before it can run against it.
-        # NB: must use sqlalchemy.cast(...) — func.cast(...) renders nothing.
-        lowered = [v.lower() for v in role_family]
-        where_clauses.append(func.lower(cast(JobPosting.role_family, Text)).in_(lowered))
-    if target_company_id is not None:
-        where_clauses.append(JobPosting.target_company_id == target_company_id)
-    if ats:
-        # The ats filter looks at posting_source.ats; reach it through EXISTS
-        # so we don't multiply rows in the COUNT.
-        ats_exists = (
-            select(PostingSource.id)
-            .where(PostingSource.job_posting_id == JobPosting.id)
-            .where(PostingSource.ats.in_(ats))
-            .exists()
-        )
-        where_clauses.append(ats_exists)
-
-    # State LATERAL — folded into both COUNT and SELECT so the state
-    # filter can narrow them both consistently without a 3rd query.
-    recent_pa = latest_action_lateral()
-
-    # Build the state-filter predicate. Each requested bucket becomes one
-    # OR'd clause against the LATERAL columns:
-    #   triage          → action_type IS NULL OR action_type = 'reset'
-    #   <other>         → action_type = <other>
-    #   snoozed + flag  → snoozed AND (snooze_until < now()
-    #                                  OR (snooze_until IS NULL
-    #                                      AND pa.created_at < now() - 7d))
-    #
-    # ── Bestiary note (PR #50) ────────────────────────────────────────────
-    # ``state`` is a FRONTEND vocabulary, not a 1:1 mirror of
-    # ``posting_action.action_type``. Most values match a posting_action row
-    # — but ``state=rejected`` derives from a different table entirely:
-    # ``outcome_event`` (Gmail-classified rejection emails). The next reader
-    # should not assume "state filter = action_type filter." The current
-    # cross-table values are:
-    #   rejected → EXISTS row on outcome_event with rejection_* type
-    # Add new cross-table values to this comment if the surface grows.
-    state_clauses: list[Any] = []
-    if state:
-        from datetime import timedelta
-
-        from sqlalchemy import false as sa_false
-
-        from job_assist.db.models import OutcomeEvent
-
-        for s in state:
-            if s == "triage":
-                state_clauses.append(
-                    or_(
-                        recent_pa.c.pa_action_type.is_(None),
-                        recent_pa.c.pa_action_type == "reset",
-                    )
-                )
-            elif s == "snoozed" and include_snoozed_past_only:
-                seven_days_ago = func.now() - timedelta(days=7)
-                state_clauses.append(
-                    and_(
-                        recent_pa.c.pa_action_type == "snoozed",
-                        or_(
-                            recent_pa.c.pa_snooze_until < func.now(),
-                            and_(
-                                recent_pa.c.pa_snooze_until.is_(None),
-                                recent_pa.c.pa_created_at < seven_days_ago,
-                            ),
-                        ),
-                    )
-                )
-            elif s == "rejected":
-                # PR #50: dual-table state. EXISTS folds into the WHERE
-                # clause without adding a LATERAL or a join — 2-query
-                # budget preserved. Explicit IN list (not LIKE) so new
-                # rejection outcome types require a deliberate vocab
-                # change here rather than auto-matching.
-                rejected_exists = (
-                    select(OutcomeEvent.id)
-                    .where(OutcomeEvent.job_posting_id == JobPosting.id)
-                    .where(OutcomeEvent.outcome_type.in_(_REJECTION_OUTCOME_TYPES))
-                    .exists()
-                )
-                state_clauses.append(rejected_exists)
-            else:
-                state_clauses.append(recent_pa.c.pa_action_type == s)
-        # Empty list after validation is impossible, but stay safe.
-        where_clauses.append(or_(*state_clauses) if state_clauses else sa_false())
-
-    base_join = JobPosting.__table__.outerjoin(
-        TargetCompany.__table__,
-        JobPosting.target_company_id == TargetCompany.id,
+    # feat/triage-export-xlsx: WHERE / state-lateral / cap-CTE / ORDER BY
+    # all come from the shared helper so ``GET /postings`` and
+    # ``GET /postings/export.xlsx`` produce the SAME slice for the same
+    # URL. See ``services/postings_query.py`` for the construction rules.
+    spec = PostingsViewSpec.from_validated(
+        tier=tier,
+        ats=ats,
+        remote_type=remote_type,
+        role_family=role_family,
+        state=state,
+        include_snoozed_past_only=include_snoozed_past_only,
+        target_company_id=target_company_id,
+        sort=sort,
+        per_company_cap=per_company_cap,
+        include_closed=include_closed,
+        include_filtered=include_filtered,
     )
-
-    # PR #58: per-company cap. When ``per_company_cap > 0`` we build a CTE
-    # that ranks postings WITHIN each ``target_company_id`` bucket by
-    # ``fit_score DESC NULLS LAST, first_seen_at DESC, id ASC``, then both
-    # the COUNT and the main SELECT filter on ``id IN (capped_ids)``.
-    #
-    # NULL ``target_company_id`` rows are exempt — each one is its own
-    # bucket via ``COALESCE(target_company_id::text, id::text)``, so
-    # ``row_number = 1`` always and they pass the cap unconditionally.
-    #
-    # Ranking inside each bucket is FIXED to score → first_seen → id ASC
-    # regardless of the operator-selected outer sort. The outer sort
-    # then orders the surviving rows. So ``sort=oldest&per_company_cap=3``
-    # surfaces "oldest of each company's top-3 by score", not "oldest 3
-    # per company."
-    #
-    # 2-query budget preserved: CTE inlines into both COUNT and SELECT
-    # as ``IN (subquery)`` — Postgres materializes the CTE once per
-    # query, no additional wire round-trip.
-    capped_ids = None
-    if per_company_cap > 0:
-        ranked_from = base_join.outerjoin(recent_pa, true()) if state else base_join
-        ranked_select = select(
-            JobPosting.id.label("posting_id"),
-            func.row_number()
-            .over(
-                partition_by=func.coalesce(
-                    cast(JobPosting.target_company_id, Text),
-                    cast(JobPosting.id, Text),
-                ),
-                order_by=[
-                    JobPosting.fit_score.desc().nulls_last(),
-                    JobPosting.first_seen_at.desc(),
-                    JobPosting.id.asc(),
-                ],
-            )
-            .label("rn"),
-        ).select_from(ranked_from)
-        for clause in where_clauses:
-            ranked_select = ranked_select.where(clause)
-        ranked_cte = ranked_select.cte("ranked_postings")
-        capped_ids = select(ranked_cte.c.posting_id).where(ranked_cte.c.rn <= per_company_cap)
+    parts = build_view_parts(spec)
+    base_join = parts.base_join
+    where_clauses = parts.where_clauses
+    recent_pa = parts.recent_pa
+    capped_ids = parts.capped_ids
+    order_clauses = parts.order_clauses
 
     # COUNT query — joins the state LATERAL only when a state filter is
     # active. Skipping the join in the no-filter case keeps the COUNT
     # plan trivial.
     count_select = select(func.count()).select_from(base_join)
-    if state:
+    if parts.needs_state_lateral:
         count_select = count_select.select_from(base_join.outerjoin(recent_pa, true()))
     for clause in where_clauses:
         count_select = count_select.where(clause)
@@ -2052,45 +1922,6 @@ async def list_postings(
         .limit(1)
         .lateral("recent_ps")
     )
-
-    # PR #49: build ORDER BY from ``sort``. ``JobPosting.id ASC`` is the
-    # stable tiebreaker on every key — keeps pagination consistent when
-    # primary-sort values collide (NULLs in salary_max / tier, same-second
-    # first_seen_at, etc.). FastAPI's Literal-typed query param has already
-    # rejected anything outside the SortKey vocabulary with a 422, so the
-    # mapping is exhaustive by construction.
-    order_clauses: list[Any]
-    if sort == "newest":
-        order_clauses = [JobPosting.first_seen_at.desc(), JobPosting.id.asc()]
-    elif sort == "oldest":
-        order_clauses = [JobPosting.first_seen_at.asc(), JobPosting.id.asc()]
-    elif sort == "salary_high_to_low":
-        order_clauses = [
-            JobPosting.salary_max.desc().nulls_last(),
-            JobPosting.id.asc(),
-        ]
-    elif sort == "tier":
-        # Lower tier = better company (T1 > T2 > T3 > T4 per UI_SPEC.md
-        # tier chip ordering and --tier-N color tokens). NULLS LAST sinks
-        # postings without a matched target_company to the bottom.
-        order_clauses = [
-            TargetCompany.tier.asc().nulls_last(),
-            JobPosting.id.asc(),
-        ]
-    elif sort == "recently_posted":
-        order_clauses = [
-            JobPosting.posted_at.desc().nulls_last(),
-            JobPosting.id.asc(),
-        ]
-    else:  # sort == "best_fit" (PR #57)
-        # Index-backed by idx_job_posting_fit_score_desc_nulls_last
-        # (PR #56 migration). NULL scores — postings the score sweep
-        # hasn't visited yet — sink to the bottom, which is the right
-        # behavior: they're equally-uncertain across the corpus.
-        order_clauses = [
-            JobPosting.fit_score.desc().nulls_last(),
-            JobPosting.id.asc(),
-        ]
 
     rows_stmt = (
         select(
@@ -2171,6 +2002,153 @@ async def list_postings(
         )
 
     return {"total": total, "offset": offset, "limit": limit, "items": items}
+
+
+@app.get("/postings/export.xlsx", tags=["public"])
+async def export_postings_xlsx(
+    db: DbSession,
+    tier: Annotated[list[int] | None, Query()] = None,
+    ats: Annotated[list[str] | None, Query()] = None,
+    remote_type: Annotated[list[str] | None, Query()] = None,
+    role_family: Annotated[list[str] | None, Query()] = None,
+    state: Annotated[list[str] | None, Query()] = None,
+    include_snoozed_past_only: bool = False,
+    target_company_id: uuid.UUID | None = None,
+    sort: SortKey = DEFAULT_SORT,
+    per_company_cap: int = 3,
+    include_closed: bool = False,
+    include_filtered: bool = False,
+) -> Response:
+    """Export the current Triage view as a two-sheet xlsx.
+
+    Same filter / sort / cap vocabulary as ``GET /postings``. Output:
+      * Sheet 1 ``Export Context`` — timestamp, corpus size, active
+        filters, matched-before-cap count, score range, scorer weights,
+        operator hard rules, plain-language notes on the score.
+      * Sheet 2 ``Jobs`` — top ``EXPORT_ROW_CAP`` (40) rows by the
+        operator-selected sort, with rank, company, role, fit_score and
+        its five sub-scores, salary, location, remote_type, tier,
+        ats_source, apply_url, first_seen, jd_summary_markdown.
+
+    Cap semantics: the per-company cap is honored exactly as the visible
+    view does — exported 40 == visible 40 for the same URL. The
+    "matched-before-cap" count on Sheet 1 reports how many would have
+    surfaced without the cap so the reviewer can sense the funnel.
+    """
+    from sqlalchemy import func, select
+    from sqlalchemy.orm import aliased
+
+    from job_assist.db.models import JobPosting, OperatorProfile, PostingSource, TargetCompany
+    from job_assist.services.postings_export import EXPORT_ROW_CAP, build_workbook_bytes
+    from job_assist.services.postings_query import PostingsViewSpec, build_view_parts
+
+    # Reuse the same validators the list endpoint uses; they raise 422
+    # on bad input. per_company_cap is validated inline here (limit/
+    # offset are not user-facing on this endpoint).
+    if per_company_cap < 0:
+        raise HTTPException(
+            status_code=422,
+            detail="per_company_cap must be >= 0 (0 disables the cap entirely)",
+        )
+    ats = _validate_ats_filter(ats)
+    remote_type = _validate_remote_type_filter(remote_type)
+    state = _validate_state_filter(state)
+
+    spec = PostingsViewSpec.from_validated(
+        tier=tier,
+        ats=ats,
+        remote_type=remote_type,
+        role_family=role_family,
+        state=state,
+        include_snoozed_past_only=include_snoozed_past_only,
+        target_company_id=target_company_id,
+        sort=sort,
+        per_company_cap=per_company_cap,
+        include_closed=include_closed,
+        include_filtered=include_filtered,
+    )
+    parts = build_view_parts(spec)
+    base_join = parts.base_join
+    where_clauses = parts.where_clauses
+    recent_pa = parts.recent_pa
+    capped_ids = parts.capped_ids
+    order_clauses = parts.order_clauses
+
+    # Corpus size: total rows in job_posting (no filters). Cheap COUNT,
+    # gives the reviewer "we exported N of M" framing on Sheet 1.
+    corpus_size: int = (
+        await db.execute(select(func.count()).select_from(JobPosting))
+    ).scalar_one() or 0
+
+    # Matched-before-cap: filters applied, cap NOT applied. Reveals the
+    # funnel the cap creates ("filters matched 142, cap surfaces 40").
+    pre_cap_select = select(func.count()).select_from(base_join)
+    if parts.needs_state_lateral:
+        pre_cap_select = pre_cap_select.select_from(base_join.outerjoin(recent_pa, true()))
+    for clause in where_clauses:
+        pre_cap_select = pre_cap_select.where(clause)
+    matched_before_cap: int = (await db.execute(pre_cap_select)).scalar_one() or 0
+
+    # Operator profile (singleton id=1) — needed for score_breakdown and
+    # the hard-rule context dump on Sheet 1.
+    profile = (
+        await db.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
+    ).scalar_one_or_none()
+    if profile is None:
+        raise HTTPException(
+            status_code=500,
+            detail="operator_profile id=1 missing — migration not seeded",
+        )
+
+    # Top-N rows in the visible sort. apply_url comes from the most-
+    # recent posting_source lateral (same pattern list_postings uses for
+    # ps_ats / ps_url).
+    ps_alias = aliased(PostingSource)
+    recent_ps = (
+        select(
+            ps_alias.ats.label("ps_ats"),
+            ps_alias.apply_url.label("ps_apply_url"),
+        )
+        .where(ps_alias.job_posting_id == JobPosting.id)
+        .order_by(ps_alias.fetched_at.desc())
+        .limit(1)
+        .lateral("recent_ps")
+    )
+    rows_stmt = (
+        select(
+            JobPosting,
+            TargetCompany,
+            recent_ps.c.ps_ats,
+            recent_ps.c.ps_apply_url,
+        )
+        .select_from(base_join)
+        .outerjoin(recent_ps, true())
+        .order_by(*order_clauses)
+        .limit(EXPORT_ROW_CAP)
+    )
+    for clause in where_clauses:
+        rows_stmt = rows_stmt.where(clause)
+    if capped_ids is not None:
+        rows_stmt = rows_stmt.where(JobPosting.id.in_(capped_ids))
+
+    rows = [tuple(r) for r in (await db.execute(rows_stmt)).all()]
+
+    xlsx_bytes = build_workbook_bytes(
+        spec=spec,
+        profile=profile,
+        rows=rows,
+        corpus_size=corpus_size,
+        matched_before_cap=matched_before_cap,
+    )
+    filename = f"triage-export-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}.xlsx"
+    return Response(
+        content=xlsx_bytes,
+        media_type=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @app.get("/postings/{posting_id}", tags=["public"])

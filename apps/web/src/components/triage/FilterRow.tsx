@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback } from 'react';
 
+import { ExportButton } from '@/components/triage/ExportButton';
 import { SortDropdown } from '@/components/triage/SortDropdown';
 import { FAMILY_CHIPS, FAMILY_LABELS } from '@/lib/triage/family-labels';
 import { encodeFilters, parseFilters, toggleInArray } from '@/lib/triage/filters';
@@ -117,6 +118,9 @@ export function FilterRow({
           value={filters.sort}
           onChange={(next: SortKey) => pushFilters({ ...filters, sort: next })}
         />
+        {/* feat/triage-export-xlsx: anchor download — see ExportButton.tsx
+            for why this is a plain `<a href>` instead of fetch + blob. */}
+        <ExportButton />
         <div className="text-sm text-muted-foreground">
           showing {showing} of {total}
         </div>
