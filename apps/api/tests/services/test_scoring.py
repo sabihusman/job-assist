@@ -326,8 +326,13 @@ def test_score_posting_total_mismatch_is_low() -> None:
     assert score == 26
 
 
-def test_score_posting_typical_mid_range() -> None:
-    """Adjacent role family, neutral salary (NULL), tier 2, remote match."""
+def test_score_posting_typical_mid_range_capped_by_gate() -> None:
+    """Adjacent role family, neutral salary (NULL), tier 2, remote match.
+
+    Bestiary 5.21: the raw weighted composite here is 81, but
+    program_management is NOT a PREFERRED family, so the hard gate caps it
+    at 40 — a wrong-role posting must not outrank genuine PM roles.
+    """
     posting = _make_posting(
         role_family=RoleFamily.program_management.value,
         seniority_level=SeniorityLevel.senior_pm.value,
@@ -338,9 +343,80 @@ def test_score_posting_typical_mid_range() -> None:
     )
     profile = _make_profile()
     score = score_posting(posting, profile, tier=2)
-    # role 60 (25%) + sen 100 (25%) + sal 60 (15%) + tier 80 (15%) + geo 100 (20%)
-    # = 15 + 25 + 9 + 12 + 20 = 81
-    assert score == 81
+    # Raw: role 60 (25%) + sen 100 (25%) + sal 60 (15%) + tier 80 (15%)
+    # + geo 100 (20%) = 81 → gate caps to 40.
+    assert score == 40
+
+
+# ── role_family hard gate (Bestiary 5.21) ────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "family",
+    [
+        RoleFamily.program_management.value,
+        RoleFamily.product_marketing.value,
+        RoleFamily.other.value,
+    ],
+)
+def test_score_posting_gate_caps_non_preferred_at_40(family: str) -> None:
+    """A non-PREFERRED role at Tier-1, in-geo, in-band, with the operator's
+    seniority — every weighted factor maxed — must still cap at 40. Proves
+    the gate fires on a HIGH raw composite, not just an already-low one."""
+    posting = _make_posting(
+        role_family=family,
+        seniority_level=SeniorityLevel.senior_pm.value,
+        salary_min=150_000,
+        salary_max=200_000,
+        salary_currency="USD",
+        salary_period="annual",
+        locations_normalized=[{"remote_type": "remote"}],
+    )
+    profile = _make_profile()
+    score = score_posting(posting, profile, tier=1)
+    assert score == 40, f"{family} should be gated to 40, got {score}"
+
+
+@pytest.mark.parametrize(
+    "family",
+    [RoleFamily.product_management.value, RoleFamily.product_owner.value],
+)
+def test_score_posting_gate_leaves_preferred_uncapped(family: str) -> None:
+    """PREFERRED families are NOT gated — a strong match scores well above 40."""
+    posting = _make_posting(
+        role_family=family,
+        seniority_level=SeniorityLevel.senior_pm.value,
+        salary_min=150_000,
+        salary_max=200_000,
+        salary_currency="USD",
+        salary_period="annual",
+        locations_normalized=[{"remote_type": "remote"}],
+    )
+    profile = _make_profile()
+    score = score_posting(posting, profile, tier=1)
+    assert score == 100, f"{family} full match should be 100, got {score}"
+
+
+def test_score_posting_gate_orders_wrong_role_below_weak_pm() -> None:
+    """The whole point of the gate: a Tier-1 in-everything wrong-role posting
+    must rank BELOW even a weak genuine-PM posting."""
+    wrong_role_strong = _make_posting(role_family=RoleFamily.program_management.value)
+    weak_pm = _make_posting(
+        role_family=RoleFamily.product_management.value,
+        seniority_level=SeniorityLevel.intern.value,  # out-of-band seniority
+        salary_min=None,
+        salary_max=None,
+        salary_currency=None,
+        salary_period="unknown",
+        locations_normalized=[{"city": "Helsinki", "remote_type": "onsite"}],
+    )
+    profile = _make_profile()
+    wrong_score = score_posting(wrong_role_strong, profile, tier=1)
+    pm_score = score_posting(weak_pm, profile, tier=4)
+    assert wrong_score == 40
+    assert pm_score > wrong_score, (
+        f"weak PM ({pm_score}) must outrank a gated wrong-role posting ({wrong_score})"
+    )
 
 
 def test_score_posting_is_deterministic() -> None:

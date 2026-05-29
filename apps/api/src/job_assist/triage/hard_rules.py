@@ -112,6 +112,15 @@ def _matches_staffing_firm(name: str, blocklist: tuple[str, ...]) -> bool:
     return any(firm.lower() in name_lower for firm in blocklist)
 
 
+def _period_label(period: Any) -> str:
+    """Render salary_period for the detail string, tolerating BOTH the
+    SalaryPeriod enum (DB-loaded path) and a raw str (ingest-time path, where
+    the in-memory posting carries ``norm.salary_period`` as a plain string
+    before any flush/coercion). ``.value`` only exists on the enum — calling
+    it on a str raises AttributeError and silently loses the failed rule."""
+    return str(getattr(period, "value", period))
+
+
 def _under_salary_floor(posting: JobPosting, floor_usd: int) -> bool:
     """True when the posting's annual USD max is known and below the floor.
 
@@ -218,7 +227,7 @@ def apply_hard_rules(
             failed_rule="salary_floor",
             detail=(
                 f"salary_max=${posting.salary_max:,} ({posting.salary_currency or 'USD'}, "
-                f"{posting.salary_period.value}) < floor=${cfg.salary_floor_usd:,}"
+                f"{_period_label(posting.salary_period)}) < floor=${cfg.salary_floor_usd:,}"
             ),
         )
 
@@ -230,7 +239,7 @@ def apply_hard_rules(
             failed_rule="salary_ceiling",
             detail=(
                 f"salary_min=${posting.salary_min:,} ({posting.salary_currency or 'USD'}, "
-                f"{posting.salary_period.value}) > ceiling=${cfg.salary_ceiling_usd:,}"
+                f"{_period_label(posting.salary_period)}) > ceiling=${cfg.salary_ceiling_usd:,}"
             ),
         )
 

@@ -356,7 +356,19 @@ def score_posting(
     """
     parts = score_breakdown(posting, profile, tier=tier)
     weighted = sum(parts[k] * _WEIGHTS[k] for k in _WEIGHTS) / 100.0
-    return max(0, min(100, round(weighted)))
+    score = max(0, min(100, round(weighted)))
+
+    # Hard gate (Bestiary 5.21): role_family is a DISQUALIFYING attribute, not
+    # a weighted factor. A wrong-role posting (program_management, product_
+    # marketing, other) at a Tier-1 company in-geo would otherwise ride the
+    # other 75% of weight to a high composite and dominate Best Fit. Cap it at
+    # 40 so every genuine PM role outranks it. role_family is NOT NULL on the
+    # model (defaults to ``other``), so this is a clean membership test — no
+    # NULL case. ``other`` rows mis-bucketed by the ingest regex self-heal:
+    # the classifier cron upgrades them to a PM family and re-scores.
+    if str(posting.role_family) not in PREFERRED_FAMILIES:
+        score = min(score, 40)
+    return score
 
 
 def bucket_for_score(score: int | None) -> str:

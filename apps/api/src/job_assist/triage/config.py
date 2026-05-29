@@ -9,6 +9,10 @@ this dataclass and the defaults below become the seed values for that row.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from job_assist.db.models.operator_profile import OperatorProfile
 
 
 @dataclass(frozen=True)
@@ -78,4 +82,24 @@ class HardRuleConfig:
             "Kforce",
             "Adecco",
         )
+    )
+
+
+def hard_rule_config_from_profile(profile: OperatorProfile) -> HardRuleConfig:
+    """Build a :class:`HardRuleConfig` from the singleton OperatorProfile row.
+
+    The two models hold the same operator-tunable knobs; this bridges the
+    persisted JSONB ``list[str]`` columns to the frozen-dataclass ``tuple``
+    fields ``apply_hard_rules`` expects. ``seniority_levels_included`` is
+    NULL-able on the profile (NULL = filter disabled) and maps to an empty
+    tuple. Fields map 1:1; no defaults are invented here — an unseeded knob
+    on the profile already carries its own DB default.
+    """
+    return HardRuleConfig(
+        salary_floor_usd=profile.salary_floor_usd,
+        salary_ceiling_usd=profile.salary_ceiling_usd,
+        seniority_levels_included=tuple(profile.seniority_levels_included or ()),
+        geo_whitelist=tuple(profile.geo_whitelist or ()),
+        applicant_cap=profile.applicant_cap,
+        staffing_firm_blocklist=tuple(profile.staffing_firm_blocklist or ()),
     )

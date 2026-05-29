@@ -123,6 +123,17 @@ class JobPosting(Base):
     fit_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     scored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     scorer_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ── Hard-rule eligibility (PR C) ─────────────────────────────────────
+    # ``hard_rule_failed`` stores the RuleName that failed (e.g. "salary_floor")
+    # or NULL when the posting passed every rule. Written at ingest and by
+    # POST /admin/postings/reeval-hard-rules. ``GET /postings`` filters
+    # ``hard_rule_failed IS NULL`` by default (index-backed, partial). NULL
+    # also means "not yet evaluated" — pre-backfill rows read as passing,
+    # which is the safe default (surface rather than hide).
+    hard_rule_failed: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hard_rules_evaluated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     __table_args__ = (
         UniqueConstraint("content_hash", name="idx_job_posting_content_hash"),

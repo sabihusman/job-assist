@@ -209,6 +209,82 @@ async def test_salary_self_heal_never_overwrites_existing(db_session: Any) -> No
     assert row.salary_max == 240000
 
 
+# ── Hard-rule eligibility wiring (PR C) ───────────────────────────────────────
+
+
+async def _set_operator_profile(db_session: Any, **fields: Any) -> None:
+    """Upsert the singleton operator_profile (id=1) with the given rule fields.
+
+    The test DB is already seeded with the singleton row (seed migration), so
+    INSERTing id=1 hits the PK. Fetch-and-mutate when it exists; insert only
+    as a local-edge fallback. Every rule-relevant field is overwritten so the
+    test is deterministic regardless of the seeded defaults.
+    """
+    from job_assist.db.models.operator_profile import OperatorProfile
+
+    existing = (
+        await db_session.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
+    ).scalar_one_or_none()
+    if existing is None:
+        db_session.add(OperatorProfile(id=1, looking_for_text="PM", role_keywords=[], **fields))
+    else:
+        for key, value in fields.items():
+            setattr(existing, key, value)
+    await db_session.commit()
+
+
+@_NEEDS_DB
+async def test_ingest_persists_hard_rule_failed(db_session: Any) -> None:
+    """Ingest evaluates apply_hard_rules and stores the failed RuleName.
+
+    Seeds the operator_profile with a staffing-firm blocklist matching the
+    derived canonical company name ("Stripe", from the 'stripe' handle with
+    no target_company row) so every inserted posting fails the staffing_firm
+    rule deterministically — independent of salary text-mining."""
+    await _set_operator_profile(
+        db_session,
+        geo_whitelist=["Remote"],
+        salary_floor_usd=1,
+        salary_ceiling_usd=None,
+        applicant_cap=500,
+        seniority_levels_included=None,
+        staffing_firm_blocklist=["Stripe"],
+    )
+
+    service = IngestionService()
+    run = await service.ingest_source(_make_adapter(), "stripe", db_session)
+    assert run.status == "success"
+
+    rows = (await db_session.execute(select(JobPosting))).scalars().all()
+    assert rows, "fixture should insert at least one posting"
+    for row in rows:
+        assert row.hard_rule_failed == "staffing_firm"
+        assert row.hard_rules_evaluated_at is not None
+
+
+@_NEEDS_DB
+async def test_ingest_passes_hard_rules_when_nothing_fails(db_session: Any) -> None:
+    """A seeded profile with permissive rules leaves hard_rule_failed NULL,
+    but hard_rules_evaluated_at is still stamped (the eval ran)."""
+    await _set_operator_profile(
+        db_session,
+        geo_whitelist=["Remote", "San Francisco", "New York", "Remote - US"],
+        salary_floor_usd=1,
+        salary_ceiling_usd=None,
+        applicant_cap=10_000,
+        seniority_levels_included=None,
+        staffing_firm_blocklist=[],
+    )
+
+    service = IngestionService()
+    await service.ingest_source(
+        _make_adapter([_gh_job_with_content("<p>PM role.</p>")]), "stripe", db_session
+    )
+    row = (await db_session.execute(select(JobPosting))).scalars().one()
+    assert row.hard_rule_failed is None
+    assert row.hard_rules_evaluated_at is not None
+
+
 # ── Stale-posting detection (Bestiary 5.18) ───────────────────────────────────
 
 import uuid  # noqa: E402

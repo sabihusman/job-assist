@@ -117,6 +117,7 @@ def _posting(
     team: str | None = None,
     salary_max: int | None = None,
     closed: bool = False,
+    hard_rule_failed: str | None = None,
     first_seen_at: datetime | None = None,
 ) -> JobPosting:
     now = first_seen_at or datetime.now(tz=UTC)
@@ -138,6 +139,7 @@ def _posting(
         department=department,
         team=team,
         closed_at=now if closed else None,
+        hard_rule_failed=hard_rule_failed,
     )
 
 
@@ -584,6 +586,135 @@ async def test_postings_excludes_closed_by_default(db_session: Any) -> None:
     all_body = all_resp.json()
     assert all_body["total"] == 5, "include_closed=true must count closed too"
     assert len(all_body["items"]) == 5
+
+
+@_NEEDS_DB
+async def test_postings_excludes_hard_rule_failed_by_default(db_session: Any) -> None:
+    """PR C: postings that failed a hard rule are hidden by default;
+    ``include_filtered=true`` brings them back; COUNT respects the filter.
+    NULL ``hard_rule_failed`` (passed or not-yet-evaluated) always surfaces."""
+    c = _company(name="HardRuleFilterCo")
+    db_session.add(c)
+    await db_session.flush()
+    # 2 passing (NULL) + 3 filtered (failed a rule), same company.
+    for failed in (None, None, "salary_floor", "geo_whitelist", "salary_ceiling"):
+        jp = _posting(target_company_id=c.id, hard_rule_failed=failed)
+        db_session.add(jp)
+        await db_session.flush()
+        db_session.add(_posting_source(job_posting_id=jp.id))
+    await db_session.commit()
+
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            default_resp = await ac.get("/postings?per_company_cap=0")
+            all_resp = await ac.get("/postings?per_company_cap=0&include_filtered=true")
+    finally:
+        await _drop_override()
+
+    default_body = default_resp.json()
+    assert default_body["total"] == 2, "COUNT must exclude hard-rule-failed by default"
+    assert len(default_body["items"]) == 2
+
+    all_body = all_resp.json()
+    assert all_body["total"] == 5, "include_filtered=true must count filtered too"
+    assert len(all_body["items"]) == 5
+
+
+@_NEEDS_DB
+async def test_postings_closed_and_hard_rule_filters_compose(db_session: Any) -> None:
+    """The closed_at and hard_rule_failed filters stack via AND — a posting
+    must be BOTH open AND pass-hard-rules to show by default."""
+    c = _company(name="ComposeCo")
+    db_session.add(c)
+    await db_session.flush()
+    # Only the first is open AND passing → the only default-visible row.
+    specs = [
+        (False, None),  # open + passing  ✓ visible
+        (True, None),  # closed + passing  ✗
+        (False, "salary_floor"),  # open + filtered  ✗
+        (True, "geo_whitelist"),  # closed + filtered ✗
+    ]
+    for closed, failed in specs:
+        jp = _posting(target_company_id=c.id, closed=closed, hard_rule_failed=failed)
+        db_session.add(jp)
+        await db_session.flush()
+        db_session.add(_posting_source(job_posting_id=jp.id))
+    await db_session.commit()
+
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp = await ac.get("/postings?per_company_cap=0")
+    finally:
+        await _drop_override()
+
+    body = resp.json()
+    assert body["total"] == 1, "only the open+passing posting shows by default"
+    assert len(body["items"]) == 1
+
+
+@_NEEDS_DB
+async def test_reeval_hard_rules_endpoint(db_session: Any) -> None:
+    """POST /admin/postings/reeval-hard-rules re-evaluates open postings and
+    rewrites hard_rule_failed. Seeds the operator_profile (singleton) so the
+    mapper has a row to read."""
+    from sqlalchemy import select
+
+    from job_assist.db.models import OperatorProfile
+
+    # Upsert the singleton — the test DB is already seeded with id=1, so a
+    # plain insert would violate the PK. Overwrite the rule fields the test
+    # depends on so it's deterministic regardless of seeded defaults.
+    profile = (
+        await db_session.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
+    ).scalar_one_or_none()
+    fields = {
+        "geo_whitelist": ["Remote"],
+        "salary_floor_usd": 150_000,
+        "salary_ceiling_usd": None,
+        "applicant_cap": 500,
+        "seniority_levels_included": None,
+        "staffing_firm_blocklist": [],
+    }
+    if profile is None:
+        db_session.add(OperatorProfile(id=1, looking_for_text="PM", role_keywords=[], **fields))
+    else:
+        for key, value in fields.items():
+            setattr(profile, key, value)
+    c = _company(name="ReevalCo")
+    db_session.add(c)
+    await db_session.flush()
+    # below-floor (disclosed) → should fail salary_floor;
+    # null-salary → passes; closed → not evaluated (stays as-is).
+    below = _posting(target_company_id=c.id, salary_max=90_000)
+    below.salary_currency = "USD"
+    below.salary_period = "annual"
+    nullsal = _posting(target_company_id=c.id, salary_max=None)
+    closed = _posting(target_company_id=c.id, salary_max=80_000, closed=True)
+    closed.salary_currency = "USD"
+    closed.salary_period = "annual"
+    db_session.add_all([below, nullsal, closed])
+    await db_session.commit()
+
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp = await ac.post("/admin/postings/reeval-hard-rules")
+    finally:
+        await _drop_override()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["evaluated"] == 2, "only the 2 OPEN postings are evaluated"
+    assert body["passed"] == 1
+    assert body["failed"] == 1
+    assert body["by_rule"].get("salary_floor") == 1
+
+    await db_session.refresh(below)
+    await db_session.refresh(nullsal)
+    assert below.hard_rule_failed == "salary_floor"
+    assert nullsal.hard_rule_failed is None
 
 
 # ── /postings/{id} ───────────────────────────────────────────────────────────
