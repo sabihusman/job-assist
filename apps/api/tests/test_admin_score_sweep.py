@@ -230,16 +230,22 @@ async def test_sweep_remaining_nonzero_for_full_rescore(
     await db_session.commit()
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # A limited full-rescore batch covers only `limit` rows but reports
+        # remaining = total_open - processed (always > 0 while corpus > limit),
+        # so `processed < limit` / `remaining == 0` never terminates here.
         r1 = await _post_sweep(client, limit=2, only_unscored=False)
         assert r1.status_code == 200
         d1 = r1.json()
-        # 5 open, 2 processed → remaining = 3 (and would stay > 0 forever).
         assert d1["processed"] == 2
-        assert d1["remaining"] == 3
+        assert d1["remaining"] == 3  # 5 open - 2 processed; stays > 0 forever
 
-        # Convergence signal: re-scoring the same rows yields no change.
-        r2 = await _post_sweep(client, limit=2, only_unscored=False)
-        assert r2.json()["changed"] == 0
+        # Convergence signal is `changed == 0`, NOT a row count. Score the
+        # whole corpus first (so no NULL→score transitions remain), then a
+        # repeat full pass changes nothing — that's the real stop signal.
+        await _post_sweep(client, limit=10, only_unscored=False)  # all 5 now scored
+        r3 = await _post_sweep(client, limit=10, only_unscored=False)
+        assert r3.json()["processed"] == 5
+        assert r3.json()["changed"] == 0
 
 
 @_NEEDS_DB
