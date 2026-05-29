@@ -50,7 +50,7 @@ function PassedPageInner() {
     (page1.error as Error)?.message ?? (extra.error as Error)?.message ?? 'Unknown error';
 
   return (
-    <div className="flex min-w-0 flex-col gap-4 px-6 py-4">
+    <div className="flex min-w-0 flex-col gap-4 px-4 py-4 md:px-6">
       <p className="text-[13px] text-muted-foreground">
         {page1.data ? `${items.length} of ${total} passed` : '…'}
       </p>

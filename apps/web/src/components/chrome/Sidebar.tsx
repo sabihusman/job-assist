@@ -91,7 +91,9 @@ function SidebarContents({
         {!collapsed && (
           <div className="flex flex-col leading-tight">
             <span className="text-sm font-bold uppercase tracking-wide">Job Assist</span>
-            <span className="font-mono text-xs text-muted-foreground">v0.3 · local</span>
+            <span className="font-mono text-xs text-muted-foreground">
+              v{process.env.NEXT_PUBLIC_APP_VERSION ?? '0.4.0'} · local
+            </span>
           </div>
         )}
       </div>
