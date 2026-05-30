@@ -2571,6 +2571,104 @@ async def cron_status() -> dict[str, str]:
     return {"status": "ok"}
 
 
+# ── Outcome event diagnostics (feat/admin-outcomes-stats) ────────────────────
+
+
+@app.get("/admin/outcomes/stats", tags=["admin"])
+async def outcomes_stats(
+    db: DbSession,
+    target_company_id: uuid.UUID | None = None,
+) -> dict[str, Any]:
+    """Aggregate stats over ``outcome_event``. All counts computed in SQL.
+
+    Two modes:
+
+      * No ``target_company_id`` — returns the corpus-wide
+        ``OutcomesOverallStats``: total rows, the company-link fill rate
+        broken down by ``outcome_type``, and the corpus-wide
+        ``job_posting_id`` fill (deferred-by-design per
+        ``gmail/backfill.py:9-14``).
+      * With ``target_company_id`` — returns ``OutcomesForCompanyStats``:
+        per-``outcome_type`` count for that one company.
+
+    Read-only. No writes, no LLM calls. Aggregates only; never returns
+    the underlying ``outcome_event`` rows. Lives behind ``/admin/`` like
+    the rest of the diagnostic surface (no auth — same single-user dev
+    trust model documented on the surrounding endpoints).
+    """
+    from sqlalchemy import case, func, select
+
+    from job_assist.db.models import OutcomeEvent
+    from job_assist.schemas.outcomes_stats import (
+        CompanyOutcomeBreakdown,
+        OutcomesForCompanyStats,
+        OutcomesOverallStats,
+        OutcomeTypeFill,
+    )
+
+    if target_company_id is not None:
+        # Per-company breakdown by outcome_type. Filtered server-side;
+        # only the (outcome_type, count) pairs cross the wire.
+        rows = (
+            await db.execute(
+                select(
+                    OutcomeEvent.outcome_type,
+                    func.count().label("n"),
+                )
+                .where(OutcomeEvent.target_company_id == target_company_id)
+                .group_by(OutcomeEvent.outcome_type)
+            )
+        ).all()
+        breakdown = [CompanyOutcomeBreakdown(outcome_type=ot, count=int(n)) for ot, n in rows]
+        return OutcomesForCompanyStats(
+            target_company_id=target_company_id,
+            total_rows=sum(b.count for b in breakdown),
+            by_outcome_type=sorted(breakdown, key=lambda b: -b.count),
+        ).model_dump(mode="json")
+
+    # Corpus-wide. Two queries:
+    #   (1) GROUP BY outcome_type → conditional count of linked / unlinked.
+    #       Single round-trip; CASE WHEN ... THEN 1 END keeps it in SQL.
+    #   (2) Two scalar COUNTs for the overall totals + posting-link
+    #       diagnostic. Wrapped in one SELECT so it's also one round-trip.
+    fill_rows = (
+        await db.execute(
+            select(
+                OutcomeEvent.outcome_type,
+                func.count(case((OutcomeEvent.target_company_id.is_not(None), 1))).label("linked"),
+                func.count(case((OutcomeEvent.target_company_id.is_(None), 1))).label("unlinked"),
+            ).group_by(OutcomeEvent.outcome_type)
+        )
+    ).all()
+    by_type = [
+        OutcomeTypeFill(
+            outcome_type=ot,
+            linked_to_company=int(linked),
+            unlinked=int(unlinked),
+        )
+        for ot, linked, unlinked in fill_rows
+    ]
+    totals = (
+        await db.execute(
+            select(
+                func.count().label("total"),
+                func.count(case((OutcomeEvent.target_company_id.is_not(None), 1))).label(
+                    "with_company"
+                ),
+                func.count(case((OutcomeEvent.job_posting_id.is_not(None), 1))).label(
+                    "with_posting"
+                ),
+            )
+        )
+    ).one()
+    return OutcomesOverallStats(
+        total_rows=int(totals.total),
+        total_linked_to_company=int(totals.with_company),
+        total_linked_to_posting=int(totals.with_posting),
+        by_outcome_type=sorted(by_type, key=lambda b: -b.total),
+    ).model_dump(mode="json")
+
+
 # ── Company enrichment (PR #27) ───────────────────────────────────────────────
 
 

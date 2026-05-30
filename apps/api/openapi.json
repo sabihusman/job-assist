@@ -1938,6 +1938,59 @@
         }
       }
     },
+    "/admin/outcomes/stats": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Outcomes Stats",
+        "description": "Aggregate stats over ``outcome_event``. All counts computed in SQL.\n\nTwo modes:\n\n  * No ``target_company_id`` \u2014 returns the corpus-wide\n    ``OutcomesOverallStats``: total rows, the company-link fill rate\n    broken down by ``outcome_type``, and the corpus-wide\n    ``job_posting_id`` fill (deferred-by-design per\n    ``gmail/backfill.py:9-14``).\n  * With ``target_company_id`` \u2014 returns ``OutcomesForCompanyStats``:\n    per-``outcome_type`` count for that one company.\n\nRead-only. No writes, no LLM calls. Aggregates only; never returns\nthe underlying ``outcome_event`` rows. Lives behind ``/admin/`` like\nthe rest of the diagnostic surface (no auth \u2014 same single-user dev\ntrust model documented on the surrounding endpoints).",
+        "operationId": "outcomes_stats_admin_outcomes_stats_get",
+        "parameters": [
+          {
+            "name": "target_company_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Company Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Outcomes Stats Admin Outcomes Stats Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/enrichment/companies/sweep": {
       "post": {
         "tags": [
