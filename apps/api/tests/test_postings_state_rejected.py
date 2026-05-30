@@ -318,31 +318,43 @@ async def test_passed_surfaces_reason_inline(db_session: Any) -> None:
 @_NEEDS_DB
 @pytest.mark.asyncio
 async def test_rejected_matches_any_rejection_outcome_type(db_session: Any) -> None:
-    """Postings with ANY rejection_* outcome_event surface in /rejected.
+    """Postings at a company with ANY rejection_* outcome surface in /rejected.
 
     Three rejection outcome types are valid per the explicit IN list:
     rejection_pre_screen, rejection_post_screen, rejection_post_interview.
+
+    feat/surface-linked-outcomes: the predicate joins via
+    ``OutcomeEvent.target_company_id == JobPosting.target_company_id``
+    (re-pointed from the always-NULL ``job_posting_id``). Test uses a
+    distinct company per outcome type so each can surface or be excluded
+    independently.
     """
-    company = _company("Co")
-    db_session.add(company)
+    co_pre = _company("Co-Pre")
+    co_post = _company("Co-Post")
+    co_interview = _company("Co-Interview")
+    co_none = _company("Co-NonRejection")
+    db_session.add_all([co_pre, co_post, co_interview, co_none])
     await db_session.flush()
 
-    jp_pre = _posting(target_company_id=company.id)
-    jp_post = _posting(target_company_id=company.id)
-    jp_interview = _posting(target_company_id=company.id)
-    jp_none = _posting(target_company_id=company.id)
+    jp_pre = _posting(target_company_id=co_pre.id)
+    jp_post = _posting(target_company_id=co_post.id)
+    jp_interview = _posting(target_company_id=co_interview.id)
+    jp_none = _posting(target_company_id=co_none.id)
     db_session.add_all([jp_pre, jp_post, jp_interview, jp_none])
     await db_session.flush()
     for jp in (jp_pre, jp_post, jp_interview, jp_none):
         db_session.add(_posting_source(job_posting_id=jp.id))
 
-    db_session.add(_outcome(job_posting_id=jp_pre.id, outcome_type="rejection_pre_screen"))
-    db_session.add(_outcome(job_posting_id=jp_post.id, outcome_type="rejection_post_screen"))
-    db_session.add(
-        _outcome(job_posting_id=jp_interview.id, outcome_type="rejection_post_interview")
-    )
-    # Non-rejection outcome on the "none" posting — must NOT match.
-    db_session.add(_outcome(job_posting_id=jp_none.id, outcome_type="recruiter_screen_invite"))
+    ev_pre = _outcome(job_posting_id=None, outcome_type="rejection_pre_screen")
+    ev_pre.target_company_id = co_pre.id
+    ev_post = _outcome(job_posting_id=None, outcome_type="rejection_post_screen")
+    ev_post.target_company_id = co_post.id
+    ev_interview = _outcome(job_posting_id=None, outcome_type="rejection_post_interview")
+    ev_interview.target_company_id = co_interview.id
+    # Non-rejection outcome at co_none — its posting must NOT match.
+    ev_none = _outcome(job_posting_id=None, outcome_type="recruiter_screen_invite")
+    ev_none.target_company_id = co_none.id
+    db_session.add_all([ev_pre, ev_post, ev_interview, ev_none])
     await db_session.commit()
 
     ac = await _client(db_session)
@@ -388,43 +400,27 @@ async def test_rejected_ignores_non_rejection_outcomes(db_session: Any) -> None:
     assert resp.json()["items"] == []
 
 
-@_NEEDS_DB
-@pytest.mark.asyncio
-async def test_rejected_ignores_company_scoped_events(db_session: Any) -> None:
-    """An outcome_event with NULL job_posting_id (target_company only)
-    must NOT cause any of that company's postings to appear in /rejected.
-    Rejection is per-posting, not per-company."""
-    company = _company("Co")
-    db_session.add(company)
-    await db_session.flush()
-
-    jp = _posting(target_company_id=company.id)
-    db_session.add(jp)
-    await db_session.flush()
-    db_session.add(_posting_source(job_posting_id=jp.id))
-    # Rejection event with job_posting_id=None (only target_company_id
-    # would be set in a real backfill from a company-scoped email).
-    event = _outcome(job_posting_id=None, outcome_type="rejection_pre_screen")
-    event.target_company_id = company.id
-    db_session.add(event)
-    await db_session.commit()
-
-    ac = await _client(db_session)
-    try:
-        async with ac:
-            resp = await ac.get("/postings?state=rejected")
-    finally:
-        await _drop_override()
-
-    assert resp.status_code == 200
-    assert resp.json()["items"] == []
+# NOTE: ``test_rejected_ignores_company_scoped_events`` was removed in
+# feat/surface-linked-outcomes. Its docstring asserted "Rejection is
+# per-posting, not per-company" — the inverse of the new contract,
+# which intentionally surfaces company-linked rejections because the
+# per-posting ``job_posting_id`` was deferred-by-design and uniformly
+# NULL in production. NULL-safety on the posting side (``target_company_id
+# IS NULL`` must not match) is now covered by
+# ``test_rejected_safe_against_null_target_company_id`` in
+# ``test_surface_linked_outcomes.py``.
 
 
 @_NEEDS_DB
 @pytest.mark.asyncio
 async def test_rejected_returns_each_posting_once(db_session: Any) -> None:
-    """A posting with MULTIPLE rejection events appears exactly once in
-    the response. EXISTS doesn't multiply rows the way a JOIN would."""
+    """A posting at a company with MULTIPLE rejection events appears
+    exactly once in the response. EXISTS doesn't multiply rows the way
+    a JOIN would.
+
+    feat/surface-linked-outcomes: outcomes link via target_company_id;
+    two rejection events at the same company still yield one posting row.
+    """
     company = _company("Co")
     db_session.add(company)
     await db_session.flush()
@@ -433,9 +429,12 @@ async def test_rejected_returns_each_posting_once(db_session: Any) -> None:
     db_session.add(jp)
     await db_session.flush()
     db_session.add(_posting_source(job_posting_id=jp.id))
-    # Two rejection events on the same posting.
-    db_session.add(_outcome(job_posting_id=jp.id, outcome_type="rejection_pre_screen"))
-    db_session.add(_outcome(job_posting_id=jp.id, outcome_type="rejection_post_interview"))
+    # Two rejection events at the same company.
+    ev1 = _outcome(job_posting_id=None, outcome_type="rejection_pre_screen")
+    ev1.target_company_id = company.id
+    ev2 = _outcome(job_posting_id=None, outcome_type="rejection_post_interview")
+    ev2.target_company_id = company.id
+    db_session.add_all([ev1, ev2])
     await db_session.commit()
 
     ac = await _client(db_session)
@@ -466,7 +465,9 @@ async def test_rejected_preserves_two_query_budget(db_session: Any) -> None:
         db_session.add(jp)
         await db_session.flush()
         db_session.add(_posting_source(job_posting_id=jp.id))
-        db_session.add(_outcome(job_posting_id=jp.id, outcome_type="rejection_pre_screen"))
+        ev = _outcome(job_posting_id=None, outcome_type="rejection_pre_screen")
+        ev.target_company_id = company.id
+        db_session.add(ev)
     await db_session.commit()
 
     counter = _ExecuteCounter(db_session)
