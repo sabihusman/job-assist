@@ -188,13 +188,71 @@ def build_view_parts(spec: PostingsViewSpec) -> PostingsQueryParts:
             elif s == "rejected":
                 # Bestiary (PR #50): cross-table state. EXISTS folds in
                 # without a join — no LATERAL added.
+                #
+                # feat/surface-linked-outcomes: re-pointed from
+                # ``OutcomeEvent.job_posting_id == JobPosting.id`` to
+                # ``OutcomeEvent.target_company_id ==
+                # JobPosting.target_company_id``. The job_posting_id
+                # column is deferred-by-design (gmail/backfill.py:9-14)
+                # and uniformly NULL in production, so the old predicate
+                # matched zero rows. Company-level is the link that
+                # actually fires today.
+                #
+                # Asymmetry contract: this predicate runs ONLY when the
+                # operator explicitly asks for ``state=rejected``. The
+                # default Triage view (``state=triage``) does NOT include
+                # any rejection check, so a rejection at one role at a
+                # company never blunt-hides OTHER open roles at the same
+                # company from the default queue. The Rejected view is
+                # the opt-in surface; default Triage is unaffected.
+                #
+                # Defensive: when ``JobPosting.target_company_id IS NULL``
+                # the equality is NULL=… → NULL (untrue) under SQL three-
+                # valued logic, so a NULL posting never matches even if
+                # outcome_event has a row with NULL target. Belt + braces.
                 rejected_exists = (
                     select(OutcomeEvent.id)
-                    .where(OutcomeEvent.job_posting_id == JobPosting.id)
+                    .where(JobPosting.target_company_id.is_not(None))
+                    .where(OutcomeEvent.target_company_id == JobPosting.target_company_id)
                     .where(OutcomeEvent.outcome_type.in_(_REJECTION_OUTCOME_TYPES))
                     .exists()
                 )
                 state_clauses.append(rejected_exists)
+            elif s == "applied":
+                # feat/surface-linked-outcomes: union the operator's
+                # manual ``posting_action.action_type='applied'`` (the
+                # keyboard ``4`` key, per-posting) with the Gmail-derived
+                # ``application_confirmation`` outcome at company level.
+                #
+                # Asymmetry contract (same as rejected): this predicate
+                # runs ONLY when the operator explicitly asks for
+                # ``state=applied`` (the Applied page hook). The default
+                # Triage view is unaffected — an application_confirmation
+                # linked at a company does NOT blunt-hide other open
+                # roles at that company from default Triage. Manual ``4``
+                # remains the only mechanism that hides a posting from
+                # default Triage; Gmail signal only enriches the Applied
+                # page.
+                #
+                # Why company-level for the EXISTS half: outcome_event
+                # rows have ``job_posting_id`` uniformly NULL (deferred-
+                # by-design per gmail/backfill.py:9-14). Company-level is
+                # the only link that fires today. When per-posting outcome
+                # linkage ships later, this can tighten to posting-level
+                # for higher-precision Applied surfacing.
+                applied_at_company_exists = (
+                    select(OutcomeEvent.id)
+                    .where(JobPosting.target_company_id.is_not(None))
+                    .where(OutcomeEvent.target_company_id == JobPosting.target_company_id)
+                    .where(OutcomeEvent.outcome_type == "application_confirmation")
+                    .exists()
+                )
+                state_clauses.append(
+                    or_(
+                        recent_pa.c.pa_action_type == "applied",
+                        applied_at_company_exists,
+                    )
+                )
             else:
                 state_clauses.append(recent_pa.c.pa_action_type == s)
         where_clauses.append(or_(*state_clauses) if state_clauses else sa_false())
