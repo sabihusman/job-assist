@@ -1,7 +1,8 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Inter, JetBrains_Mono } from 'next/font/google';
 import { Toaster } from 'sonner';
 
+import { ServiceWorkerRegistrar } from '@/components/chrome/ServiceWorkerRegistrar';
 import { QueryProvider } from '@/lib/api/query-provider';
 import { ThemeProvider } from '@/lib/theme/provider';
 
@@ -23,9 +24,42 @@ const jetBrainsMono = JetBrains_Mono({
   display: 'swap',
 });
 
+/**
+ * Document metadata.
+ *
+ * PR feat/pwa-tier1-installable adds the iOS-Safari-specific
+ * properties needed for a clean home-screen install on iPhone/iPad —
+ * the web manifest covers Android/Chrome/Edge install, but iOS still
+ * honors the older Apple meta tags for splash + standalone behavior.
+ * Next auto-emits ``<link rel="manifest">`` from the ``manifest.ts``
+ * route alongside these.
+ */
 export const metadata: Metadata = {
   title: 'Job Assist',
   description: 'Personal job-search aggregation and triage',
+  appleWebApp: {
+    capable: true,
+    title: 'Job Assist',
+    statusBarStyle: 'default',
+  },
+  icons: {
+    apple: '/apple-touch-icon.png',
+  },
+};
+
+/**
+ * Viewport / theme-color (PR feat/pwa-tier1-installable).
+ *
+ * ``themeColor`` here drives the Android browser address-bar tint and
+ * acts as a fallback for clients that haven't yet fetched the
+ * manifest. The hex matches the manifest's ``theme_color`` (the
+ * light-mode ``--primary`` token from globals.css).
+ *
+ * Next 15 wants viewport / themeColor in their own export rather than
+ * piled into ``metadata``; this is the warning-free shape.
+ */
+export const viewport: Viewport = {
+  themeColor: '#3b8fa9',
 };
 
 export default function RootLayout({
@@ -58,6 +92,12 @@ export default function RootLayout({
             <Toaster position="bottom-right" duration={2500} closeButton />
           </QueryProvider>
         </ThemeProvider>
+        {/*
+          PR feat/pwa-tier1-installable: registers /sw.js after first
+          mount. Renders no DOM. Production-only (HMR + SW collide in
+          dev). The SW is non-essential — failure is silent + logged.
+        */}
+        <ServiceWorkerRegistrar />
       </body>
     </html>
   );
