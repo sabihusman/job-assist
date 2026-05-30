@@ -107,9 +107,11 @@ async def test_seed_first_run_inserts_all(db_session: Any) -> None:
     from job_assist.db.models import TargetCompany
     from job_assist.seed import seed_from_rows
 
-    inserted, skipped = await seed_from_rows(db_session, _SEED_PAYLOAD)
+    inserted, skipped, backfilled = await seed_from_rows(db_session, _SEED_PAYLOAD)
     assert inserted == len(_SEED_PAYLOAD)
     assert skipped == 0
+    # backfill_nullables defaults to False — no existing rows to patch.
+    assert backfilled == 0
 
     total = (await db_session.execute(select(func.count()).select_from(TargetCompany))).scalar_one()
     assert total == len(_SEED_PAYLOAD)
@@ -123,14 +125,17 @@ async def test_seed_is_idempotent(db_session: Any) -> None:
     from job_assist.db.models import TargetCompany
     from job_assist.seed import seed_from_rows
 
-    inserted_1, skipped_1 = await seed_from_rows(db_session, _SEED_PAYLOAD)
-    inserted_2, skipped_2 = await seed_from_rows(db_session, _SEED_PAYLOAD)
+    inserted_1, skipped_1, backfilled_1 = await seed_from_rows(db_session, _SEED_PAYLOAD)
+    inserted_2, skipped_2, backfilled_2 = await seed_from_rows(db_session, _SEED_PAYLOAD)
 
     assert inserted_1 == len(_SEED_PAYLOAD)
     assert skipped_1 == 0
-    # Second run must be all skips, zero inserts.
+    assert backfilled_1 == 0
+    # Second run must be all skips, zero inserts. backfill_nullables
+    # defaults to False so no patches either.
     assert inserted_2 == 0
     assert skipped_2 == len(_SEED_PAYLOAD)
+    assert backfilled_2 == 0
 
     total = (await db_session.execute(select(func.count()).select_from(TargetCompany))).scalar_one()
     assert total == len(_SEED_PAYLOAD)
@@ -162,9 +167,10 @@ async def test_seed_drops_unknown_fields(db_session: Any) -> None:
             "created_at": "1970-01-01T00:00:00Z",
         }
     ]
-    inserted, skipped = await seed_from_rows(db_session, payload)
+    inserted, skipped, backfilled = await seed_from_rows(db_session, payload)
     assert inserted == 1
     assert skipped == 0
+    assert backfilled == 0
 
     row = (
         await db_session.execute(select(TargetCompany).where(TargetCompany.name == "ScrubbedCo"))
