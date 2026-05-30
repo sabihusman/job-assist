@@ -76,15 +76,38 @@ def _should_prefilter(email: RawEmail) -> bool:
     return email.from_domain in OBVIOUS_NON_JOB_DOMAINS
 
 
+# Corporate / recruiting suffixes stripped before fuzzy matching. Adding
+# ``team``/``recruiting``/``careers``/``talent`` to the original company-
+# suffix list (PR feat/outcome-company-linking) so Gemini's
+# ``extracted_company`` of e.g. ``"the MeridianLink Recruiting Team"``
+# normalises to the same key as ``"MeridianLink"``. The 5.9% match rate
+# observed in production was largely killed by these patterns falling
+# through as noise.
 _COMPANY_SUFFIX_RE = re.compile(
-    r"[\s,]+(?:inc|llc|ltd|corp|corporation|company|co|holdings?|group|plc|gmbh)\.?\s*$",
+    r"[\s,]+(?:"
+    r"inc|llc|ltd|corp|corporation|company|co|holdings?|group|plc|gmbh"
+    r"|team|recruiting|recruitment|careers|career|talent|hr|people"
+    r")\.?\s*$",
     re.IGNORECASE,
 )
 
+# Article prefixes Gemini sometimes prepends (``"the MeridianLink team"``).
+# Stripped before suffix removal so the suffix-trim catches the tail.
+_LEADING_ARTICLE_RE = re.compile(r"^(?:the|a|an)\s+", re.IGNORECASE)
+
 
 def _normalize_company(name: str) -> str:
-    """Lowercase, strip corporate suffixes and punctuation for fuzzy matching."""
-    no_suffix = _COMPANY_SUFFIX_RE.sub("", name).strip()
+    """Lowercase, strip articles + corporate/recruiting suffixes + punctuation.
+
+    Run the suffix regex twice — once handles ``"Recruiting Team"`` style
+    double-suffixes (e.g. ``"MeridianLink Recruiting Team"`` → ``"MeridianLink
+    Recruiting"`` → ``"MeridianLink"``). Two passes is enough for every
+    real pattern; the cost is two regex calls per row at match time,
+    negligible against the ~30-row corpus.
+    """
+    de_articled = _LEADING_ARTICLE_RE.sub("", name).strip()
+    no_suffix = _COMPANY_SUFFIX_RE.sub("", de_articled).strip()
+    no_suffix = _COMPANY_SUFFIX_RE.sub("", no_suffix).strip()
     return re.sub(r"[^\w]+", "", no_suffix).lower()
 
 
@@ -96,7 +119,15 @@ async def _match_target_company(
 ) -> TargetCompany | None:
     """Resolve a TargetCompany via (1) domain exact match, then (2) fuzzy name match.
 
-    Returns None when neither path finds a unique row.
+    Returns None when neither path finds a row.
+
+    PR feat/outcome-company-linking: the unique-candidate check is
+    relaxed to "take the first match" when normalised-name candidates
+    tie. Since ``target_company.name`` is UNIQUE in the schema, ties are
+    only possible when two distinct names normalise to the same key
+    (e.g. ``"Acme"`` and ``"Acme Corp"``). Taking the first such row is
+    better than dropping the match entirely — same company, different
+    legal-name variant.
     """
     # 1. Domain exact match — only when target_company.domain is populated.
     if from_domain:
@@ -109,7 +140,7 @@ async def _match_target_company(
             .scalars()
             .all()
         )
-        if len(rows) == 1:
+        if rows:
             return rows[0]
 
     if not extracted_company:
@@ -123,7 +154,7 @@ async def _match_target_company(
 
     all_rows = (await session.execute(select(TargetCompany))).scalars().all()
     candidates = [r for r in all_rows if _normalize_company(r.name) == target_norm]
-    if len(candidates) == 1:
+    if candidates:
         return candidates[0]
     return None
 

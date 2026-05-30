@@ -13,8 +13,11 @@ operator can push seed data straight to production without uploading a
 file to the Railway container — the seed payload is the JSON body.
 
 Idempotent: rows are matched by ``name``; existing rows are left alone
-(neither updated nor duplicated). To update an existing row, edit it in
-the DB directly or extend this script with a ``--upsert`` flag later.
+by default. Pass ``backfill_nullables=True`` (CLI or endpoint query
+param) to patch currently-NULL columns on existing rows from the seed —
+operator-supplied seed values overwrite *only* NULLs, never existing
+values. Used by the feat/outcome-company-linking PR so the operator can
+hand-fill ``domain`` on the existing 30 rows by re-POSTing the seed.
 """
 
 from __future__ import annotations
@@ -47,25 +50,51 @@ def _project_row(row: dict[str, Any]) -> dict[str, Any]:
 async def seed_from_rows(
     session: AsyncSession,
     rows: list[dict[str, Any]],
-) -> tuple[int, int]:
+    *,
+    backfill_nullables: bool = False,
+) -> tuple[int, int, int]:
     """Insert each row whose ``name`` doesn't already exist.
 
-    Returns ``(inserted, skipped)``. Commits before returning.
+    Returns ``(inserted, skipped, backfilled)``. Commits before returning.
+
+    When ``backfill_nullables=True``, existing rows have their currently-
+    NULL columns set from the seed (operator-supplied values overwrite
+    NULLs only — never existing non-NULL values). ``backfilled`` counts
+    rows that had ≥1 column updated this way. This is the path used by
+    the feat/outcome-company-linking PR to fill ``domain`` on existing
+    rows so the Gmail outcome→company matcher's domain path can fire.
     """
     inserted = 0
     skipped = 0
+    backfilled = 0
     for raw in rows:
         row = _project_row(raw)
         existing = (
             await session.execute(select(TargetCompany).where(TargetCompany.name == row["name"]))
         ).scalar_one_or_none()
         if existing is not None:
+            if backfill_nullables:
+                changed = False
+                # Patch nullable columns where the DB row is NULL and
+                # the seed supplies a value. ``name`` and ``tier`` are
+                # NOT NULL so they're excluded by construction.
+                for field in _SEED_FIELDS - {"name", "tier"}:
+                    if field not in row:
+                        continue
+                    seed_value = row[field]
+                    if seed_value is None:
+                        continue
+                    if getattr(existing, field) is None:
+                        setattr(existing, field, seed_value)
+                        changed = True
+                if changed:
+                    backfilled += 1
             skipped += 1
             continue
         session.add(TargetCompany(**row))
         inserted += 1
     await session.commit()
-    return inserted, skipped
+    return inserted, skipped, backfilled
 
 
 def _default_seed_path() -> Path:
@@ -92,11 +121,14 @@ async def seed_targets_from_file(path: Path | None = None) -> tuple[int, int]:
     )
     try:
         async with factory() as session:
-            inserted, skipped = await seed_from_rows(session, rows)
+            inserted, skipped, backfilled = await seed_from_rows(session, rows)
     finally:
         await engine.dispose()
 
-    print(f"Seeded {inserted} target_company rows; {skipped} already existed.")
+    print(
+        f"Seeded {inserted} target_company rows; {skipped} already existed "
+        f"({backfilled} backfilled)."
+    )
     return inserted, skipped
 
 

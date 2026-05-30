@@ -476,20 +476,28 @@ async def discover_ats_run(
 async def seed_target_companies(
     rows: list[dict[str, Any]],
     db: DbSession,
+    backfill_nullables: bool = False,
 ) -> dict[str, int]:
     """Seed target_company rows from a JSON body.
 
     Idempotent: each row's ``name`` is checked first; existing rows are
-    skipped rather than updated. The body is the seed JSON itself, so the
-    private seed file (``apps/api/seeds/target_companies.json``) never
-    needs to be uploaded to the Railway container — the operator runs::
+    skipped rather than updated by default. The body is the seed JSON
+    itself, so the private seed file
+    (``apps/api/seeds/target_companies.json``) never needs to be
+    uploaded to the Railway container — the operator runs::
 
         curl -X POST -H 'Content-Type: application/json' \\
              -d @apps/api/seeds/target_companies.json \\
              https://<host>/admin/seed/target-companies
 
-    Returns the insert / skip counts so the operator can verify the
-    expected number of rows landed.
+    Pass ``?backfill_nullables=true`` to also patch currently-NULL
+    columns on existing rows from the seed (operator-supplied values
+    overwrite NULLs only — never existing non-NULL values). Used by
+    feat/outcome-company-linking so the operator can hand-fill
+    ``domain`` on the existing 30 rows by re-POSTing the seed.
+
+    Returns the insert / skip / backfilled counts so the operator can
+    verify the expected number of rows changed.
 
     TODO: add authentication before exposing this endpoint publicly.
           Currently dev-mode only — single-user deployment.
@@ -497,11 +505,18 @@ async def seed_target_companies(
     from job_assist.seed import seed_from_rows
 
     try:
-        inserted, skipped = await seed_from_rows(db, rows)
+        inserted, skipped, backfilled = await seed_from_rows(
+            db, rows, backfill_nullables=backfill_nullables
+        )
     except ValueError as exc:  # malformed row (missing name/tier)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return {"inserted": inserted, "skipped": skipped, "total": inserted + skipped}
+    return {
+        "inserted": inserted,
+        "skipped": skipped,
+        "backfilled": backfilled,
+        "total": inserted + skipped,
+    }
 
 
 # ── Admin — seed contact ──────────────────────────────────────────────────────
@@ -1289,6 +1304,81 @@ async def gmail_poll(db: DbSession) -> dict[str, Any]:
         raise
     except Exception as exc:
         raise _surface_gmail_failure("/admin/gmail/poll", exc) from exc
+    return report.model_dump(mode="json")
+
+
+@app.post("/admin/outcomes/relink", tags=["admin"])
+async def outcomes_relink(
+    db: DbSession,
+    use_classifier: bool = False,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Re-link unlinked ``outcome_event`` rows to ``target_company``.
+
+    Re-runs the matcher in ``gmail/backfill._match_target_company`` over
+    rows where ``target_company_id IS NULL AND outcome_type IS
+    job-related``. Used after either (a) the operator hand-fills
+    ``target_company.domain`` via the seed endpoint with
+    ``backfill_nullables=true``, or (b) the matcher itself is softened
+    (this PR adds Team/Recruiting/Holdings suffix patterns + leading-
+    article strip + relaxed unique-candidate check). Service-level docs
+    in ``services/outcome_relink.py``.
+
+    Query params:
+      * ``use_classifier=true`` — re-derive ``extracted_company`` via
+        Gemini on the persisted ``raw_snippet`` for rows the domain
+        path doesn't catch. Slow: ~4s per row under the free-tier
+        throttle (~12 min for ~177 production unlinked rows). When
+        ``false`` (default), only the domain path runs — cheap, no LLM
+        cost.
+      * ``limit=N`` — cap on rows scanned. Useful for paginating a
+        large backlog or smoke-testing with ``?limit=5`` first.
+
+    Idempotent: rows with a non-NULL ``target_company_id`` are
+    excluded by the WHERE clause, so re-runs never overwrite existing
+    links and a partial mid-run crash resumes cleanly on the next
+    invocation.
+
+    Returns 503 when ``use_classifier=true`` and ``GEMINI_API_KEY`` is
+    missing (same env-var guard ``/admin/gmail/poll`` uses).
+
+    TODO: add authentication before exposing publicly. Currently
+    dev-mode only — single-user deployment.
+    """
+    from job_assist.services.outcome_relink import relink_unmatched
+
+    classifier = None
+    if use_classifier:
+        # Re-use the env-var preflight + builder from /admin/gmail/poll
+        # so the failure mode is identical (503 with the missing-var
+        # list, structured 500 on Gemini exceptions).
+        missing = [name for name in _missing_gmail_env() if name == "GEMINI_API_KEY"]
+        if missing:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"Relink with use_classifier=true unavailable: missing env var(s) "
+                    f"{missing}. Set on Railway and retry. To run domain-only "
+                    "(no LLM), omit use_classifier or pass use_classifier=false."
+                ),
+            )
+        # Only the classifier is needed — the GmailClient is wasted work
+        # here because we already have the persisted email fields. But
+        # the existing helper builds both; the GmailClient construction
+        # is cheap and we discard it.
+        _, classifier = _build_gmail_runtime()
+
+    try:
+        report = await relink_unmatched(
+            db,
+            classifier,
+            use_classifier=use_classifier,
+            limit=limit,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _surface_gmail_failure("/admin/outcomes/relink", exc) from exc
     return report.model_dump(mode="json")
 
 

@@ -271,22 +271,34 @@
     "/admin/seed/target-companies": {
       "post": {
         "summary": "Seed Target Companies",
-        "description": "Seed target_company rows from a JSON body.\n\nIdempotent: each row's ``name`` is checked first; existing rows are\nskipped rather than updated. The body is the seed JSON itself, so the\nprivate seed file (``apps/api/seeds/target_companies.json``) never\nneeds to be uploaded to the Railway container \u2014 the operator runs::\n\n    curl -X POST -H 'Content-Type: application/json' \\\n         -d @apps/api/seeds/target_companies.json \\\n         https://<host>/admin/seed/target-companies\n\nReturns the insert / skip counts so the operator can verify the\nexpected number of rows landed.\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
+        "description": "Seed target_company rows from a JSON body.\n\nIdempotent: each row's ``name`` is checked first; existing rows are\nskipped rather than updated by default. The body is the seed JSON\nitself, so the private seed file\n(``apps/api/seeds/target_companies.json``) never needs to be\nuploaded to the Railway container \u2014 the operator runs::\n\n    curl -X POST -H 'Content-Type: application/json' \\\n         -d @apps/api/seeds/target_companies.json \\\n         https://<host>/admin/seed/target-companies\n\nPass ``?backfill_nullables=true`` to also patch currently-NULL\ncolumns on existing rows from the seed (operator-supplied values\noverwrite NULLs only \u2014 never existing non-NULL values). Used by\nfeat/outcome-company-linking so the operator can hand-fill\n``domain`` on the existing 30 rows by re-POSTing the seed.\n\nReturns the insert / skip / backfilled counts so the operator can\nverify the expected number of rows changed.\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
         "operationId": "seed_target_companies_admin_seed_target_companies_post",
+        "parameters": [
+          {
+            "name": "backfill_nullables",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Backfill Nullables"
+            }
+          }
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "items": {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
                 "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
                 "title": "Rows"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -294,10 +306,10 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "type": "object",
                   "additionalProperties": {
                     "type": "integer"
                   },
-                  "type": "object",
                   "title": "Response Seed Target Companies Admin Seed Target Companies Post"
                 }
               }
@@ -914,6 +926,68 @@
                   "additionalProperties": true,
                   "type": "object",
                   "title": "Response Gmail Poll Admin Gmail Poll Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/outcomes/relink": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Outcomes Relink",
+        "description": "Re-link unlinked ``outcome_event`` rows to ``target_company``.\n\nRe-runs the matcher in ``gmail/backfill._match_target_company`` over\nrows where ``target_company_id IS NULL AND outcome_type IS\njob-related``. Used after either (a) the operator hand-fills\n``target_company.domain`` via the seed endpoint with\n``backfill_nullables=true``, or (b) the matcher itself is softened\n(this PR adds Team/Recruiting/Holdings suffix patterns + leading-\narticle strip + relaxed unique-candidate check). Service-level docs\nin ``services/outcome_relink.py``.\n\nQuery params:\n  * ``use_classifier=true`` \u2014 re-derive ``extracted_company`` via\n    Gemini on the persisted ``raw_snippet`` for rows the domain\n    path doesn't catch. Slow: ~4s per row under the free-tier\n    throttle (~12 min for ~177 production unlinked rows). When\n    ``false`` (default), only the domain path runs \u2014 cheap, no LLM\n    cost.\n  * ``limit=N`` \u2014 cap on rows scanned. Useful for paginating a\n    large backlog or smoke-testing with ``?limit=5`` first.\n\nIdempotent: rows with a non-NULL ``target_company_id`` are\nexcluded by the WHERE clause, so re-runs never overwrite existing\nlinks and a partial mid-run crash resumes cleanly on the next\ninvocation.\n\nReturns 503 when ``use_classifier=true`` and ``GEMINI_API_KEY`` is\nmissing (same env-var guard ``/admin/gmail/poll`` uses).\n\nTODO: add authentication before exposing publicly. Currently\ndev-mode only \u2014 single-user deployment.",
+        "operationId": "outcomes_relink_admin_outcomes_relink_post",
+        "parameters": [
+          {
+            "name": "use_classifier",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Use Classifier"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Outcomes Relink Admin Outcomes Relink Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
