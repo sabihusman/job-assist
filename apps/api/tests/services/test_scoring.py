@@ -23,6 +23,7 @@ from job_assist.services.scoring import (
     PREFERRED_FAMILIES,
     SCORER_VERSION,
     bucket_for_score,
+    display_tier,
     score_breakdown,
     score_geo,
     score_posting,
@@ -487,3 +488,41 @@ def test_score_breakdown_matches_composite_via_weighted_sum() -> None:
 )
 def test_bucket_for_score_thresholds(score: int | None, expected: str) -> None:
     assert bucket_for_score(score) == expected
+
+
+# ── display_tier (Slice 3 — tier-from-score coalesce) ───────────────────────
+
+
+def test_display_tier_company_tier_always_wins() -> None:
+    """A curated company's pedigree tier is returned verbatim regardless
+    of fit_score — even a tier-1 company with a low-scoring posting."""
+    assert display_tier(1, 30) == 1
+    assert display_tier(4, 95) == 4
+    assert display_tier(2, None) == 2
+
+
+@pytest.mark.parametrize(
+    ("score", "expected"),
+    [
+        (100, 1),
+        (80, 1),
+        (79, 2),
+        (60, 2),
+        (59, 3),
+        (40, 3),
+        (39, 4),
+        (0, 4),
+    ],
+)
+def test_display_tier_derives_band_from_score_when_company_tier_null(
+    score: int, expected: int
+) -> None:
+    """Broad shells (company_tier=None) get a band derived from
+    fit_score — the inverse of score_tier's bands."""
+    assert display_tier(None, score) == expected
+
+
+def test_display_tier_null_when_both_null() -> None:
+    """A broad shell whose posting the score sweep hasn't visited
+    (fit_score None) has no derivable tier → None."""
+    assert display_tier(None, None) is None

@@ -28,6 +28,7 @@ from job_assist.services.scoring import (
     _WEIGHTS,
     PREFERRED_FAMILIES,
     SCORER_VERSION,
+    display_tier,
     score_breakdown,
 )
 from job_assist.triage.config import hard_rule_config_from_profile
@@ -255,7 +256,12 @@ def _build_jobs_sheet(
     scores: list[int] = []
     for rank, (jp, tc, ps_ats, ps_apply_url) in enumerate(rows, start=1):
         tier = tc.tier if tc is not None else None
+        # Scoring uses the RAW pedigree tier (None→50 inside score_breakdown).
         breakdown = score_breakdown(jp, profile, tier=tier)
+        # The displayed Jobs-sheet "tier" column uses the Slice 3 display
+        # coalesce: pedigree tier when set, else the score-derived band
+        # for broad shells. Display-only — does not touch the breakdown.
+        tier_display = display_tier(tier, jp.fit_score)
         company_name = tc.name if tc is not None else jp.canonical_company_name
         first_seen = jp.first_seen_at.isoformat() if jp.first_seen_at else ""
         if jp.fit_score is not None:
@@ -278,7 +284,7 @@ def _build_jobs_sheet(
             jp.salary_currency,
             _flatten_locations(jp.locations_normalized) or (jp.location_raw or ""),
             _enum_value(jp.remote_type),
-            tier,
+            tier_display,
             ps_ats or "",
             ps_apply_url or "",
             first_seen,

@@ -2069,7 +2069,7 @@
           "admin"
         ],
         "summary": "Broad Ingest Run",
-        "description": "Run the bounded broad-ingest trial (Slice 2).\n\nSweeps up to ``limit`` active ``discovered_handle`` rows, ingesting\neach with ``apply_title_prefilter=True`` (PR #96) so only\nPM-cluster titles enter the DB. Creates a thin ``target_company``\nshell per handle. Maintains per-handle lifecycle counters\n(``last_ingested_at``, ``consecutive_empty_count``, auto-deactivate\nafter 3 empties).\n\nLong-running on the Gemini-free path: ~50 handles, an HTTP fetch\neach, sequential. No LLM calls at ingest (role_family is the regex\nheuristic; the classifier sweep stays opt-in). Returns the\naggregate + per-handle breakdown so the trial's hit rate is\nmeasurable.\n\n``limit`` is the trial's safety bound \u2014 there is NO weekly\nqualified-row cap yet (Slice 3).\n\nTODO: add authentication before exposing publicly. Dev-mode only.",
+        "description": "Run broad ingestion, bounded by ``limit`` handles + the weekly cap.\n\nSweeps active ``discovered_handle`` rows (rotation order:\nleast-recently-ingested first), ingesting each with\n``apply_title_prefilter=True`` (PR #96) so only PM-cluster titles\nenter the DB. Creates a thin ``target_company`` shell per handle.\nMaintains per-handle lifecycle counters (``last_ingested_at``,\n``consecutive_empty_count``; auto-deactivate after 2 consecutive\n404s or 5 consecutive empty pulls).\n\n**Weekly cap (Slice 3)** \u2014 the load-bearing bound. Once\n``weekly_cap`` qualified (80+ fit_score) broad roles are banked in\nthe current ISO week, the runner STOPS for the week: a no-op at the\ntop if already met, or a clean stop between boards once reached. The\ncap counts DISTINCT broad-shell postings by ``first_seen_at`` this\nweek, so re-pulls never re-count and the week resets automatically\non Monday 00:00 UTC. One board may overshoot the cap slightly\n(stop-once-reached, not exactly-N).\n\nWith the cap, broad volume is self-limiting \u2014 a daily cron can call\nthis against thousands of handles and it banks toward the cap then\nidles, no fan-out needed. No Gemini at ingest (role_family is the\nregex heuristic; classifier sweep stays opt-in).\n\nTODO: add authentication before exposing publicly. Dev-mode only.",
         "operationId": "broad_ingest_run_admin_broad_ingest_run_post",
         "parameters": [
           {
@@ -2078,8 +2078,18 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "default": 50,
+              "default": 100,
               "title": "Limit"
+            }
+          },
+          {
+            "name": "weekly_cap",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Weekly Cap"
             }
           }
         ],

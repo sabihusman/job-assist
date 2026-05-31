@@ -32,14 +32,14 @@ full handle volume needs it.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from job_assist.adapters.base import Adapter, HandleNotFoundError
-from job_assist.db.models import DiscoveredHandle, TargetCompany
+from job_assist.db.models import DiscoveredHandle, JobPosting, TargetCompany
 from job_assist.services.ingestion import IngestionService
 
 logger = logging.getLogger(__name__)
@@ -49,11 +49,65 @@ logger = logging.getLogger(__name__)
 # bare discovered handle doesn't carry, so they're out of scope here.
 _BROAD_SUPPORTED_ATS: frozenset[str] = frozenset({"greenhouse", "lever", "ashby"})
 
-# After this many consecutive empty/not-found pulls, a handle is
-# auto-deactivated so the runner stops wasting API calls on a dead
-# board. Conservative for the trial — a board legitimately between
-# postings shouldn't drop on a single empty pull.
-_DEACTIVATE_AFTER_EMPTY = 3
+# Handle-health deactivation thresholds (Slice 3). A 404
+# (``handle_not_found``) is a strong dead-token signal — deactivate
+# fast. An empty 200 is a board that's merely between postings right
+# now — deactivate slowly so a quiet week doesn't prune a live board.
+# Both count the same ``consecutive_empty_count``; the threshold
+# applied depends on the CURRENT pull's status. Since a dead handle
+# 404s every run, its counter purely reflects 404s and trips the low
+# threshold; a quiet-but-live board empties every run and trips the
+# high one.
+_DEACTIVATE_AFTER_NOT_FOUND = 2
+_DEACTIVATE_AFTER_EMPTY = 5
+
+# The qualified-role fit_score floor. A "qualified" role is a strong PM
+# fit (the 80+ band the operator wants to review). The weekly cap
+# counts these.
+_QUALIFIED_SCORE_FLOOR = 80
+
+# Default weekly cap — once this many qualified broad roles are banked
+# in the current ISO week, the runner stops for the week.
+_DEFAULT_WEEKLY_CAP = 100
+
+
+def _current_iso_week_start() -> datetime:
+    """Monday 00:00:00 UTC of the current ISO week.
+
+    The weekly qualified cap resets on this boundary automatically —
+    'this week' is derived from the wall clock each run, so there's no
+    counter to reset and no cron to run.
+    """
+    now = datetime.now(tz=UTC)
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    # ``weekday()`` is 0 for Monday.
+    return midnight - timedelta(days=now.weekday())
+
+
+async def count_qualified_broad_this_week(session: AsyncSession) -> int:
+    """Count DISTINCT broad-shell postings that qualified this ISO week.
+
+    'Broad shell' = a ``target_company`` with ``tier IS NULL`` (the
+    curated companies all carry a pedigree tier; only broad-discovered
+    shells are NULL). 'Qualified' = ``fit_score >= 80``. 'This week' =
+    ``first_seen_at >= Monday 00:00 UTC``.
+
+    Counting by ``first_seen_at`` (not ingest events) means a posting
+    re-seen later in the same week is counted once, and a posting first
+    seen last week never counts toward this week — so re-pulls never
+    re-count. This is the weekly cap's source of truth; no separate
+    counter table.
+    """
+    week_start = _current_iso_week_start()
+    stmt = (
+        select(func.count(func.distinct(JobPosting.id)))
+        .select_from(JobPosting)
+        .join(TargetCompany, JobPosting.target_company_id == TargetCompany.id)
+        .where(TargetCompany.tier.is_(None))
+        .where(JobPosting.fit_score >= _QUALIFIED_SCORE_FLOOR)
+        .where(JobPosting.first_seen_at >= week_start)
+    )
+    return int((await session.execute(stmt)).scalar_one() or 0)
 
 
 class BroadIngestHandleResult(BaseModel):
@@ -77,6 +131,11 @@ class BroadIngestReport(BaseModel):
     total_postings_fetched: int = 0
     total_postings_kept: int = 0
     handles_deactivated: int = 0
+    # Weekly qualified cap (Slice 3).
+    weekly_cap: int = 0
+    qualified_this_week_before: int = 0
+    qualified_this_week_after: int = 0
+    stopped_on_cap: bool = False
     per_handle: list[BroadIngestHandleResult] = []
 
 
@@ -161,18 +220,54 @@ async def _ensure_shell_company(session: AsyncSession, *, ats: str, handle: str)
 async def run_broad_ingest(
     session: AsyncSession,
     *,
-    limit: int = 50,
+    limit: int = 100,
+    weekly_cap: int = _DEFAULT_WEEKLY_CAP,
 ) -> BroadIngestReport:
-    """Sweep up to ``limit`` active discovered handles with the title
-    pre-filter ON. See module docstring for the per-handle contract."""
-    report = BroadIngestReport()
+    """Sweep active discovered handles with the title pre-filter ON,
+    bounded by ``limit`` handles per run AND the weekly qualified cap.
+
+    Weekly cap (the load-bearing bound): once ``weekly_cap`` qualified
+    (80+) broad roles are banked in the current ISO week, the runner
+    STOPS — both at the top (if already at/over the cap, it no-ops) and
+    BETWEEN boards (it checks after each board commits, before starting
+    the next). The check is between boards, never mid-board, so a board
+    is never half-ingested. One board can overshoot the cap (e.g. a
+    board with 12 qualified roles can take us 95→107); that's accepted —
+    'stop once reached', not 'exactly N'.
+
+    Rotation: handles are ordered ``last_ingested_at ASC NULLS FIRST``
+    so each run starts with never/least-recently pulled handles. Over
+    successive runs the frontier advances across the full set even
+    though any single run stops early on the cap.
+
+    See module docstring for the per-handle contract.
+    """
+    report = BroadIngestReport(weekly_cap=weekly_cap)
+
+    # Top-of-run cap check — if this week's quota is already banked,
+    # no-op without touching any board.
+    qualified_before = await count_qualified_broad_this_week(session)
+    report.qualified_this_week_before = qualified_before
+    report.qualified_this_week_after = qualified_before
+    if qualified_before >= weekly_cap:
+        report.stopped_on_cap = True
+        logger.info(
+            "broad_ingest.cap_already_met",
+            extra={"qualified": qualified_before, "cap": weekly_cap},
+        )
+        return report
 
     rows = (
         (
             await session.execute(
                 select(DiscoveredHandle)
                 .where(DiscoveredHandle.active.is_(True))
-                .order_by(DiscoveredHandle.discovered_at.asc(), DiscoveredHandle.id.asc())
+                # Rotation: least-recently-ingested first (NULLS FIRST =
+                # never-pulled handles lead) so the frontier advances.
+                .order_by(
+                    DiscoveredHandle.last_ingested_at.asc().nulls_first(),
+                    DiscoveredHandle.id.asc(),
+                )
                 .limit(limit)
             )
         )
@@ -206,8 +301,7 @@ async def run_broad_ingest(
             fetched = run.postings_fetched
             kept = run.postings_new + run.postings_updated
         except HandleNotFoundError:
-            # Benign — stale handle. Treated as an empty pull for the
-            # deactivation counter. The IngestRun row records the 404
+            # Benign — stale handle. The IngestRun row records the 404
             # via ingest_source's own handler, so no extra logging here.
             status = "handle_not_found"
             fetched = 0
@@ -224,12 +318,17 @@ async def run_broad_ingest(
         # ── Lifecycle write-back ────────────────────────────────────────────
         dh.last_ingested_at = datetime.now(tz=UTC)
         deactivated = False
-        # "Empty" = nothing kept. A failed/404 run counts as empty for
-        # deactivation so a permanently-dead handle eventually drops, but
-        # we DON'T deactivate on a single transient failure.
+        # Nothing kept → bump the empty counter. The deactivation
+        # threshold depends on WHY: a 404 (dead token) trips fast, an
+        # empty 200 (quiet board) trips slow.
         if kept == 0:
             dh.consecutive_empty_count += 1
-            if dh.consecutive_empty_count >= _DEACTIVATE_AFTER_EMPTY:
+            threshold = (
+                _DEACTIVATE_AFTER_NOT_FOUND
+                if status == "handle_not_found"
+                else _DEACTIVATE_AFTER_EMPTY
+            )
+            if dh.consecutive_empty_count >= threshold:
                 dh.active = False
                 deactivated = True
                 report.handles_deactivated += 1
@@ -250,6 +349,20 @@ async def run_broad_ingest(
             )
         )
 
+        # ── Weekly cap check (between boards) ────────────────────────────────
+        # ingest_source committed this board's rows, so the count below
+        # reflects them. Checking here (not mid-board) guarantees no
+        # half-ingested board when we stop.
+        qualified_now = await count_qualified_broad_this_week(session)
+        if qualified_now >= weekly_cap:
+            report.stopped_on_cap = True
+            logger.info(
+                "broad_ingest.cap_reached",
+                extra={"qualified": qualified_now, "cap": weekly_cap},
+            )
+            break
+
+    report.qualified_this_week_after = await count_qualified_broad_this_week(session)
     await session.commit()
     logger.info(
         "broad_ingest.complete",
@@ -260,9 +373,17 @@ async def run_broad_ingest(
             "fetched": report.total_postings_fetched,
             "kept": report.total_postings_kept,
             "deactivated": report.handles_deactivated,
+            "qualified_this_week": report.qualified_this_week_after,
+            "weekly_cap": report.weekly_cap,
+            "stopped_on_cap": report.stopped_on_cap,
         },
     )
     return report
 
 
-__all__ = ["BroadIngestHandleResult", "BroadIngestReport", "run_broad_ingest"]
+__all__ = [
+    "BroadIngestHandleResult",
+    "BroadIngestReport",
+    "count_qualified_broad_this_week",
+    "run_broad_ingest",
+]

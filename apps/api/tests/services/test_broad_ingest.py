@@ -24,16 +24,52 @@ from __future__ import annotations
 
 import os
 import uuid
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from types import TracebackType
 from typing import Any
 
 import pytest
 from sqlalchemy import func, select
 
-from job_assist.adapters.base import NormalizedPosting, RawPosting
+from job_assist.adapters.base import HandleNotFoundError, NormalizedPosting, RawPosting
 from job_assist.db.models import DiscoveredHandle, JobPosting, TargetCompany
 from job_assist.services import broad_ingest as bi
 from job_assist.services.broad_ingest import run_broad_ingest, seed_discovered_handles
+
+
+def _async_const(value: int) -> Callable[..., Any]:
+    """Return an async function that ignores its args and returns ``value``
+    — used to patch ``count_qualified_broad_this_week`` for cap tests."""
+
+    async def _f(*_args: Any, **_kwargs: Any) -> int:
+        return value
+
+    return _f
+
+
+class _NotFoundAdapter:
+    """Stub adapter whose fetch raises HandleNotFoundError (simulates a
+    dead board token / 404). Honors the async-CM protocol."""
+
+    ats = "greenhouse"
+    parser_version = "stub-404"
+
+    async def __aenter__(self) -> _NotFoundAdapter:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    async def fetch_postings(self, handle: str) -> list[RawPosting]:
+        raise HandleNotFoundError(ats=self.ats, handle=handle, url=f"https://example.test/{handle}")
+
+    def peek_title(self, raw: RawPosting) -> str:
+        return ""
+
+    def normalize(self, raw: RawPosting, canonical_company_name: str) -> NormalizedPosting:
+        raise AssertionError("normalize should never be called on a 404 board")
+
 
 _NEEDS_DB = pytest.mark.skipif(
     not os.getenv("TEST_DATABASE_URL"),
@@ -286,3 +322,159 @@ async def test_seed_is_idempotent(db_session: Any) -> None:
         )
     ).scalar_one()
     assert count == 1
+
+
+# ── count_qualified_broad_this_week (Slice 3) ───────────────────────────────
+
+
+def _qualified_posting(*, tc_id: uuid.UUID, fit_score: int, first_seen: datetime) -> JobPosting:
+    suffix = uuid.uuid4().hex[:10]
+    return JobPosting(
+        canonical_company_name="BroadCo",
+        target_company_id=tc_id,
+        normalized_title="senior product manager",
+        raw_title="Senior Product Manager",
+        jd_text="JD.",
+        jd_text_hash=f"{'0' * 54}{suffix}",
+        content_hash=f"hash-{suffix}",
+        first_seen_at=first_seen,
+        last_seen_at=first_seen,
+        role_family="product_management",  # type: ignore[arg-type]
+        remote_type="remote",
+        fit_score=fit_score,
+    )
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_count_qualified_only_broad_shells_this_week(db_session: Any) -> None:
+    """The weekly qualified count includes ONLY tier-NULL (broad shell)
+    postings, scoring 80+, first seen this ISO week."""
+    from job_assist.services.broad_ingest import (
+        _current_iso_week_start,
+        count_qualified_broad_this_week,
+    )
+
+    week_start = _current_iso_week_start()
+    this_week = week_start + timedelta(hours=1)
+    last_week = week_start - timedelta(days=1)
+
+    shell = TargetCompany(name="ShellCo", ats="greenhouse", ats_handle="shellco", tier=None)
+    curated = TargetCompany(name="CuratedCo", ats="greenhouse", ats_handle="curatedco", tier=1)
+    db_session.add_all([shell, curated])
+    await db_session.flush()
+
+    db_session.add_all(
+        [
+            # Counts: broad shell, 80+, this week.
+            _qualified_posting(tc_id=shell.id, fit_score=90, first_seen=this_week),
+            _qualified_posting(tc_id=shell.id, fit_score=80, first_seen=this_week),
+            # Excluded: below floor.
+            _qualified_posting(tc_id=shell.id, fit_score=79, first_seen=this_week),
+            # Excluded: last week.
+            _qualified_posting(tc_id=shell.id, fit_score=95, first_seen=last_week),
+            # Excluded: curated company (tier not NULL).
+            _qualified_posting(tc_id=curated.id, fit_score=95, first_seen=this_week),
+        ]
+    )
+    await db_session.commit()
+
+    assert await count_qualified_broad_this_week(db_session) == 2
+
+
+# ── Weekly cap control flow (patched counter) ───────────────────────────────
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_cap_noop_when_already_met(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """If this week's qualified count is already >= cap, the runner
+    no-ops at the top: considers zero handles, touches no board."""
+    await seed_discovered_handles(db_session, [("greenhouse", f"co{uuid.uuid4().hex[:6]}")])
+    _patch_adapter(monkeypatch, ["Senior Product Manager"])
+    monkeypatch.setattr(bi, "count_qualified_broad_this_week", _async_const(100))
+
+    report = await run_broad_ingest(db_session, limit=10, weekly_cap=100)
+    assert report.stopped_on_cap is True
+    assert report.handles_considered == 0
+    assert report.handles_ingested == 0
+    assert report.qualified_this_week_before == 100
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_cap_stops_between_boards(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With 3 handles and a counter that crosses the cap after the first
+    board, the runner stops after board 1 — not all 3 — and never
+    half-ingests."""
+    for _ in range(3):
+        await seed_discovered_handles(db_session, [("greenhouse", f"co{uuid.uuid4().hex[:6]}")])
+    _patch_adapter(monkeypatch, ["Senior Product Manager"])
+
+    # Counter: top check = 0 (under cap), after board 1 = 100 (>= cap).
+    seq = iter([0, 100, 100, 100])
+
+    async def _counter(_session: Any) -> int:
+        return next(seq)
+
+    monkeypatch.setattr(bi, "count_qualified_broad_this_week", _counter)
+
+    report = await run_broad_ingest(db_session, limit=10, weekly_cap=100)
+    assert report.stopped_on_cap is True
+    assert report.handles_ingested == 1, "should stop after the first board"
+
+
+# ── Rotation ordering ───────────────────────────────────────────────────────
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_rotation_least_recently_ingested_first(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Handles are pulled last_ingested_at ASC NULLS FIRST: a
+    never-pulled handle leads, then oldest-pulled."""
+    h_never = f"never{uuid.uuid4().hex[:6]}"
+    h_old = f"old{uuid.uuid4().hex[:6]}"
+    h_recent = f"recent{uuid.uuid4().hex[:6]}"
+    await seed_discovered_handles(
+        db_session, [("greenhouse", h_never), ("greenhouse", h_old), ("greenhouse", h_recent)]
+    )
+    now = datetime.now(tz=UTC)
+    for h, ts in ((h_old, now - timedelta(days=10)), (h_recent, now - timedelta(hours=1))):
+        dh = (
+            await db_session.execute(select(DiscoveredHandle).where(DiscoveredHandle.handle == h))
+        ).scalar_one()
+        dh.last_ingested_at = ts
+    await db_session.commit()
+
+    _patch_adapter(monkeypatch, ["Account Executive"])  # empty pulls, no cap interference
+    report = await run_broad_ingest(db_session, limit=2, weekly_cap=100)
+
+    swept = [r.handle for r in report.per_handle]
+    assert swept == [h_never, h_old], f"expected never→old rotation, got {swept}"
+
+
+# ── Handle health: 404 deactivates faster than empty ────────────────────────
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_not_found_deactivates_after_two(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 404 (handle_not_found) trips the low threshold (2), faster than
+    the empty-200 threshold (5)."""
+    handle = f"dead{uuid.uuid4().hex[:6]}"
+    await seed_discovered_handles(db_session, [("greenhouse", handle)])
+    monkeypatch.setattr(bi, "_build_adapter", lambda ats: _NotFoundAdapter())
+
+    for _ in range(bi._DEACTIVATE_AFTER_NOT_FOUND):
+        await run_broad_ingest(db_session, limit=10, weekly_cap=100)
+
+    dh = (
+        await db_session.execute(select(DiscoveredHandle).where(DiscoveredHandle.handle == handle))
+    ).scalar_one()
+    assert dh.consecutive_empty_count == bi._DEACTIVATE_AFTER_NOT_FOUND
+    assert dh.active is False
+    assert bi._DEACTIVATE_AFTER_NOT_FOUND < bi._DEACTIVATE_AFTER_EMPTY
