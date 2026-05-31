@@ -162,6 +162,13 @@ class AshbyAdapter:
             out.append(RawPosting(source_job_id=str(job_id), raw_payload=job))
         return out
 
+    def peek_title(self, raw: RawPosting) -> str:
+        """Cheap title extraction for the pre-filter — mirrors
+        ``normalize()``'s extraction so the filter sees the same string
+        the rest of the pipeline will see."""
+        job = raw.raw_payload
+        return str(job.get("title") or "")
+
     def normalize(self, raw: RawPosting, canonical_company_name: str) -> NormalizedPosting:
         """Convert a single Ashby job object to NormalizedPosting."""
         job = raw.raw_payload

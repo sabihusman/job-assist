@@ -99,3 +99,16 @@ class Adapter(Protocol):
     def normalize(self, raw: RawPosting, canonical_company_name: str) -> NormalizedPosting:
         """Convert a raw ATS payload to a NormalizedPosting."""
         ...
+
+    def peek_title(self, raw: RawPosting) -> str:
+        """Cheap title extract for the pre-filter (Slice 1 broad-ingest).
+
+        Returns the raw posting title without running the full
+        ``normalize()`` pipeline, so ``IngestionService.ingest_source``
+        can skip non-PM titles before paying normalize/upsert cost.
+        Per-adapter overrides know which key in ``raw.raw_payload`` to
+        read (greenhouse: ``title``, lever: ``text``, etc.); the
+        default implementation falls back to ``title`` since every ATS
+        we currently support uses that key in some shape.
+        """
+        ...

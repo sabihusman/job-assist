@@ -52,8 +52,28 @@ class IngestionService:
         adapter: Adapter,
         handle: str,
         session: AsyncSession,
+        *,
+        apply_title_prefilter: bool = False,
     ) -> IngestRun:
-        """Ingest all postings for *handle* using *adapter* into *session*."""
+        """Ingest all postings for *handle* using *adapter* into *session*.
+
+        Args:
+          apply_title_prefilter: When True, postings whose
+            ``adapter.peek_title(raw)`` fails the PM keep-list in
+            ``adapters/title_filter.should_keep_title`` are dropped
+            **before** ``normalize()`` runs, so non-PM rows never reach
+            the DB. **OPT-IN per call** so the existing curated-30 cron
+            (which deliberately ingests sales/eng/ops roles for its
+            Companies/Stats surfaces) keeps full-corpus behaviour. The
+            Slice 2 broad-ingest cron will pass ``True``.
+
+            When False (default), this is a no-op — behavior is
+            byte-identical to pre-PR ingestion.
+        """
+        # Lazy import — keeps the title_filter module out of the
+        # service's import-time cost when the filter isn't used.
+        from job_assist.adapters.title_filter import should_keep_title
+
         run = IngestRun(
             source=adapter.ats,
             started_at=datetime.now(tz=UTC),
@@ -65,6 +85,7 @@ class IngestionService:
         postings_fetched = 0
         postings_new = 0
         postings_updated = 0
+        postings_skipped_title_filter = 0
 
         try:
             # ── Resolve canonical company name ────────────────────────────────
@@ -108,6 +129,16 @@ class IngestionService:
             postings_fetched = len(raw_postings)
 
             for raw in raw_postings:
+                # ── Title pre-filter (Slice 1: opt-in for broad ingest) ─────
+                # ``apply_title_prefilter=False`` keeps the curated-30 path
+                # byte-identical — peek_title is not even called when the
+                # flag is off, so an adapter that didn't get a peek_title
+                # override would still ingest. The check is structured
+                # this way (flag first) on purpose for that reason.
+                if apply_title_prefilter and not should_keep_title(adapter.peek_title(raw)):
+                    postings_skipped_title_filter += 1
+                    continue
+
                 norm = adapter.normalize(raw, canonical_name)
 
                 # ── Upsert JobPosting by content_hash ─────────────────────────
@@ -279,6 +310,12 @@ class IngestionService:
                 new=postings_new,
                 updated=postings_updated,
                 fetched=postings_fetched,
+                # Surface the title-prefilter drop count to logs even
+                # though it's not persisted on IngestRun. Useful for
+                # tuning the keep-list when the broad-ingest cron lands;
+                # zero when ``apply_title_prefilter=False`` (no overhead
+                # for the curated-30 path).
+                skipped_title_filter=postings_skipped_title_filter,
             )
 
         except HandleNotFoundError as exc:

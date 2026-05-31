@@ -446,6 +446,18 @@ class ICIMSAdapter:
             offset += len(rows)
         return out
 
+    def peek_title(self, raw: RawPosting) -> str:
+        """Cheap title extraction for the pre-filter — iCIMS merges a
+        JSON-LD blob with a listing row at fetch time. JSON-LD is the
+        authoritative source; the listing row is the fallback. Mirrors
+        ``normalize()`` so the filter never disagrees."""
+        payload = raw.raw_payload if isinstance(raw.raw_payload, dict) else {}
+        listing_row_any = payload.get("listing_row")
+        jsonld_any = payload.get("jsonld")
+        listing_row: dict[str, Any] = listing_row_any if isinstance(listing_row_any, dict) else {}
+        jsonld: dict[str, Any] = jsonld_any if isinstance(jsonld_any, dict) else {}
+        return str(jsonld.get("title") or listing_row.get("raw_title") or "")
+
     def normalize(self, raw: RawPosting, canonical_company_name: str) -> NormalizedPosting:
         """Map a merged iCIMS HTML + JSON-LD payload to NormalizedPosting."""
         payload = raw.raw_payload if isinstance(raw.raw_payload, dict) else {}
