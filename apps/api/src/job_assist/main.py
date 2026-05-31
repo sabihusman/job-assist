@@ -86,11 +86,20 @@ _INGESTABLE_ATS = ("greenhouse", "lever", "ashby", "workday", "icims")
 
 @app.get("/admin/ingest/plan")
 async def get_ingest_plan(db: DbSession) -> list[dict[str, str]]:
-    """List ``(ats, handle)`` pairs the daily cron should ingest.
+    """List ``(ats, handle)`` pairs the daily *curated* cron should ingest.
 
     Filters to rows where:
       * ``ats`` is one of the three currently-supported adapters
       * ``ats_handle IS NOT NULL`` (we can't ingest without a handle)
+      * ``tier IS NOT NULL`` — the curated/broad separation (Slice 2).
+        Curated companies carry a hand-assigned pedigree tier (1-4);
+        broad-discovered shells (``services/broad_ingest.py``) have
+        ``tier=NULL``. The daily cron ingests ONLY curated companies
+        WITHOUT the title pre-filter; broad shells are swept separately
+        by ``POST /admin/broad-ingest/run`` WITH the filter. Omitting
+        this clause would pull the broad shells into the unfiltered
+        daily cron, flooding the DB with the non-PM long tail this
+        whole effort exists to avoid.
       * No active ``closed_channel`` row exists for the target_company
         (``unsealed_at IS NULL`` denotes "currently sealed")
 
@@ -121,6 +130,8 @@ async def get_ingest_plan(db: DbSession) -> list[dict[str, str]]:
             select(TargetCompany.ats, TargetCompany.ats_handle)
             .where(TargetCompany.ats.in_(_INGESTABLE_ATS))
             .where(TargetCompany.ats_handle.isnot(None))
+            # Curated only — exclude broad-ingest shells (tier IS NULL).
+            .where(TargetCompany.tier.isnot(None))
             .where(~active_closed)
             .order_by(TargetCompany.tier.asc(), TargetCompany.name.asc())
         )

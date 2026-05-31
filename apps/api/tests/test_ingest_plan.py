@@ -29,7 +29,7 @@ def _tc(
     *,
     ats: str = "greenhouse",
     handle: str | None = "handle-x",
-    tier: int = 3,
+    tier: int | None = 3,
 ) -> TargetCompany:
     return TargetCompany(name=name, ats=ats, ats_handle=handle, tier=tier)
 
@@ -168,6 +168,30 @@ async def test_response_shape_is_list_of_dicts(db_session: Any) -> None:
     assert set(entry.keys()) == {"ats", "handle"}
     assert entry["ats"] == "ashby"
     assert entry["handle"] == "onlyone"
+
+
+@_NEEDS_DB
+async def test_excludes_broad_ingest_shells_tier_null(db_session: Any) -> None:
+    """Curated/broad separation (Slice 2): a target_company shell with
+    ``tier=NULL`` (created by the broad-ingest runner) must NOT appear in
+    the curated daily-cron plan — otherwise it would be ingested WITHOUT
+    the title pre-filter, flooding the DB with the non-PM long tail.
+    Curated companies (tier 1-4) still appear."""
+    db_session.add_all(
+        [
+            _tc("CuratedCo", ats="greenhouse", handle="curatedco", tier=1),
+            # Broad-ingest shell — handle set, ingestable ATS, but tier NULL.
+            _tc("BroadShellCo", ats="greenhouse", handle="broadshellco", tier=None),
+        ]
+    )
+    await db_session.commit()
+
+    plan = await _call_plan(db_session)
+    handles = {item["handle"] for item in plan}
+    assert "curatedco" in handles, "curated company (tier set) must be in the plan"
+    assert "broadshellco" not in handles, (
+        "broad-ingest shell (tier NULL) must be excluded from the unfiltered curated daily plan"
+    )
 
 
 @_NEEDS_DB

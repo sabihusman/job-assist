@@ -36,7 +36,16 @@ class TargetCompany(Base):
     # (PR #33); NULL for Greenhouse / Lever / Ashby where the public
     # endpoints don't need extras.
     adapter_config: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
-    tier: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Nullable since the broad-ingestion expansion (Slice 2): curated
+    # companies carry a hand-assigned pedigree tier (1-4), but
+    # broad-discovered shells have NO pedigree — their tier is NULL and
+    # is derived from fit_score at display time (Part D coalesce:
+    # ``tier IF NOT NULL ELSE band(fit_score)``). NULL tier is already
+    # handled everywhere downstream: ``score_tier(None)→50``,
+    # ``postings_query`` sorts ``tier NULLS LAST``, and the read
+    # endpoint already emits ``tier=None`` for postings with no matched
+    # company — so a matched-company-with-NULL-tier renders identically.
+    tier: Mapped[int | None] = mapped_column(Integer, nullable=True)
     role_filter: Mapped[str | None] = mapped_column(String(50), nullable=True)
     domain: Mapped[str | None] = mapped_column(String, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
