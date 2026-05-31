@@ -240,6 +240,42 @@ def score_tier(tier: int | None) -> int:
     return 50
 
 
+def display_tier(company_tier: int | None, fit_score: int | None) -> int | None:
+    """Coalesce a posting's DISPLAY tier (Slice 3, Part D Option 1).
+
+    Curated companies carry a hand-assigned pedigree tier (1-4) — that
+    always wins. Broad-discovered shells have ``tier=NULL``; for them
+    the display tier is DERIVED from the posting's ``fit_score`` so the
+    UI shows a meaningful chip instead of defaulting to T4.
+
+    This is **display-only** — it does NOT feed scoring. ``score_tier``
+    still maps NULL→50 as the scoring input; this function only decides
+    which tier badge the operator sees. Inverse of ``score_tier``'s
+    bands:
+
+        fit_score 80-100 -> tier 1
+                  60-79  -> tier 2
+                  40-59  -> tier 3
+                  <40    -> tier 4
+        NULL score       -> None (nothing to derive from)
+
+    Returns the company tier when set; else the score-derived band; else
+    None (only when both company_tier AND fit_score are NULL — a posting
+    at a shell the score sweep hasn't visited yet).
+    """
+    if company_tier is not None:
+        return company_tier
+    if fit_score is None:
+        return None
+    if fit_score >= 80:
+        return 1
+    if fit_score >= 60:
+        return 2
+    if fit_score >= 40:
+        return 3
+    return 4
+
+
 def _location_strings(locations_normalized: Any) -> list[str]:
     """Extract a flat list of strings to compare against geo_whitelist.
 

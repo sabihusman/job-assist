@@ -1956,6 +1956,7 @@ async def list_postings(
 
     from job_assist.db.models import JobPosting, PostingAction, PostingSource, TargetCompany
     from job_assist.services.postings_query import PostingsViewSpec, build_view_parts
+    from job_assist.services.scoring import display_tier
 
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="limit must be 1..100")
@@ -2077,7 +2078,10 @@ async def list_postings(
                     "name": tc.name if tc is not None else jp.canonical_company_name,
                     "domain": tc.domain if tc is not None else None,
                     "description": tc.description if tc is not None else None,
-                    "tier": tc.tier if tc is not None else None,
+                    # Slice 3: display tier coalesces company pedigree
+                    # tier with the score-derived band for broad shells
+                    # (tier NULL). Display-only — scoring is unchanged.
+                    "tier": display_tier(tc.tier if tc is not None else None, jp.fit_score),
                 },
                 "role": {
                     "title": jp.normalized_title,
@@ -2279,6 +2283,7 @@ async def get_posting(
         TargetCompany,
     )
     from job_assist.services.posting_actions import latest_action_lateral
+    from job_assist.services.scoring import display_tier
 
     ps_alias = aliased(PostingSource)
     recent_ps = (
@@ -2386,7 +2391,9 @@ async def get_posting(
             "name": tc.name if tc is not None else jp.canonical_company_name,
             "domain": tc.domain if tc is not None else None,
             "description": tc.description if tc is not None else None,
-            "tier": tc.tier if tc is not None else None,
+            # Slice 3: display tier coalesces pedigree tier with the
+            # score-derived band for broad shells. Display-only.
+            "tier": display_tier(tc.tier if tc is not None else None, jp.fit_score),
         },
         "role": {
             "title": jp.normalized_title,
@@ -2714,34 +2721,43 @@ async def seed_discovered_handles_endpoint(
 @app.post("/admin/broad-ingest/run", tags=["admin"])
 async def broad_ingest_run(
     db: DbSession,
-    limit: int = 50,
+    limit: int = 100,
+    weekly_cap: int = 100,
 ) -> dict[str, Any]:
-    """Run the bounded broad-ingest trial (Slice 2).
+    """Run broad ingestion, bounded by ``limit`` handles + the weekly cap.
 
-    Sweeps up to ``limit`` active ``discovered_handle`` rows, ingesting
-    each with ``apply_title_prefilter=True`` (PR #96) so only
-    PM-cluster titles enter the DB. Creates a thin ``target_company``
-    shell per handle. Maintains per-handle lifecycle counters
-    (``last_ingested_at``, ``consecutive_empty_count``, auto-deactivate
-    after 3 empties).
+    Sweeps active ``discovered_handle`` rows (rotation order:
+    least-recently-ingested first), ingesting each with
+    ``apply_title_prefilter=True`` (PR #96) so only PM-cluster titles
+    enter the DB. Creates a thin ``target_company`` shell per handle.
+    Maintains per-handle lifecycle counters (``last_ingested_at``,
+    ``consecutive_empty_count``; auto-deactivate after 2 consecutive
+    404s or 5 consecutive empty pulls).
 
-    Long-running on the Gemini-free path: ~50 handles, an HTTP fetch
-    each, sequential. No LLM calls at ingest (role_family is the regex
-    heuristic; the classifier sweep stays opt-in). Returns the
-    aggregate + per-handle breakdown so the trial's hit rate is
-    measurable.
+    **Weekly cap (Slice 3)** — the load-bearing bound. Once
+    ``weekly_cap`` qualified (80+ fit_score) broad roles are banked in
+    the current ISO week, the runner STOPS for the week: a no-op at the
+    top if already met, or a clean stop between boards once reached. The
+    cap counts DISTINCT broad-shell postings by ``first_seen_at`` this
+    week, so re-pulls never re-count and the week resets automatically
+    on Monday 00:00 UTC. One board may overshoot the cap slightly
+    (stop-once-reached, not exactly-N).
 
-    ``limit`` is the trial's safety bound — there is NO weekly
-    qualified-row cap yet (Slice 3).
+    With the cap, broad volume is self-limiting — a daily cron can call
+    this against thousands of handles and it banks toward the cap then
+    idles, no fan-out needed. No Gemini at ingest (role_family is the
+    regex heuristic; classifier sweep stays opt-in).
 
     TODO: add authentication before exposing publicly. Dev-mode only.
     """
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=422, detail="limit must be 1..500")
+    if weekly_cap < 1 or weekly_cap > 10000:
+        raise HTTPException(status_code=422, detail="weekly_cap must be 1..10000")
 
     from job_assist.services.broad_ingest import run_broad_ingest
 
-    report = await run_broad_ingest(db, limit=limit)
+    report = await run_broad_ingest(db, limit=limit, weekly_cap=weekly_cap)
     return report.model_dump(mode="json")
 
 
