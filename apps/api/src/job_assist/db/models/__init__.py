@@ -3,6 +3,7 @@
 from job_assist.db.models.application_state import ApplicationState
 from job_assist.db.models.closed_channel import ClosedChannel
 from job_assist.db.models.contact import Contact
+from job_assist.db.models.discovered_handle import DiscoveredHandle
 from job_assist.db.models.division import Division
 from job_assist.db.models.ingest_run import IngestRun
 from job_assist.db.models.job_posting import JobPosting
@@ -18,6 +19,7 @@ __all__ = [
     "ApplicationState",
     "ClosedChannel",
     "Contact",
+    "DiscoveredHandle",
     "Division",
     "IngestRun",
     "JobPosting",

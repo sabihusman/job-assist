@@ -2012,6 +2012,103 @@
         }
       }
     },
+    "/admin/discovered-handles/seed": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Seed Discovered Handles Endpoint",
+        "description": "Seed ``discovered_handle`` rows from a JSON body.\n\nBody shape: ``[{\"ats\": \"greenhouse\", \"handle\": \"stripe\"}, ...]``.\nIdempotent \u2014 a pair already present is skipped (its lifecycle\ncounters survive a re-seed). Mirrors the hand-seed list in\n``scripts/discover_handles.py`` so the operator can push the trial\nset to production without a DB round-trip::\n\n    curl -X POST -H 'Content-Type: application/json' \\\n         -d '[{\"ats\":\"greenhouse\",\"handle\":\"stripe\"}, ...]' \\\n         https://<host>/admin/discovered-handles/seed\n\nTODO: add authentication before exposing publicly. Dev-mode only.",
+        "operationId": "seed_discovered_handles_endpoint_admin_discovered_handles_seed_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array",
+                "title": "Rows"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "type": "object",
+                  "title": "Response Seed Discovered Handles Endpoint Admin Discovered Handles Seed Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/broad-ingest/run": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Broad Ingest Run",
+        "description": "Run the bounded broad-ingest trial (Slice 2).\n\nSweeps up to ``limit`` active ``discovered_handle`` rows, ingesting\neach with ``apply_title_prefilter=True`` (PR #96) so only\nPM-cluster titles enter the DB. Creates a thin ``target_company``\nshell per handle. Maintains per-handle lifecycle counters\n(``last_ingested_at``, ``consecutive_empty_count``, auto-deactivate\nafter 3 empties).\n\nLong-running on the Gemini-free path: ~50 handles, an HTTP fetch\neach, sequential. No LLM calls at ingest (role_family is the regex\nheuristic; the classifier sweep stays opt-in). Returns the\naggregate + per-handle breakdown so the trial's hit rate is\nmeasurable.\n\n``limit`` is the trial's safety bound \u2014 there is NO weekly\nqualified-row cap yet (Slice 3).\n\nTODO: add authentication before exposing publicly. Dev-mode only.",
+        "operationId": "broad_ingest_run_admin_broad_ingest_run_post",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Broad Ingest Run Admin Broad Ingest Run Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/outcomes/stats": {
       "get": {
         "tags": [
