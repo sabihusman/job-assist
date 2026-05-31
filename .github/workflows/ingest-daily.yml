@@ -67,4 +67,9 @@ jobs:
         run: |
           resp=$(curl -fsS --max-time 60 -X POST "$API_URL/admin/postings/mark-stale")
           echo "$resp"
-          echo "$resp" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(f"::notice::marked {d[\"marked_stale\"]} postings stale")'
+          # NB: keep single-quote keys (``d['marked_stale']``) inside the
+          # python ``-c`` string so the surrounding single quotes don't
+          # need escaping. The earlier ``\"`` form silently broke under
+          # YAML→shell→python triple-escaping — python saw ``\"`` as a
+          # line-continuation backslash and crashed at the f-string.
+          echo "$resp" | python3 -c "import json, sys; d = json.load(sys.stdin); print(f\"::notice::marked {d['marked_stale']} postings stale\")"
