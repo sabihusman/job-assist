@@ -119,13 +119,11 @@ class Adapter(Protocol):
     # closes deterministically. Declaring the protocol methods lets
     # call sites typed against ``Adapter`` (the dispatch in ``main.py``
     # and the broad-ingest runner) use ``async with`` under mypy.
-    async def __aenter__(self) -> Adapter:
-        ...
+    async def __aenter__(self) -> Adapter: ...
 
     async def __aexit__(
         self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
-    ) -> None:
-        ...
+    ) -> None: ...
