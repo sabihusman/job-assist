@@ -55,7 +55,7 @@
     "/admin/ingest/plan": {
       "get": {
         "summary": "Get Ingest Plan",
-        "description": "List ``(ats, handle)`` pairs the daily cron should ingest.\n\nFilters to rows where:\n  * ``ats`` is one of the three currently-supported adapters\n  * ``ats_handle IS NOT NULL`` (we can't ingest without a handle)\n  * No active ``closed_channel`` row exists for the target_company\n    (``unsealed_at IS NULL`` denotes \"currently sealed\")\n\nOrdered by ``tier ASC, name ASC`` so Tier-1 companies ingest first\nand the most-important data lands even if later runs in the same\ncron invocation fail.\n\nSchema note: spec sketched ``target_company.is_closed_channel`` as a\nboolean column. Closed-channel state already lives in its own table\n(single source of truth, with an ``unsealed_at`` audit field) \u2014\ndenormalising it onto ``target_company`` would create drift between\ntwo stores. Same pattern as PR #23's hard-rule filter.",
+        "description": "List ``(ats, handle)`` pairs the daily *curated* cron should ingest.\n\nFilters to rows where:\n  * ``ats`` is one of the three currently-supported adapters\n  * ``ats_handle IS NOT NULL`` (we can't ingest without a handle)\n  * ``tier IS NOT NULL`` \u2014 the curated/broad separation (Slice 2).\n    Curated companies carry a hand-assigned pedigree tier (1-4);\n    broad-discovered shells (``services/broad_ingest.py``) have\n    ``tier=NULL``. The daily cron ingests ONLY curated companies\n    WITHOUT the title pre-filter; broad shells are swept separately\n    by ``POST /admin/broad-ingest/run`` WITH the filter. Omitting\n    this clause would pull the broad shells into the unfiltered\n    daily cron, flooding the DB with the non-PM long tail this\n    whole effort exists to avoid.\n  * No active ``closed_channel`` row exists for the target_company\n    (``unsealed_at IS NULL`` denotes \"currently sealed\")\n\nOrdered by ``tier ASC, name ASC`` so Tier-1 companies ingest first\nand the most-important data lands even if later runs in the same\ncron invocation fail.\n\nSchema note: spec sketched ``target_company.is_closed_channel`` as a\nboolean column. Closed-channel state already lives in its own table\n(single source of truth, with an ``unsealed_at`` audit field) \u2014\ndenormalising it onto ``target_company`` would create drift between\ntwo stores. Same pattern as PR #23's hard-rule filter.",
         "operationId": "get_ingest_plan_admin_ingest_plan_get",
         "responses": {
           "200": {
@@ -2005,6 +2005,103 @@
                   },
                   "type": "object",
                   "title": "Response Cron Status Admin Cron Status Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/discovered-handles/seed": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Seed Discovered Handles Endpoint",
+        "description": "Seed ``discovered_handle`` rows from a JSON body.\n\nBody shape: ``[{\"ats\": \"greenhouse\", \"handle\": \"stripe\"}, ...]``.\nIdempotent \u2014 a pair already present is skipped (its lifecycle\ncounters survive a re-seed). Mirrors the hand-seed list in\n``scripts/discover_handles.py`` so the operator can push the trial\nset to production without a DB round-trip::\n\n    curl -X POST -H 'Content-Type: application/json' \\\n         -d '[{\"ats\":\"greenhouse\",\"handle\":\"stripe\"}, ...]' \\\n         https://<host>/admin/discovered-handles/seed\n\nTODO: add authentication before exposing publicly. Dev-mode only.",
+        "operationId": "seed_discovered_handles_endpoint_admin_discovered_handles_seed_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array",
+                "title": "Rows"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "type": "object",
+                  "title": "Response Seed Discovered Handles Endpoint Admin Discovered Handles Seed Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/broad-ingest/run": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Broad Ingest Run",
+        "description": "Run the bounded broad-ingest trial (Slice 2).\n\nSweeps up to ``limit`` active ``discovered_handle`` rows, ingesting\neach with ``apply_title_prefilter=True`` (PR #96) so only\nPM-cluster titles enter the DB. Creates a thin ``target_company``\nshell per handle. Maintains per-handle lifecycle counters\n(``last_ingested_at``, ``consecutive_empty_count``, auto-deactivate\nafter 3 empties).\n\nLong-running on the Gemini-free path: ~50 handles, an HTTP fetch\neach, sequential. No LLM calls at ingest (role_family is the regex\nheuristic; the classifier sweep stays opt-in). Returns the\naggregate + per-handle breakdown so the trial's hit rate is\nmeasurable.\n\n``limit`` is the trial's safety bound \u2014 there is NO weekly\nqualified-row cap yet (Slice 3).\n\nTODO: add authentication before exposing publicly. Dev-mode only.",
+        "operationId": "broad_ingest_run_admin_broad_ingest_run_post",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Broad Ingest Run Admin Broad Ingest Run Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }

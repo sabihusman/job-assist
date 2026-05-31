@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from types import TracebackType
 from typing import Any, ClassVar, Protocol
 
 from pydantic import BaseModel
@@ -112,3 +113,17 @@ class Adapter(Protocol):
         we currently support uses that key in some shape.
         """
         ...
+
+    # Every concrete adapter owns an ``httpx.AsyncClient`` and is used as
+    # an async context manager (``async with adapter:``) so the client
+    # closes deterministically. Declaring the protocol methods lets
+    # call sites typed against ``Adapter`` (the dispatch in ``main.py``
+    # and the broad-ingest runner) use ``async with`` under mypy.
+    async def __aenter__(self) -> Adapter: ...
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None: ...

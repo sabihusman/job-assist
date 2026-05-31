@@ -17,7 +17,9 @@ class TargetCompanyRead(BaseModel):
     name: str
     ats: ATS
     ats_handle: str | None
-    tier: int
+    # Nullable since broad-ingestion (Slice 2): broad-discovered shells
+    # have no pedigree tier; it's derived from fit_score at display time.
+    tier: int | None
     role_filter: str | None
     domain: str | None
     notes: str | None

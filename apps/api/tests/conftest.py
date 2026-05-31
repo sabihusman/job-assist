@@ -93,7 +93,7 @@ async def db_session(_apply_migrations: None) -> AsyncGenerator[AsyncSession, No
             sa.text(
                 "TRUNCATE posting_action, posting_source, triage_result, "
                 "outcome_event, application_state, job_posting, ingest_run, "
-                "closed_channel, target_company, contact CASCADE"
+                "closed_channel, target_company, contact, discovered_handle CASCADE"
             )
         )
         await session.commit()

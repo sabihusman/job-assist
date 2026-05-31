@@ -86,11 +86,20 @@ _INGESTABLE_ATS = ("greenhouse", "lever", "ashby", "workday", "icims")
 
 @app.get("/admin/ingest/plan")
 async def get_ingest_plan(db: DbSession) -> list[dict[str, str]]:
-    """List ``(ats, handle)`` pairs the daily cron should ingest.
+    """List ``(ats, handle)`` pairs the daily *curated* cron should ingest.
 
     Filters to rows where:
       * ``ats`` is one of the three currently-supported adapters
       * ``ats_handle IS NOT NULL`` (we can't ingest without a handle)
+      * ``tier IS NOT NULL`` — the curated/broad separation (Slice 2).
+        Curated companies carry a hand-assigned pedigree tier (1-4);
+        broad-discovered shells (``services/broad_ingest.py``) have
+        ``tier=NULL``. The daily cron ingests ONLY curated companies
+        WITHOUT the title pre-filter; broad shells are swept separately
+        by ``POST /admin/broad-ingest/run`` WITH the filter. Omitting
+        this clause would pull the broad shells into the unfiltered
+        daily cron, flooding the DB with the non-PM long tail this
+        whole effort exists to avoid.
       * No active ``closed_channel`` row exists for the target_company
         (``unsealed_at IS NULL`` denotes "currently sealed")
 
@@ -121,6 +130,8 @@ async def get_ingest_plan(db: DbSession) -> list[dict[str, str]]:
             select(TargetCompany.ats, TargetCompany.ats_handle)
             .where(TargetCompany.ats.in_(_INGESTABLE_ATS))
             .where(TargetCompany.ats_handle.isnot(None))
+            # Curated only — exclude broad-ingest shells (tier IS NULL).
+            .where(TargetCompany.tier.isnot(None))
             .where(~active_closed)
             .order_by(TargetCompany.tier.asc(), TargetCompany.name.asc())
         )
@@ -2659,6 +2670,79 @@ async def get_stats_funnel(
 async def cron_status() -> dict[str, str]:
     """Cron health-check endpoint.  Returns ok when the API is reachable."""
     return {"status": "ok"}
+
+
+# ── Broad ingestion (Slice 2: handle discovery + bounded trial) ──────────────
+
+
+@app.post("/admin/discovered-handles/seed", tags=["admin"])
+async def seed_discovered_handles_endpoint(
+    rows: list[dict[str, Any]],
+    db: DbSession,
+) -> dict[str, int]:
+    """Seed ``discovered_handle`` rows from a JSON body.
+
+    Body shape: ``[{"ats": "greenhouse", "handle": "stripe"}, ...]``.
+    Idempotent — a pair already present is skipped (its lifecycle
+    counters survive a re-seed). Mirrors the hand-seed list in
+    ``scripts/discover_handles.py`` so the operator can push the trial
+    set to production without a DB round-trip::
+
+        curl -X POST -H 'Content-Type: application/json' \\
+             -d '[{"ats":"greenhouse","handle":"stripe"}, ...]' \\
+             https://<host>/admin/discovered-handles/seed
+
+    TODO: add authentication before exposing publicly. Dev-mode only.
+    """
+    from job_assist.services.broad_ingest import seed_discovered_handles
+
+    pairs: list[tuple[str, str]] = []
+    for row in rows:
+        ats = row.get("ats")
+        handle = row.get("handle")
+        if not isinstance(ats, str) or not isinstance(handle, str) or not ats or not handle:
+            raise HTTPException(
+                status_code=400,
+                detail=f"each row needs non-empty string 'ats' and 'handle'; got {row!r}",
+            )
+        pairs.append((ats, handle))
+
+    inserted, skipped = await seed_discovered_handles(db, pairs)
+    return {"inserted": inserted, "skipped": skipped, "total": len(pairs)}
+
+
+@app.post("/admin/broad-ingest/run", tags=["admin"])
+async def broad_ingest_run(
+    db: DbSession,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Run the bounded broad-ingest trial (Slice 2).
+
+    Sweeps up to ``limit`` active ``discovered_handle`` rows, ingesting
+    each with ``apply_title_prefilter=True`` (PR #96) so only
+    PM-cluster titles enter the DB. Creates a thin ``target_company``
+    shell per handle. Maintains per-handle lifecycle counters
+    (``last_ingested_at``, ``consecutive_empty_count``, auto-deactivate
+    after 3 empties).
+
+    Long-running on the Gemini-free path: ~50 handles, an HTTP fetch
+    each, sequential. No LLM calls at ingest (role_family is the regex
+    heuristic; the classifier sweep stays opt-in). Returns the
+    aggregate + per-handle breakdown so the trial's hit rate is
+    measurable.
+
+    ``limit`` is the trial's safety bound — there is NO weekly
+    qualified-row cap yet (Slice 3).
+
+    TODO: add authentication before exposing publicly. Dev-mode only.
+    """
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=422, detail="limit must be 1..500")
+
+    from job_assist.services.broad_ingest import run_broad_ingest
+
+    report = await run_broad_ingest(db, limit=limit)
+    return report.model_dump(mode="json")
 
 
 # ── Outcome event diagnostics (feat/admin-outcomes-stats) ────────────────────
