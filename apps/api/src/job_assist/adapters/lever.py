@@ -143,6 +143,14 @@ class LeverAdapter:
             if isinstance(job, dict) and job.get("id")
         ]
 
+    def peek_title(self, raw: RawPosting) -> str:
+        """Cheap title extraction for the pre-filter — Lever stores the
+        title under ``text``, NOT ``title`` (which is empty on most
+        Lever payloads). Mirrors the ``normalize()`` extraction so the
+        filter never disagrees with the normalized title."""
+        job = raw.raw_payload
+        return str(job.get("text") or "")
+
     def normalize(self, raw: RawPosting, canonical_company_name: str) -> NormalizedPosting:
         """Convert a single Lever posting object to NormalizedPosting."""
         job = raw.raw_payload

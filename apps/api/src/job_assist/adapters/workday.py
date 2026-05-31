@@ -376,6 +376,23 @@ class WorkdayAdapter:
             offset += len(page)
         return out
 
+    def peek_title(self, raw: RawPosting) -> str:
+        """Cheap title extraction for the pre-filter — Workday merges a
+        list payload + a detail payload at fetch time, with the
+        authoritative title under ``detail.jobPostingInfo.title`` and a
+        fallback at ``list.title``. Mirrors the same lookup order as
+        ``normalize()`` so the filter never disagrees."""
+        payload = raw.raw_payload
+        if not isinstance(payload, dict):
+            return ""
+        job_any = payload.get("list")
+        detail_any = payload.get("detail")
+        job: dict[str, Any] = job_any if isinstance(job_any, dict) else {}
+        detail: dict[str, Any] = detail_any if isinstance(detail_any, dict) else {}
+        info_any = detail.get("jobPostingInfo")
+        info: dict[str, Any] = info_any if isinstance(info_any, dict) else {}
+        return str(info.get("title") or job.get("title") or "")
+
     def normalize(self, raw: RawPosting, canonical_company_name: str) -> NormalizedPosting:
         """Map a merged Workday list + detail payload to NormalizedPosting."""
         payload = raw.raw_payload

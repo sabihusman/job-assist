@@ -125,6 +125,14 @@ class GreenhouseAdapter:
             for job in data.get("jobs", [])
         ]
 
+    def peek_title(self, raw: RawPosting) -> str:
+        """Cheap title extraction for the pre-filter — matches ``normalize()``
+        but skips every other field. Same fallback (empty string) so a
+        malformed payload returns ``""`` and falls through the filter
+        rather than raising."""
+        job = raw.raw_payload
+        return str(job.get("title") or "")
+
     def normalize(self, raw: RawPosting, canonical_company_name: str) -> NormalizedPosting:
         """Convert a single Greenhouse job object to NormalizedPosting."""
         job = raw.raw_payload
