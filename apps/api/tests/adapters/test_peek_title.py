@@ -48,9 +48,9 @@ def _mock_client() -> httpx.AsyncClient:
 
 
 def test_greenhouse_peek_title_extracts_title_key() -> None:
-    assert GreenhouseAdapter(client=_mock_client()).peek_title(_raw({"title": "Senior Product Manager"})) == (
-        "Senior Product Manager"
-    )
+    assert GreenhouseAdapter(client=_mock_client()).peek_title(
+        _raw({"title": "Senior Product Manager"})
+    ) == ("Senior Product Manager")
 
 
 def test_greenhouse_peek_title_missing_returns_empty() -> None:
@@ -64,15 +64,17 @@ def test_lever_peek_title_extracts_text_key() -> None:
     """The load-bearing one — Lever's title key is ``text``, not
     ``title``. A naive default implementation would silently miss
     every Lever posting."""
-    assert LeverAdapter(client=_mock_client()).peek_title(_raw({"text": "Group Product Manager"})) == (
-        "Group Product Manager"
-    )
+    assert LeverAdapter(client=_mock_client()).peek_title(
+        _raw({"text": "Group Product Manager"})
+    ) == ("Group Product Manager")
 
 
 def test_lever_peek_title_ignores_title_key_uses_text() -> None:
     """If Lever ever starts populating both, ``text`` still wins —
     matching ``normalize()``'s extraction."""
-    result = LeverAdapter(client=_mock_client()).peek_title(_raw({"text": "Senior PM", "title": "Wrong"}))
+    result = LeverAdapter(client=_mock_client()).peek_title(
+        _raw({"text": "Senior PM", "title": "Wrong"})
+    )
     assert result == "Senior PM"
 
 
@@ -80,9 +82,9 @@ def test_lever_peek_title_ignores_title_key_uses_text() -> None:
 
 
 def test_ashby_peek_title_extracts_title_key() -> None:
-    assert AshbyAdapter(client=_mock_client()).peek_title(_raw({"title": "Staff Product Manager"})) == (
-        "Staff Product Manager"
-    )
+    assert AshbyAdapter(client=_mock_client()).peek_title(
+        _raw({"title": "Staff Product Manager"})
+    ) == ("Staff Product Manager")
 
 
 # ── Workday: merged ``{list, detail}`` payload — detail wins ───────────────
@@ -95,7 +97,9 @@ def test_workday_peek_title_prefers_detail_jobPostingInfo_title() -> None:
         "list": {"title": "Stale List Title"},
         "detail": {"jobPostingInfo": {"title": "Senior Product Manager"}},
     }
-    assert WorkdayAdapter(client=_mock_client()).peek_title(_raw(payload)) == "Senior Product Manager"
+    assert (
+        WorkdayAdapter(client=_mock_client()).peek_title(_raw(payload)) == "Senior Product Manager"
+    )
 
 
 def test_workday_peek_title_falls_back_to_list_title() -> None:
@@ -122,7 +126,9 @@ def test_icims_peek_title_prefers_jsonld_title() -> None:
         "jsonld": {"title": "Principal Product Manager"},
         "listing_row": {"raw_title": "Stale Listing Title"},
     }
-    assert ICIMSAdapter(client=_mock_client()).peek_title(_raw(payload)) == "Principal Product Manager"
+    assert (
+        ICIMSAdapter(client=_mock_client()).peek_title(_raw(payload)) == "Principal Product Manager"
+    )
 
 
 def test_icims_peek_title_falls_back_to_listing_raw_title() -> None:
