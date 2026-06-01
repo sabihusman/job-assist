@@ -2119,6 +2119,98 @@
         }
       }
     },
+    "/admin/resume-versions": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Create Resume Version",
+        "description": "Register a tailored resume variant (e.g. \"betterment-trust-v1\").\n\nThe operator creates a version, then tags it onto an application via\n``resume_version_id`` on ``POST /postings/{id}/state``. ``label`` is\nUNIQUE \u2014 a duplicate label returns 409.\n\nTODO: add authentication before exposing publicly. Dev-mode only.",
+        "operationId": "create_resume_version_admin_resume_versions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResumeVersionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Create Resume Version Admin Resume Versions Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/resume-versions": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "List Resume Versions",
+        "description": "List all resume versions, newest first. Feeds the (future) tag picker.",
+        "operationId": "list_resume_versions_resume_versions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Resume Versions Resume Versions Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/resume-analytics": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Get Resume Analytics",
+        "description": "Resume-version \u2192 outcome analytics (company-level).\n\nReturns ``by_version`` (applications + companies-rejected/confirmed\nper version), ``funnel`` (per version x outcome_type, how deep the\npipeline went), and ``ambiguous_companies`` (companies that received\n>1 resume version \u2014 outcome attribution there is ambiguous because\n``outcome_event`` links at company level, not posting level). See\n``services/resume_analytics.py`` for the attribution caveat.\n\nTODO: add authentication before exposing publicly. Dev-mode only.",
+        "operationId": "get_resume_analytics_admin_resume_analytics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Resume Analytics Admin Resume Analytics Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/outcomes/stats": {
       "get": {
         "tags": [
@@ -3110,6 +3202,18 @@
               }
             ],
             "title": "Notes"
+          },
+          "resume_version_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resume Version Id"
           }
         },
         "type": "object",
@@ -3198,6 +3302,53 @@
         ],
         "title": "ReclassifySweepResponse",
         "description": "Response body for POST /admin/reclassify/sweep."
+      },
+      "ResumeVersionCreate": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "angle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Angle"
+          },
+          "snapshot_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Text"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "title": "ResumeVersionCreate",
+        "description": "Body for ``POST /admin/resume-versions``."
       },
       "ScoreDistribution": {
         "properties": {

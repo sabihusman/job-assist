@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 describe('Sidebar', () => {
-  test('renders all primary nav items (9 entries after PR #51)', () => {
+  test('renders all primary nav items (10 entries after resume-version-tracking)', () => {
     renderWithProviders(<Sidebar />);
     const nav = screen.getByRole('navigation', { name: /^primary$/i });
     const links = within(nav).getAllByRole('link');
@@ -34,9 +34,11 @@ describe('Sidebar', () => {
     expect(labels.some((l) => l.includes('Companies'))).toBe(true);
     // PR #51: Contacts slot after Companies.
     expect(labels.some((l) => l.includes('Contacts'))).toBe(true);
+    // feat/resume-version-tracking: Resumes slot before Stats.
+    expect(labels.some((l) => l.includes('Resumes'))).toBe(true);
     expect(labels.some((l) => l.includes('Stats'))).toBe(true);
     expect(labels.some((l) => l.includes('Settings'))).toBe(true);
-    expect(links).toHaveLength(9);
+    expect(links).toHaveLength(10);
   });
 
   test('Contacts nav link points at /contacts', () => {

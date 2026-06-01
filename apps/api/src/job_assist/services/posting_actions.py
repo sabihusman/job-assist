@@ -110,14 +110,24 @@ async def record_action(
     reason: ActionReason | None = None,
     snooze_until: datetime | None = None,
     notes: str | None = None,
+    resume_version_id: uuid.UUID | None = None,
 ) -> PostingAction:
     """Insert one ``posting_action`` row.
+
+    ``resume_version_id`` (feat/resume-version-tracking) tags which
+    tailored resume was sent with an application. It's only valid on an
+    ``applied`` action; supplying it for any other action_type raises
+    ValueError (mirrors the DB CHECK). The FK existence is enforced by
+    the DB (a bad id surfaces as an IntegrityError); we validate the
+    cross-field rule here for a clean 422.
 
     Raises:
         ValueError: any cross-field rule failed (becomes HTTP 422).
         LookupError: ``job_posting_id`` doesn't exist (becomes HTTP 404).
     """
     _validate(action_type, reason, snooze_until)
+    if resume_version_id is not None and action_type != ActionType.applied:
+        raise ValueError("resume_version_id is only valid with action_type='applied'")
     await _assert_posting_exists(session, job_posting_id)
 
     row = PostingAction(
@@ -126,6 +136,7 @@ async def record_action(
         reason=reason.value if reason else None,
         snooze_until=snooze_until,
         notes=notes,
+        resume_version_id=resume_version_id,
     )
     session.add(row)
     await session.commit()
