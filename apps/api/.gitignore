@@ -1,0 +1,3 @@
+
+# Slice 3b: CDX scan output files are operator-review artifacts, not committed.
+data/discovered_handles_*.json
