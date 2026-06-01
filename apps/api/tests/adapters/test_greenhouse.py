@@ -77,6 +77,21 @@ class TestNormalizeSeniorityRoleFamily:
             ("Staff PM, Growth", "lead_pm", "product_management"),
             # Principal
             ("Principal Product Manager", "principal_pm", "product_management"),
+            # Group / Head / Director / VP — leveled up so the seniority
+            # hard-filter catches them (feat/seniority-parser-precision).
+            ("Group Product Manager, Credit", "lead_pm", "product_management"),
+            ("Group PM, Payments", "lead_pm", "product_management"),
+            # "head of product" → no "product manager/management" substring,
+            # so role_family is ``other``; seniority still levels to principal.
+            ("Head of Product", "principal_pm", "other"),
+            ("Director of Product Management", "principal_pm", "product_management"),
+            ("VP, Product Management", "principal_pm", "product_management"),
+            ("Vice President, Product Management", "principal_pm", "product_management"),
+            # Guard: "group" as a TEAM noun (not a level) stays pm.
+            ("Product Manager, Payments Group", "pm", "product_management"),
+            # Guard: "lead generation" is a marketing function, NOT a
+            # seniority level — must not level up to lead_pm.
+            ("Lead Generation Manager", "unknown", "other"),
             # Intern
             ("Product Management Intern", "intern", "product_management"),
             # Product Owner
