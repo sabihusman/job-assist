@@ -135,14 +135,54 @@ def parse_location(
 # ── Seniority / role family heuristics ────────────────────────────────────────
 
 
+def _is_product_lead(t: str) -> bool:
+    """True when the title uses ``lead`` as a SENIORITY level, not as part
+    of a non-level phrase.
+
+    ``\\blead\\b`` catches "product lead" / "lead product manager"
+    (senior) but also "lead generation" (a marketing function, not a
+    level). Exclude the lead-gen family so a "lead generation manager"
+    isn't mislabeled senior — a pre-existing false-positive fixed here
+    while leveling the parser.
+    """
+    if not re.search(r"\blead\b", t):
+        return False
+    # "lead generation" / "lead gen" = marketing function, not a level.
+    return not re.search(r"\blead\s+gen", t)
+
+
 def detect_seniority(normalized_title: str) -> str:
-    """Derive SeniorityLevel enum value from a normalised title string."""
+    """Derive SeniorityLevel enum value from a normalised title string.
+
+    Senior-IC / leadership titles are leveled UP so the operator's
+    seniority hard-filter (PR #43) can act on them. The parser used to
+    under-level "Group Product Manager", "Head of Product",
+    "Director/VP Product" into ``pm`` / ``unknown``, where the filter
+    couldn't catch them — they then surfaced in Best Fit as landable
+    when they aren't (career-changer altitude correction).
+
+    Token guards avoid over-leveling (false friends):
+      * ``group`` only when adjacent to product/pm ("group product
+        manager"), NOT "product manager, payments group" (group = team).
+      * ``head`` only in "head of product", NOT "headphones"/"headcount".
+      * ``director`` / ``vp`` are word-bounded (won't hit "directory").
+      * ``lead`` excludes "lead generation" (see ``_is_product_lead``).
+    """
     t = normalized_title
     if "intern" in t:
         return "intern"
-    if "principal" in t:
+    # Exec / leadership → principal (the top bucket we have).
+    if (
+        "principal" in t
+        or re.search(r"\bdirector\b", t)
+        or re.search(r"\bvp\b", t)
+        or "vice president" in t
+        or "head of product" in t
+    ):
         return "principal_pm"
-    if "staff" in t or re.search(r"\blead\b", t):
+    # Senior IC / manager → lead. "group product"/"group pm" = group as a
+    # LEVEL prefix; staff; product-context lead.
+    if "staff" in t or re.search(r"\bgroup\s+(?:product|pm)\b", t) or _is_product_lead(t):
         return "lead_pm"
     if "senior" in t:
         return "senior_pm"
