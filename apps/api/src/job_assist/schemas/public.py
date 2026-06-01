@@ -258,6 +258,10 @@ class PostingStateRequest(BaseModel):
     reason: ActionReason | None = None
     snooze_until: datetime | None = None
     notes: str | None = None
+    # feat/resume-version-tracking: optional tag for which tailored resume
+    # variant was sent. Only valid with action_type='applied' (the service
+    # + DB CHECK enforce this). NULL/omitted = untagged.
+    resume_version_id: uuid.UUID | None = None
 
 
 # ── PR #30b — stats response shapes ──────────────────────────────────────────

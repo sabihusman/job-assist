@@ -22,6 +22,7 @@ from job_assist.schemas.operator_profile import OperatorProfileUpdate
 from job_assist.schemas.outreach import OutreachMessageCreate
 from job_assist.schemas.public import DEFAULT_SORT, PostingStateRequest, SortKey
 from job_assist.schemas.reclassify import ReclassifySweepRequest, ReclassifySweepResponse
+from job_assist.schemas.resume_version import ResumeVersionCreate
 from job_assist.schemas.score import ScoreSweepRequest, ScoreSweepResponse
 
 logger = structlog.get_logger(__name__)
@@ -2454,6 +2455,7 @@ async def post_posting_state(
             payload.reason,
             payload.snooze_until,
             payload.notes,
+            payload.resume_version_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -2762,6 +2764,80 @@ async def broad_ingest_run(
 
 
 # ── Outcome event diagnostics (feat/admin-outcomes-stats) ────────────────────
+
+
+# ── Resume-version tracking (feat/resume-version-tracking) ───────────────────
+
+
+@app.post("/admin/resume-versions", tags=["admin"])
+async def create_resume_version(
+    payload: ResumeVersionCreate,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Register a tailored resume variant (e.g. "betterment-trust-v1").
+
+    The operator creates a version, then tags it onto an application via
+    ``resume_version_id`` on ``POST /postings/{id}/state``. ``label`` is
+    UNIQUE — a duplicate label returns 409.
+
+    TODO: add authentication before exposing publicly. Dev-mode only.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from job_assist.db.models import ResumeVersion
+    from job_assist.schemas.resume_version import ResumeVersionRead
+
+    row = ResumeVersion(
+        label=payload.label,
+        angle=payload.angle,
+        snapshot_text=payload.snapshot_text,
+        notes=payload.notes,
+    )
+    db.add(row)
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409, detail=f"resume_version label {payload.label!r} already exists"
+        ) from exc
+    await db.refresh(row)
+    return ResumeVersionRead.model_validate(row).model_dump(mode="json")
+
+
+@app.get("/resume-versions", tags=["public"])
+async def list_resume_versions(db: DbSession) -> dict[str, Any]:
+    """List all resume versions, newest first. Feeds the (future) tag picker."""
+    from sqlalchemy import select
+
+    from job_assist.db.models import ResumeVersion
+    from job_assist.schemas.resume_version import ResumeVersionRead
+
+    rows = (
+        (await db.execute(select(ResumeVersion).order_by(ResumeVersion.created_at.desc())))
+        .scalars()
+        .all()
+    )
+    items = [ResumeVersionRead.model_validate(r).model_dump(mode="json") for r in rows]
+    return {"total": len(items), "items": items}
+
+
+@app.get("/admin/resume-analytics", tags=["admin"])
+async def get_resume_analytics(db: DbSession) -> dict[str, Any]:
+    """Resume-version → outcome analytics (company-level).
+
+    Returns ``by_version`` (applications + companies-rejected/confirmed
+    per version), ``funnel`` (per version x outcome_type, how deep the
+    pipeline went), and ``ambiguous_companies`` (companies that received
+    >1 resume version — outcome attribution there is ambiguous because
+    ``outcome_event`` links at company level, not posting level). See
+    ``services/resume_analytics.py`` for the attribution caveat.
+
+    TODO: add authentication before exposing publicly. Dev-mode only.
+    """
+    from job_assist.services.resume_analytics import resume_analytics
+
+    return await resume_analytics(db)
 
 
 @app.get("/admin/outcomes/stats", tags=["admin"])

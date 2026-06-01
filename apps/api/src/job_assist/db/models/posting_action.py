@@ -57,6 +57,15 @@ class PostingAction(Base):
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     snooze_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # feat/resume-version-tracking: optional tag for which tailored resume
+    # variant was sent with this application. Only meaningful on an
+    # ``applied`` row (CHECK below). NULL on every other action type and
+    # on quick applies the operator didn't tag.
+    resume_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("resume_version.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -66,6 +75,11 @@ class PostingAction(Base):
         CheckConstraint(
             "action_type IN ('interested','not_interested','applied','snoozed','reset')",
             name="ck_posting_action_action_type",
+        ),
+        # A resume tag only makes sense on an apply event.
+        CheckConstraint(
+            "resume_version_id IS NULL OR action_type = 'applied'",
+            name="ck_posting_action_resume_only_for_applied",
         ),
         # Reason vocabulary guard (NULL allowed; specific strings otherwise).
         # PR #43 added ``too_senior`` / ``too_junior``.
