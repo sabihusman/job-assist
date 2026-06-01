@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/shared/EmptyState';
 import { CalibrationCard } from '@/components/triage/CalibrationCard';
 import { DetailPanel } from '@/components/triage/DetailPanel';
 import { FilterRow } from '@/components/triage/FilterRow';
+import { ResumeVersionPicker } from '@/components/triage/ResumeVersionPicker';
 import type { TriageCardAction } from '@/components/triage/TriageCard';
 import { TriageList } from '@/components/triage/TriageList';
 import { showErrorToast } from '@/lib/api/error-toast';
@@ -130,9 +131,23 @@ function TriagePageInner() {
     if (hasData && selectedIndex === null) setSelectedIndex(0);
   }, [hasData, selectedIndex]);
 
+  // feat/resume-version-tracking: when the operator applies, intercept
+  // to ask which tailored resume was sent before committing. The picker
+  // overlay pauses the triage keyboard (see ``enabled`` below); on
+  // select/skip it calls ``commitApply``.
+  const [resumePickerCardId, setResumePickerCardId] = useState<string | null>(null);
+
   // Keyboard
   const handleAction = useCallback(
     (postingId: string, action: TriageCardAction) => {
+      // Route applies through the resume picker instead of committing
+      // immediately. Every apply trigger (key 3, TriageCard + DetailPanel
+      // "Applied" buttons) funnels through here, so the picker catches
+      // them all in one place.
+      if (action.kind === 'applied') {
+        setResumePickerCardId(postingId);
+        return;
+      }
       recordAction.mutate(
         {
           postingId,
@@ -170,6 +185,23 @@ function TriagePageInner() {
     [recordAction],
   );
 
+  // Commit an apply once the resume picker resolves (a chosen version id
+  // or null = skip/untagged). Closes the picker; same toast/error path
+  // as ``handleAction``.
+  const commitApply = useCallback(
+    (postingId: string, resumeVersionId: string | null) => {
+      setResumePickerCardId(null);
+      recordAction.mutate(
+        { postingId, action_type: 'applied', resume_version_id: resumeVersionId },
+        {
+          onSuccess: () => toast.success('✓ Applied'),
+          onError: (err) => showErrorToast(err, "Couldn't update posting state — try refreshing"),
+        },
+      );
+    },
+    [recordAction],
+  );
+
   useTriageKeyboard(
     {
       onNext: () =>
@@ -200,7 +232,9 @@ function TriagePageInner() {
       },
       onEscape: () => setSelectedIndex(null),
     },
-    /* enabled */ !recordAction.isPending && reasonPickerCardId === null,
+    /* enabled */ !recordAction.isPending &&
+      reasonPickerCardId === null &&
+      resumePickerCardId === null,
   );
 
   return (
@@ -251,6 +285,33 @@ function TriagePageInner() {
           onAction={handleAction}
         />
       </div>
+
+      {/*
+        Resume-version picker (feat/resume-version-tracking). Shown when
+        any apply trigger (key 3 / Applied buttons) fires; pauses the
+        triage keyboard. Fixed bottom-center so it's reachable regardless
+        of which trigger opened it. Backdrop click = skip (apply
+        untagged).
+      */}
+      {resumePickerCardId !== null && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center pb-10">
+          {/* Backdrop — click anywhere outside the picker = skip (apply
+              untagged). A button so it's keyboard-reachable; Esc also
+              skips via the picker's own listener. */}
+          <button
+            type="button"
+            aria-label="Skip resume tagging"
+            className="absolute inset-0 cursor-default bg-black/20"
+            onClick={() => commitApply(resumePickerCardId, null)}
+          />
+          <div className="relative w-full max-w-md px-4">
+            <ResumeVersionPicker
+              onSelect={(id) => commitApply(resumePickerCardId, id)}
+              onSkip={() => commitApply(resumePickerCardId, null)}
+            />
+          </div>
+        </div>
+      )}
     </AppShell>
   );
 }

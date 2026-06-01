@@ -162,7 +162,39 @@ describe('useRecordAction', () => {
       reason: null,
       snooze_until: null,
       notes: null,
+      // feat/resume-version-tracking: present (null) even when untagged.
+      resume_version_id: null,
     });
+  });
+
+  // feat/resume-version-tracking: the apply flow passes resume_version_id
+  // on the wire when the operator tags a resume in the picker.
+  test('POST body carries resume_version_id when an apply is tagged', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    seedListCache(client, [fakePosting('a')]);
+    postMock.mockResolvedValue({
+      data: {
+        current: 'applied',
+        reason: null,
+        snooze_until: null,
+        current_at: new Date().toISOString(),
+      },
+      error: null,
+      response: new Response(null, { status: 200 }),
+    });
+
+    const { result } = renderHook(() => useRecordAction(), { wrapper: wrap(client) });
+    act(() => {
+      result.current.mutate({
+        postingId: 'a',
+        action_type: 'applied',
+        resume_version_id: 'rv-123',
+      });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const [, opts] = postMock.mock.calls[0] as [string, { body: Record<string, unknown> }];
+    expect(opts.body).toHaveProperty('resume_version_id', 'rv-123');
   });
 
   // ── PR #68 / Bestiary 5.12 cache-collision regression ─────────────────────
@@ -321,6 +353,7 @@ describe('toStateRequestBody', () => {
       reason: null,
       snooze_until: null,
       notes: null,
+      resume_version_id: null,
     });
   });
 
@@ -333,6 +366,7 @@ describe('toStateRequestBody', () => {
       reason: 'wrong_role',
       snooze_until: null,
       notes: null,
+      resume_version_id: null,
     });
   });
 
@@ -350,6 +384,23 @@ describe('toStateRequestBody', () => {
       reason: null,
       snooze_until: '2026-06-01T00:00:00Z',
       notes: 'check back in a week',
+      resume_version_id: null,
+    });
+  });
+
+  test('carries resume_version_id when provided on an applied action', () => {
+    expect(
+      toStateRequestBody({
+        postingId: 'p',
+        action_type: 'applied',
+        resume_version_id: 'rv-9',
+      }),
+    ).toEqual({
+      action_type: 'applied',
+      reason: null,
+      snooze_until: null,
+      notes: null,
+      resume_version_id: 'rv-9',
     });
   });
 });

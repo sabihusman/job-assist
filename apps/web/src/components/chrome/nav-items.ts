@@ -3,6 +3,7 @@ import {
   Ban,
   BarChart3,
   Building2,
+  FileText,
   Inbox,
   KanbanSquare,
   type LucideIcon,
@@ -32,6 +33,9 @@ export type NavItem = {
     // the "who I might talk to" view sits next to "where the postings
     // come from."
     | '/contacts'
+    // feat/resume-version-tracking: resume-version manager + outcome
+    // analytics. Slot before Stats — it's a calibration surface.
+    | '/resumes'
     | '/stats'
     | '/settings';
   label: string;
@@ -53,6 +57,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   // PR #51: outreach contacts list (read-only in this PR). CRUD lands
   // in PR #52; archive button lands in PR #52 with full CRUD.
   { href: '/contacts', label: 'Contacts', icon: Users },
+  { href: '/resumes', label: 'Resumes', icon: FileText },
   { href: '/stats', label: 'Stats', icon: BarChart3 },
   { href: '/settings', label: 'Settings', icon: SettingsIcon },
 ] as const;

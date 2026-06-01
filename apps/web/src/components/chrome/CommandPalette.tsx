@@ -47,6 +47,7 @@ type NavCommand = {
     | '/pipeline'
     | '/companies'
     | '/contacts'
+    | '/resumes'
     | '/stats'
     | '/settings';
   shortcut?: string;
@@ -70,6 +71,7 @@ const COMMANDS: readonly PaletteCommand[] = [
   { type: 'nav', label: 'Go to Pipeline', href: '/pipeline', shortcut: 'G P' },
   { type: 'nav', label: 'Go to Companies', href: '/companies', shortcut: 'G C' },
   { type: 'nav', label: 'Go to Contacts', href: '/contacts' },
+  { type: 'nav', label: 'Go to Resumes', href: '/resumes' },
   { type: 'nav', label: 'Go to Stats', href: '/stats', shortcut: 'G S' },
   // Settings intentionally has no shortcut hint — matches UI_SPEC.md.
   { type: 'nav', label: 'Go to Settings', href: '/settings' },

@@ -128,6 +128,10 @@ export type RecordActionVars = {
   reason?: ActionReason | null;
   snooze_until?: string | null;
   notes?: string | null;
+  // feat/resume-version-tracking: which tailored resume was sent. Only
+  // valid with action_type='applied' (server + DB CHECK enforce). Set by
+  // the apply-flow resume picker; null/omitted = untagged.
+  resume_version_id?: string | null;
 };
 
 /**
@@ -158,6 +162,7 @@ export function toStateRequestBody(
   reason: ActionReason | null;
   snooze_until: string | null;
   notes: string | null;
+  resume_version_id: string | null;
 } {
   const action_type =
     'action_type' in vars && vars.action_type
@@ -166,7 +171,8 @@ export function toStateRequestBody(
   const reason = (vars as { reason?: ActionReason | null }).reason ?? null;
   const snooze_until = (vars as RecordActionVars).snooze_until ?? null;
   const notes = (vars as RecordActionVars).notes ?? null;
-  return { action_type, reason, snooze_until, notes };
+  const resume_version_id = (vars as RecordActionVars).resume_version_id ?? null;
+  return { action_type, reason, snooze_until, notes, resume_version_id };
 }
 
 /**
