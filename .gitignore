@@ -77,3 +77,13 @@ apps/api/seeds/contacts.json
 
 # OAuth client secrets - never commit
 apps/api/credentials/
+
+# Local scratch / credential notes - never commit.
+# "Job Assist.txt" holds a plaintext Supabase password + OAuth client id;
+# get_token.py is a redundant local OAuth bootstrap (superseded by
+# apps/api/scripts/refresh_gmail_oauth.py, which is safe to commit).
+Job Assist.txt
+/get_token.py
+
+# Claude Code agent session artifacts.
+.claude/
