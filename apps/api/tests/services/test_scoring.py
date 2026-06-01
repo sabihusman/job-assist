@@ -24,6 +24,7 @@ from job_assist.services.scoring import (
     SCORER_VERSION,
     bucket_for_score,
     display_tier,
+    is_disguised_senior,
     score_breakdown,
     score_geo,
     score_posting,
@@ -438,14 +439,26 @@ def test_score_posting_clamps_to_0_100() -> None:
     assert 0 <= score <= 100
 
 
-def test_score_breakdown_returns_five_features() -> None:
-    """The debug breakdown must surface all five named features."""
+def test_score_breakdown_returns_five_features_plus_flag() -> None:
+    """The debug breakdown surfaces the five named numeric features plus
+    the ``disguised_senior`` boolean flag (Slice: career-changer cap)."""
     posting = _make_posting()
     profile = _make_profile()
     parts = score_breakdown(posting, profile, tier=1)
-    assert set(parts.keys()) == {"role_family", "seniority", "salary", "tier", "geo"}
-    for value in parts.values():
-        assert 0 <= value <= 100
+    assert set(parts.keys()) == {
+        "role_family",
+        "seniority",
+        "salary",
+        "tier",
+        "geo",
+        "disguised_senior",
+    }
+    # The five weighted features are 0-100 ints.
+    for key in ("role_family", "seniority", "salary", "tier", "geo"):
+        assert isinstance(parts[key], int)
+        assert 0 <= parts[key] <= 100
+    # The flag is a bool, not a weighted score.
+    assert isinstance(parts["disguised_senior"], bool)
 
 
 def test_score_breakdown_matches_composite_via_weighted_sum() -> None:
@@ -526,3 +539,128 @@ def test_display_tier_null_when_both_null() -> None:
     """A broad shell whose posting the score sweep hasn't visited
     (fit_score None) has no derivable tier → None."""
     assert display_tier(None, None) is None
+
+
+# ── Disguised-senior altitude cap (career-changer correction) ───────────────
+
+
+def test_is_disguised_senior_pm_with_senior_comp_floor() -> None:
+    """PM-family, seniority=pm, USD floor >= $180k → flagged."""
+    p = _make_posting(
+        role_family=RoleFamily.product_management.value,
+        seniority_level=SeniorityLevel.pm.value,
+        salary_min=185_000,
+        salary_max=240_000,
+        salary_currency="USD",
+    )
+    assert is_disguised_senior(p) is True
+
+
+def test_is_disguised_senior_unknown_seniority_with_senior_floor() -> None:
+    """unknown seniority (passes the hard rule) + senior floor → flagged."""
+    p = _make_posting(
+        role_family=RoleFamily.product_management.value,
+        seniority_level=SeniorityLevel.unknown.value,
+        salary_min=200_000,
+        salary_max=260_000,
+        salary_currency="USD",
+    )
+    assert is_disguised_senior(p) is True
+
+
+def test_disguised_senior_caps_composite_at_55() -> None:
+    """A flagged posting that would otherwise score high is capped at 55."""
+    profile = _make_profile(seniority_levels_included=["intern", "apm", "pm"])
+    p = _make_posting(
+        role_family=RoleFamily.product_management.value,
+        seniority_level=SeniorityLevel.pm.value,
+        salary_min=190_000,
+        salary_max=250_000,
+        salary_currency="USD",
+        locations_normalized=[{"remote_type": "remote"}],
+    )
+    # Sanity: without the cap this would clear 55 (PM family + in-set
+    # seniority + decent comp). The cap pulls it to <= 55.
+    assert score_posting(p, profile, tier=1) <= 55
+
+
+# ── False-positive guards (must NOT be flagged) ─────────────────────────────
+
+
+def test_not_disguised_when_only_max_reaches_180() -> None:
+    """A $130k-$180k band has min 130 (plausibly mid) — NOT flagged."""
+    p = _make_posting(
+        role_family=RoleFamily.product_management.value,
+        seniority_level=SeniorityLevel.pm.value,
+        salary_min=130_000,
+        salary_max=180_000,
+        salary_currency="USD",
+    )
+    assert is_disguised_senior(p) is False
+
+
+def test_not_disguised_when_non_usd() -> None:
+    """Non-USD comp never flags — we don't FX-convert."""
+    p = _make_posting(
+        role_family=RoleFamily.product_management.value,
+        seniority_level=SeniorityLevel.pm.value,
+        salary_min=200_000,
+        salary_max=260_000,
+        salary_currency="EUR",
+    )
+    assert is_disguised_senior(p) is False
+
+
+def test_not_disguised_when_apm() -> None:
+    """apm is explicitly junior + wanted — never flagged even at high comp."""
+    p = _make_posting(
+        role_family=RoleFamily.product_management.value,
+        seniority_level=SeniorityLevel.apm.value,
+        salary_min=200_000,
+        salary_max=260_000,
+        salary_currency="USD",
+    )
+    assert is_disguised_senior(p) is False
+
+
+def test_not_disguised_when_floor_below_threshold() -> None:
+    """A genuine junior-but-well-paid PM at a $150k floor is spared."""
+    p = _make_posting(
+        role_family=RoleFamily.product_management.value,
+        seniority_level=SeniorityLevel.pm.value,
+        salary_min=150_000,
+        salary_max=190_000,
+        salary_currency="USD",
+    )
+    assert is_disguised_senior(p) is False
+
+
+def test_not_disguised_when_not_product_management() -> None:
+    """A non-PM family is out of scope for this cap (handled by the family gate)."""
+    p = _make_posting(
+        role_family=RoleFamily.program_management.value,
+        seniority_level=SeniorityLevel.pm.value,
+        salary_min=200_000,
+        salary_max=260_000,
+        salary_currency="USD",
+    )
+    assert is_disguised_senior(p) is False
+
+
+def test_breakdown_surfaces_disguised_senior_flag() -> None:
+    """score_breakdown exposes the bool flag for debugging/UI."""
+    profile = _make_profile()
+    flagged = _make_posting(
+        role_family=RoleFamily.product_management.value,
+        seniority_level=SeniorityLevel.pm.value,
+        salary_min=190_000,
+        salary_currency="USD",
+    )
+    clean = _make_posting(
+        role_family=RoleFamily.product_management.value,
+        seniority_level=SeniorityLevel.pm.value,
+        salary_min=140_000,
+        salary_currency="USD",
+    )
+    assert score_breakdown(flagged, profile, tier=1)["disguised_senior"] is True
+    assert score_breakdown(clean, profile, tier=1)["disguised_senior"] is False

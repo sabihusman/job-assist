@@ -91,6 +91,23 @@ ADJACENT_FAMILIES: frozenset[str] = frozenset(
     }
 )
 
+# ── Disguised-senior altitude correction (career-changer profile) ────────────
+# A product_management posting bucketed ``pm`` or ``unknown`` whose USD
+# salary FLOOR is >= this threshold is almost always a mislabeled
+# mid-senior role — the comp floor betrays the altitude the title/parser
+# under-leveled. The operator (no PM title) can't land these cold, so
+# ``score_posting`` caps them. SOFT cap (not exclusion) to spare the rare
+# genuinely-junior-but-well-paid role: 55 sits below the 60 "good" and 80
+# "qualified" lines (drops out of Best Fit top bands) but above the 40
+# non-PM floor (stays visible, recoverable).
+_DISGUISED_SENIOR_SALARY_FLOOR_USD = 180_000
+_DISGUISED_SENIOR_CAP = 55
+# Only these seniority buckets can hide a senior role — ``apm``/``intern``
+# are explicitly junior (the operator wants them) and aren't where
+# seniors disguise; ``senior_pm``/``lead_pm`` are handled by the seniority
+# hard rule, not here.
+_DISGUISED_SENIOR_SENIORITY: frozenset[str] = frozenset({"pm", "unknown"})
+
 
 # ── Salary normalization (PR #56 Decision C) ─────────────────────────────────
 #
@@ -340,14 +357,52 @@ def score_geo(
 # ── Composite ───────────────────────────────────────────────────────────────
 
 
+def is_disguised_senior(posting: JobPosting) -> bool:
+    """True when a posting looks like a mislabeled mid-senior PM role.
+
+    A ``product_management`` posting bucketed ``pm`` or ``unknown`` whose
+    USD salary FLOOR (``salary_min``) is >= $180k is almost always a
+    senior+ role the title/seniority parser under-leveled — the comp
+    floor betrays the altitude. ``score_posting`` caps these (career-
+    changer correction).
+
+    Precision choices to avoid false-positives:
+      * FLOOR not max — a ``$130k-$180k`` band has min 130 (plausibly
+        mid) and is NOT flagged; a ``$180k-$250k`` band has min 180 and
+        IS. The minimum being senior-level is the strong signal.
+      * Requires PARSED USD comp — unparsed / non-USD never flags (we
+        don't FX-convert and won't guess).
+      * Scoped to ``pm``/``unknown`` seniority — ``apm``/``intern`` are
+        explicitly junior and wanted; ``senior_pm``/``lead_pm`` are
+        excluded upstream by the seniority hard rule.
+
+    ``seniority_level`` NULL is treated as ``unknown`` (a NULL-seniority
+    PM at a senior comp floor is a prime disguise).
+    """
+    if str(posting.role_family) != RoleFamily.product_management.value:
+        return False
+    seniority = str(posting.seniority_level) if posting.seniority_level is not None else "unknown"
+    if seniority not in _DISGUISED_SENIOR_SENIORITY:
+        return False
+    if posting.salary_currency != "USD":
+        return False
+    return (
+        posting.salary_min is not None and posting.salary_min >= _DISGUISED_SENIOR_SALARY_FLOOR_USD
+    )
+
+
 def score_breakdown(
     posting: JobPosting,
     profile: OperatorProfile,
     *,
     tier: int | None,
-) -> dict[str, int]:
-    """Return the five sub-scores. Useful for debugging + a future
-    "why this score" UI surface.
+) -> dict[str, int | bool]:
+    """Return the five sub-scores plus the ``disguised_senior`` flag.
+
+    The five integer sub-scores feed the weighted composite; the
+    boolean ``disguised_senior`` is a debug/surface flag (NOT a weighted
+    feature) — ``score_posting`` applies it as a post-composite cap, the
+    same shape as the role_family gate. Useful for a "why this score" UI.
 
     ``tier`` is passed in explicitly because it lives on
     ``target_company``, not on ``job_posting`` — the caller resolves it
@@ -374,6 +429,7 @@ def score_breakdown(
             posting.locations_normalized,
             profile.geo_whitelist or [],
         ),
+        "disguised_senior": is_disguised_senior(posting),
     }
 
 
@@ -391,7 +447,10 @@ def score_posting(
     ``job_assist.services.scoring.score_posting`` to inject stubs.
     """
     parts = score_breakdown(posting, profile, tier=tier)
-    weighted = sum(parts[k] * _WEIGHTS[k] for k in _WEIGHTS) / 100.0
+    # Only the five weighted sub-scores feed the composite; the
+    # ``disguised_senior`` flag in ``parts`` is a post-composite cap, not
+    # a weighted feature, so it's excluded by iterating ``_WEIGHTS``.
+    weighted = sum(int(parts[k]) * _WEIGHTS[k] for k in _WEIGHTS) / 100.0
     score = max(0, min(100, round(weighted)))
 
     # Hard gate (Bestiary 5.21): role_family is a DISQUALIFYING attribute, not
@@ -404,6 +463,14 @@ def score_posting(
     # the classifier cron upgrades them to a PM family and re-scores.
     if str(posting.role_family) not in PREFERRED_FAMILIES:
         score = min(score, 40)
+
+    # Disguised-senior altitude cap (career-changer correction): a PM
+    # role under-leveled to pm/unknown but posting a senior USD comp
+    # floor is capped at 55 so it can't surface as a top pick. Soft (not
+    # excluded) — composes via min() with the gate above. Mirrors the
+    # gate pattern. See ``is_disguised_senior`` for the precision logic.
+    if is_disguised_senior(posting):
+        score = min(score, _DISGUISED_SENIOR_CAP)
     return score
 
 
