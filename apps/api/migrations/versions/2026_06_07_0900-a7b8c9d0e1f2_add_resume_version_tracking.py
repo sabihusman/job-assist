@@ -53,9 +53,7 @@ def upgrade() -> None:
             nullable=False,
         ),
     )
-    op.create_index(
-        "uq_resume_version_label", "resume_version", ["label"], unique=True
-    )
+    op.create_index("uq_resume_version_label", "resume_version", ["label"], unique=True)
 
     op.add_column(
         "posting_action",
@@ -74,9 +72,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "ck_posting_action_resume_only_for_applied", "posting_action", type_="check"
-    )
+    op.drop_constraint("ck_posting_action_resume_only_for_applied", "posting_action", type_="check")
     op.drop_column("posting_action", "resume_version_id")
     op.drop_index("uq_resume_version_label", table_name="resume_version")
     op.drop_table("resume_version")

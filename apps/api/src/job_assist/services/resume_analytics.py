@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from job_assist.db.models import JobPosting, OutcomeEvent, PostingAction, ResumeVersion
@@ -73,10 +73,15 @@ async def resume_analytics(session: AsyncSession) -> dict[str, Any]:
             ResumeVersion.angle,
             func.count(func.distinct(applied.c.posting_id)).label("applications"),
             func.count(func.distinct(applied.c.company_id)).label("companies"),
-            func.count(func.distinct(applied.c.company_id).filter(rej_exists)).label(
+            # COUNT(DISTINCT CASE WHEN <exists> THEN company_id END): the
+            # portable idiom for a conditional distinct count. NULLs (rows
+            # failing the predicate) are not counted. Avoids the aggregate
+            # FILTER clause, which asyncpg rejected when nested inside
+            # count(distinct(...)).
+            func.count(func.distinct(case((rej_exists, applied.c.company_id), else_=None))).label(
                 "companies_rejected"
             ),
-            func.count(func.distinct(applied.c.company_id).filter(conf_exists)).label(
+            func.count(func.distinct(case((conf_exists, applied.c.company_id), else_=None))).label(
                 "companies_confirmed"
             ),
         )
