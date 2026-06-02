@@ -1,0 +1,89 @@
+name: Embed postings
+
+# Fires once a day at 09:00 UTC against POST /admin/embeddings/sweep.
+# Runs after the JD-summary enrichment (08:30) so a freshly-summarised row
+# gets its (denser) summary embedded rather than the raw JD on the same day.
+#
+# Slice 1 (feat/embeddings-slice1): this ONLY populates job_posting.jd_embedding.
+# NOTHING reads the vectors for ranking yet — fit_score / score_posting are
+# untouched. The vectors feed only the read-only GET /admin/embeddings/nearest
+# validation gate until slice 2 wires the blend.
+#
+# The sweep is capped at 200 rows per call (?limit=200). Gemini embedding
+# throughput is high (much higher RPM than generate_content) and each row is a
+# single short call, so 200 rows runs in well under the 540s curl cap. The
+# sweep is idempotent (skip-on-fresh-vector) and re-embeds only rows whose JD
+# text changed, so the backlog drains over successive days then settles to just
+# new/changed postings.
+#
+# Secrets required (already configured in repo settings):
+#   API_URL — Railway production base URL. Same secret every workflow uses.
+#
+# Pause: Actions tab -> Embed postings -> "..." -> Disable workflow.
+# Manual trigger: Actions tab -> Embed postings -> Run workflow.
+
+on:
+  schedule:
+    # 09:00 UTC = 03:00 US Central. 30 min after enrich-jd-summaries (08:30).
+    - cron: '0 9 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Idempotent (skip-on-fresh-vector) so overlap is safe, but queueing keeps the
+# logs clean and avoids embedding the same row twice across overlapping runs.
+concurrency:
+  group: embed-postings
+  cancel-in-progress: false
+
+jobs:
+  embed:
+    name: Run embedding sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_URL: ${{ secrets.API_URL }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Trigger embedding sweep
+        id: sweep
+        run: |
+          # Body and status captured separately so a non-200 still gets
+          # logged before the step exits 1.
+          status=$(curl -sS --max-time 540 \
+            -o /tmp/embed.json -w "%{http_code}" \
+            -X POST "$API_URL/admin/embeddings/sweep?limit=200")
+
+          if [ "$status" != "200" ]; then
+            echo "Embedding sweep failed with HTTP $status"
+            cat /tmp/embed.json
+            exit 1
+          fi
+
+          echo "Sweep succeeded:"
+          python3 -m json.tool < /tmp/embed.json
+
+      - name: Surface counters in the workflow summary
+        if: always() && hashFiles('/tmp/embed.json') != ''
+        run: |
+          python3 <<'PYEOF' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          try:
+              d = json.loads(pathlib.Path("/tmp/embed.json").read_text())
+          except Exception as exc:
+              print(f"## Embedding sweep\n\nCould not parse response: {exc}")
+              raise SystemExit(0)
+          print("## Embedding sweep")
+          print()
+          print(f"- Total: **{d.get('total', 0)}**")
+          print(f"- Embedded (new/re-embedded): **{d.get('embedded', 0)}**")
+          print(f"- Skipped (fresh vector present): {d.get('skipped', 0)}")
+          print(f"- Missing context (jd_text too short): {d.get('missing_context', 0)}")
+          print(f"- Errors: {d.get('errors', 0)}")
+          print(f"- Exhausted (need /retry): {d.get('exhausted', 0)}")
+          for err in d.get("error_details", []):
+              print(f"  - `{err.get('posting_id','?')}` -> `{err.get('error','?')}`")
+          PYEOF
