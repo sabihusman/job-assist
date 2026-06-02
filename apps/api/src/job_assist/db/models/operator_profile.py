@@ -14,8 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pgvector.sqlalchemy import Vector
-from sqlalchemy import CheckConstraint, DateTime, Integer, String, Text
+from sqlalchemy import CheckConstraint, DateTime, Integer, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func, text
@@ -70,18 +69,6 @@ class OperatorProfile(Base):
     # Mirrors HardRuleConfig.staffing_firm_blocklist.
     staffing_firm_blocklist: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
-    )
-
-    # ── Semantic profile embedding (slice 1, feat/embeddings-slice1) ─────
-    # text-embedding-004 vector of ``looking_for_text``. Re-embedded on
-    # PUT /operator/profile when the text changes (hash-gated). NULL until
-    # the operator sets a non-empty ``looking_for_text`` and it embeds.
-    # NOTHING reads this for ranking in slice 1 — it powers only the
-    # read-only GET /admin/embeddings/nearest validation gate.
-    looking_for_embedding: Mapped[list[float] | None] = mapped_column(Vector(768), nullable=True)
-    looking_for_embedding_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    looking_for_embedded_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(

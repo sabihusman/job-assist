@@ -5,7 +5,6 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
     DateTime,
@@ -134,25 +133,6 @@ class JobPosting(Base):
     hard_rule_failed: Mapped[str | None] = mapped_column(Text, nullable=True)
     hard_rules_evaluated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
-    )
-    # ── Semantic embedding (slice 1, feat/embeddings-slice1) ─────────────
-    # text-embedding-004 vector of the JD (summary if present, else
-    # jd_text[:3000]). Populated by the opt-in POST /admin/embeddings/sweep
-    # — NOT at ingest, so it never auto-costs. NULL = not yet embedded.
-    # NOTHING reads this for ranking in slice 1: fit_score / score_posting
-    # are untouched. ``jd_text_hash_embedded`` snapshots the jd_text_hash at
-    # embed time so the sweep re-embeds only when the JD text changed.
-    # ``embedded_source`` records which text was embedded ("summary" |
-    # "jd_text") for debuggability. The enrichment-style attempt counter +
-    # error column mirror the jd-summary state machine.
-    jd_embedding: Mapped[list[float] | None] = mapped_column(Vector(768), nullable=True)
-    embedded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    embedding_model_version: Mapped[str | None] = mapped_column(Text, nullable=True)
-    jd_text_hash_embedded: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    embedded_source: Mapped[str | None] = mapped_column(Text, nullable=True)
-    embedding_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    embedding_attempt_count: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default=text("0")
     )
 
     __table_args__ = (
