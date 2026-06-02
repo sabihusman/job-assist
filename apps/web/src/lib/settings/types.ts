@@ -25,6 +25,8 @@ export type OperatorProfileRead = {
   // PR #43: nullable upper bound paired with the floor.
   salary_ceiling_usd: number | null;
   applicant_cap: number;
+  // feat/tunable-per-company-cap: roles surfaced per company; 0 = disabled.
+  per_company_cap: number;
   staffing_firm_blocklist: string[];
   // PR #43: list of SeniorityLevel enum values to include. null or empty
   // means "include all levels".
@@ -40,6 +42,7 @@ export type OperatorProfileUpdate = Partial<{
   salary_floor_usd: number;
   salary_ceiling_usd: number | null;
   applicant_cap: number;
+  per_company_cap: number;
   staffing_firm_blocklist: string[];
   seniority_levels_included: string[];
 }>;
