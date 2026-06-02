@@ -59,6 +59,16 @@ class OperatorProfile(Base):
     # existing seeded singleton row was migrated by the same change.
     applicant_cap: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("500"))
 
+    # Per-company surfacing cap (feat/tunable-per-company-cap). How many of
+    # each company's top-by-fit_score postings the list/export views surface;
+    # 0 = disabled (show all). Always enforced server-side
+    # (postings_query ROW_NUMBER CTE); this column is the persisted operator
+    # default the list/count/export endpoints fall back to when no explicit
+    # ``?per_company_cap`` override is supplied. Default 3 matches the prior
+    # hardcoded endpoint default, so behaviour is unchanged until the operator
+    # moves it.
+    per_company_cap: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("3"))
+
     # PR #43: explicit list of ``SeniorityLevel`` enum values to include.
     # NULL or empty = include all levels (filter disabled). A posting with
     # ``seniority_level`` NOT in this set is dropped; postings with NULL /

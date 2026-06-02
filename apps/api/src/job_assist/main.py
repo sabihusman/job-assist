@@ -1916,6 +1916,29 @@ def _extract_location_strings(locations_normalized: Any) -> list[str]:
     return out
 
 
+async def _resolve_per_company_cap(db: DbSession, requested: int | None) -> int:
+    """Resolve the effective per-company cap for a postings view.
+
+    feat/tunable-per-company-cap: an explicit ``?per_company_cap=`` query param
+    always wins (including 0 = disabled). When omitted (None), fall back to the
+    operator's persisted ``operator_profile.per_company_cap`` — and to 3 if the
+    profile row is unseeded. This is what makes the Settings control reachable
+    while keeping per-view URL overrides working. Shared by the list, count
+    (inside the list endpoint), and export endpoints so all three produce the
+    SAME slice — preserving the "exported == visible" contract.
+    """
+    if requested is not None:
+        return requested
+    from sqlalchemy import select
+
+    from job_assist.db.models import OperatorProfile
+
+    value = (
+        await db.execute(select(OperatorProfile.per_company_cap).where(OperatorProfile.id == 1))
+    ).scalar_one_or_none()
+    return int(value) if value is not None else 3
+
+
 @app.get("/postings", tags=["public"])
 async def list_postings(
     db: DbSession,
@@ -1927,7 +1950,7 @@ async def list_postings(
     include_snoozed_past_only: bool = False,
     target_company_id: uuid.UUID | None = None,
     sort: SortKey = DEFAULT_SORT,
-    per_company_cap: int = 3,
+    per_company_cap: int | None = None,
     limit: int = 20,
     offset: int = 0,
     include_closed: bool = False,
@@ -1963,11 +1986,15 @@ async def list_postings(
         raise HTTPException(status_code=422, detail="limit must be 1..100")
     if offset < 0:
         raise HTTPException(status_code=422, detail="offset must be >= 0")
-    if per_company_cap < 0:
+    if per_company_cap is not None and per_company_cap < 0:
         raise HTTPException(
             status_code=422,
             detail="per_company_cap must be >= 0 (0 disables the cap entirely)",
         )
+    # feat/tunable-per-company-cap: None → fall back to the operator's
+    # persisted operator_profile.per_company_cap (3 if unseeded). An explicit
+    # ?per_company_cap= override (including 0) still wins.
+    resolved_cap = await _resolve_per_company_cap(db, per_company_cap)
     ats = _validate_ats_filter(ats)
     remote_type = _validate_remote_type_filter(remote_type)
     state = _validate_state_filter(state)
@@ -1989,7 +2016,7 @@ async def list_postings(
         include_snoozed_past_only=include_snoozed_past_only,
         target_company_id=target_company_id,
         sort=sort,
-        per_company_cap=per_company_cap,
+        per_company_cap=resolved_cap,
         include_closed=include_closed,
         include_filtered=include_filtered,
     )
@@ -2121,7 +2148,7 @@ async def export_postings_xlsx(
     include_snoozed_past_only: bool = False,
     target_company_id: uuid.UUID | None = None,
     sort: SortKey = DEFAULT_SORT,
-    per_company_cap: int = 3,
+    per_company_cap: int | None = None,
     include_closed: bool = False,
     include_filtered: bool = False,
 ) -> Response:
@@ -2151,11 +2178,14 @@ async def export_postings_xlsx(
     # Reuse the same validators the list endpoint uses; they raise 422
     # on bad input. per_company_cap is validated inline here (limit/
     # offset are not user-facing on this endpoint).
-    if per_company_cap < 0:
+    if per_company_cap is not None and per_company_cap < 0:
         raise HTTPException(
             status_code=422,
             detail="per_company_cap must be >= 0 (0 disables the cap entirely)",
         )
+    # feat/tunable-per-company-cap: same profile-default fallback as the list
+    # endpoint so the export surfaces the SAME slice the operator sees.
+    resolved_cap = await _resolve_per_company_cap(db, per_company_cap)
     ats = _validate_ats_filter(ats)
     remote_type = _validate_remote_type_filter(remote_type)
     state = _validate_state_filter(state)
@@ -2169,7 +2199,7 @@ async def export_postings_xlsx(
         include_snoozed_past_only=include_snoozed_past_only,
         target_company_id=target_company_id,
         sort=sort,
-        per_company_cap=per_company_cap,
+        per_company_cap=resolved_cap,
         include_closed=include_closed,
         include_filtered=include_filtered,
     )
