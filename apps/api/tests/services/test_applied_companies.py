@@ -140,6 +140,29 @@ async def test_singleton_suggested_not_created(db_session: Any) -> None:
 
 
 @_NEEDS_DB
+async def test_links_more_than_commit_batch_in_one_group(db_session: Any) -> None:
+    """Regression: a group with > the 25-row commit batch must complete. The
+    intra-loop commit expires ORM objects, so the code must not read tc.id off
+    an expired instance afterward (MissingGreenlet 500 in prod). 30 events for
+    one company straddle the commit boundary."""
+    db_session.add_all([_confirmation("Thank you for applying to BatchCo") for _ in range(30)])
+    await db_session.commit()
+
+    report = await sync_applied_companies(db_session)
+    assert report.created == 1
+    assert report.linked == 30
+
+    linked = (
+        await db_session.execute(
+            select(func.count())
+            .select_from(OutcomeEvent)
+            .where(OutcomeEvent.target_company_id.is_not(None))
+        )
+    ).scalar_one()
+    assert linked == 30
+
+
+@_NEEDS_DB
 async def test_normalization_matches_legal_suffix_variant(db_session: Any) -> None:
     db_session.add(TargetCompany(name="Plaid", tier=1, ats="greenhouse", ats_handle="plaid"))
     await db_session.flush()
