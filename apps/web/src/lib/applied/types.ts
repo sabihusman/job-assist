@@ -26,6 +26,8 @@ export type OutcomeEvent = {
   // feat/applied-company-tracking: company linkage (posting_id is uniformly
   // NULL). Drives the Companies OUTCOMES column by company.
   target_company_id?: string | null;
+  // feat/pipeline-detail: ~200-char Gmail preview (no email body is stored).
+  raw_snippet?: string | null;
 };
 
 export type OutcomesListResponse = {

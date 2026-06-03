@@ -2787,6 +2787,9 @@ async def list_outcomes(
             "subject": o.subject,
             "from_domain": o.from_domain,
             "email_thread_id": o.email_thread_id,
+            # feat/pipeline-detail: the ~200-char Gmail preview (no body is
+            # stored) — shown in the Pipeline card detail panel.
+            "raw_snippet": o.raw_snippet,
         }
         for (o, company_name) in rows
     ]

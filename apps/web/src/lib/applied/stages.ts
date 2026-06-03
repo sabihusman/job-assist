@@ -45,6 +45,32 @@ export const STAGE_LABELS: Record<PipelineStage, string> = {
   ghosted: 'Ghosted',
 };
 
+/**
+ * Sanitize a persisted Pipeline column order against the canonical
+ * PIPELINE_STAGES (feat/pipeline-reorder): drop unknown / duplicate keys and
+ * append any missing stages in their canonical position. Guarantees a complete,
+ * valid permutation so a stale localStorage value (or a future stage
+ * addition/removal) degrades gracefully instead of dropping or doubling a
+ * column.
+ */
+export function sanitizeColumnOrder(
+  order: readonly (string | null | undefined)[] | null | undefined,
+): PipelineStage[] {
+  const valid = new Set<string>(PIPELINE_STAGES);
+  const seen = new Set<PipelineStage>();
+  const out: PipelineStage[] = [];
+  for (const s of order ?? []) {
+    if (typeof s === 'string' && valid.has(s) && !seen.has(s as PipelineStage)) {
+      out.push(s as PipelineStage);
+      seen.add(s as PipelineStage);
+    }
+  }
+  for (const s of PIPELINE_STAGES) {
+    if (!seen.has(s)) out.push(s);
+  }
+  return out;
+}
+
 /** Bucket the outcome_event.outcome_type string into a PipelineStage. */
 export function stageOf(outcomeType: string | null | undefined): PipelineStage | null {
   if (!outcomeType) return null;

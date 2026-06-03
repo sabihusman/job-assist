@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { companyFromSubject } from '@/lib/pipeline/companyFromSubject';
+import { companyFromSubject, roleFromSubject } from '@/lib/pipeline/companyFromSubject';
 
 describe('companyFromSubject', () => {
   test('extracts company from the dominant "applying to <X>" pattern', () => {
@@ -39,5 +39,33 @@ describe('companyFromSubject', () => {
     expect(companyFromSubject('')).toBeNull();
     expect(companyFromSubject(null)).toBeNull();
     expect(companyFromSubject(undefined)).toBeNull();
+  });
+});
+
+describe('roleFromSubject', () => {
+  test('extracts a role from a trailing segment', () => {
+    expect(roleFromSubject('Covr Financial Technologies - Jr. Product Manager')).toBe(
+      'Jr. Product Manager',
+    );
+    expect(roleFromSubject('Application received: Stripe — Staff Product Manager')).toBe(
+      'Staff Product Manager',
+    );
+  });
+
+  test('returns null when no role is present (the ~77% case) — role is omitted', () => {
+    expect(roleFromSubject('Thank you for applying to Goldman Sachs')).toBeNull();
+    expect(roleFromSubject('Application Received')).toBeNull();
+    expect(roleFromSubject('Thanks for applying to Stripe!')).toBeNull();
+  });
+
+  test('does not mistake apply-confirmation boilerplate for a role', () => {
+    // "Project Management" keyword present, but the segment is boilerplate.
+    expect(roleFromSubject('Thank you for applying to Acme')).toBeNull();
+  });
+
+  test('returns null for empty / nullish input', () => {
+    expect(roleFromSubject('')).toBeNull();
+    expect(roleFromSubject(null)).toBeNull();
+    expect(roleFromSubject(undefined)).toBeNull();
   });
 });
