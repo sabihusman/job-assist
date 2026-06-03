@@ -2596,6 +2596,30 @@
         }
       }
     },
+    "/admin/embeddings/recalibrate": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Recalibrate Embeddings Endpoint",
+        "description": "Recompute ``job_posting.similarity_score`` (slice 2a) \u2014 the calibrated\n0-100 PERCENT_RANK of each embedded posting's cosine-to-profile across the\ncorpus. One SQL pass; NO ranking change (similarity_score is materialized\nhere, not by score_posting). Fires automatically on the sweep tail + on\nprofile change; exposed for manual recalibration / verification.",
+        "operationId": "recalibrate_embeddings_endpoint_admin_embeddings_recalibrate_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Recalibrate Embeddings Endpoint Admin Embeddings Recalibrate Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/embeddings/nearest": {
       "get": {
         "tags": [
@@ -3428,6 +3452,17 @@
               }
             ],
             "title": "Per Company Cap"
+          },
+          "similarity_weight": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Similarity Weight"
           },
           "staffing_firm_blocklist": {
             "anyOf": [
