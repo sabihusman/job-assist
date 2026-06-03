@@ -16,7 +16,7 @@ Mirrors ``services/jd_summary_enrichment.py``:
 Row selector is OPEN rows (``closed_at IS NULL``); the vestigial ``should_embed``
 flag is ignored (it is always False and was never wired).
 
-Embedding model: ``text-embedding-004`` (768-dim) via the already-present
+Embedding model: ``gemini-embedding-001`` (output_dimensionality=768) via the
 google-genai SDK + ``GEMINI_API_KEY``. Asymmetric task types — postings embed
 as ``RETRIEVAL_DOCUMENT``, the profile query as ``RETRIEVAL_QUERY``.
 
@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import math
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -118,6 +119,21 @@ def text_hash(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
+def l2_normalize(vec: list[float]) -> list[float]:
+    """Return the unit-length (L2-normalized) version of ``vec``.
+
+    gemini-embedding-001 does NOT normalize sub-3072 outputs (we request 768),
+    and the Gemini docs require the caller to do it. Cosine (our nearest()
+    consumer) is scale-invariant so it's unaffected, but unit vectors are the
+    doc-recommended storage form and keep us correct if a future slice uses
+    inner-product / L2 distance. A zero vector is returned unchanged.
+    """
+    norm = math.sqrt(sum(x * x for x in vec))
+    if norm == 0.0:
+        return vec
+    return [x / norm for x in vec]
+
+
 def select_embedding_text(posting: JobPosting) -> tuple[str, str] | None:
     """Pick what to embed for a posting: the JD summary if present, else the
     truncated raw JD text.
@@ -145,7 +161,7 @@ async def embed_text(
     api_key: str | None = None,
     model: str | None = None,
 ) -> list[float]:
-    """Embed one text via Gemini ``text-embedding-004``.
+    """Embed one text via Gemini ``gemini-embedding-001`` (768-dim).
 
     Returns a 768-float list. Raises ``RuntimeError`` / ``ValueError`` on a
     missing key, empty response, or dimension mismatch. Monkeypatched in tests
@@ -171,7 +187,13 @@ async def embed_text(
         return client.models.embed_content(
             model=used_model,
             contents=cleaned,
-            config=types.EmbedContentConfig(task_type=task_type),
+            # gemini-embedding-001 defaults to 3072 dims; pin to our Vector
+            # column width (768). Cosine (the only consumer) is scale-invariant,
+            # so the non-normalized truncated vector is fine for nearest().
+            config=types.EmbedContentConfig(
+                task_type=task_type,
+                output_dimensionality=settings.embedding_dim,
+            ),
         )
 
     response = await asyncio.to_thread(_call)
@@ -183,7 +205,7 @@ async def embed_text(
         raise ValueError(
             f"embedding dim mismatch: got {len(values)}, expected {settings.embedding_dim}"
         )
-    return [float(v) for v in values]
+    return l2_normalize([float(v) for v in values])
 
 
 # ── Row-level orchestrator ────────────────────────────────────────────────────
@@ -464,6 +486,7 @@ __all__ = [
     "embed_one_posting",
     "embed_profile_if_changed",
     "embed_text",
+    "l2_normalize",
     "nearest_postings",
     "reset_attempts_and_retry",
     "select_embedding_text",

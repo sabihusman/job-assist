@@ -133,6 +133,25 @@ def test_text_hash_is_stable_and_changes_with_input() -> None:
     assert len(text_hash("x")) == 64
 
 
+def test_l2_normalize_returns_unit_vector() -> None:
+    """gemini-embedding-001 doesn't normalize sub-3072 dims; l2_normalize must
+    produce a unit vector (||v|| == 1) and preserve direction."""
+    import math
+
+    from job_assist.services.embeddings import l2_normalize
+
+    out = l2_normalize([3.0, 4.0])  # norm 5
+    assert out == pytest.approx([0.6, 0.8])
+    assert math.isclose(math.sqrt(sum(x * x for x in out)), 1.0, abs_tol=1e-9)
+
+
+def test_l2_normalize_zero_vector_is_unchanged() -> None:
+    """A zero vector has no direction — return it as-is (no div-by-zero)."""
+    from job_assist.services.embeddings import l2_normalize
+
+    assert l2_normalize([0.0, 0.0, 0.0]) == [0.0, 0.0, 0.0]
+
+
 def test_select_embedding_text_prefers_summary() -> None:
     posting = SimpleNamespace(jd_summary_markdown="S" * 150, jd_text="J" * 200)
     result = select_embedding_text(posting)  # type: ignore[arg-type]

@@ -136,7 +136,7 @@ class JobPosting(Base):
         DateTime(timezone=True), nullable=True
     )
     # ── Semantic embedding (slice 1, feat/embeddings-slice1) ─────────────
-    # text-embedding-004 vector of the JD (summary if present, else
+    # gemini-embedding-001 (768-dim) vector of the JD (summary if present, else
     # jd_text[:3000]). Populated by the opt-in POST /admin/embeddings/sweep
     # — NOT at ingest, so it never auto-costs. NULL = not yet embedded.
     # NOTHING reads this for ranking in slice 1: fit_score / score_posting
