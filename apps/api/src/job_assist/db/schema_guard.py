@@ -19,19 +19,74 @@ Travels to Hetzner/Docker unchanged.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-# apps/api/migrations — this file is apps/api/src/job_assist/db/schema_guard.py,
-# so parents[3] == apps/api. Resolved absolutely so it works regardless of cwd.
-_MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "migrations"
-
 
 class SchemaBehindError(RuntimeError):
     """Raised when the live DB schema is behind the code's migration head."""
+
+
+class SchemaGuardConfigError(RuntimeError):
+    """Raised when the guard cannot locate the alembic migrations directory."""
+
+
+def _source_relative_migrations() -> Path:
+    """The migrations dir assuming the *source/editable* layout, where this
+    file is ``apps/api/src/job_assist/db/schema_guard.py`` (parents[3] ==
+    apps/api). Correct under an editable install / source checkout; WRONG under
+    a non-editable install where this file lives in ``site-packages`` and the
+    repo's ``migrations/`` is not shipped with the package — that mismatch
+    crash-looped prod (resolved to ``…/python3.13/migrations``). Kept as a
+    function so the resolver can be tested against the installed layout.
+    """
+    return Path(__file__).resolve().parents[3] / "migrations"
+
+
+def _resolve_migrations_dir() -> Path:
+    """Locate the alembic migrations dir ABSOLUTELY — independent of cwd and of
+    where the package is installed.
+
+    The repo's ``migrations/`` is NOT inside the importable package, so a
+    ``__file__``-relative path only works in the source/editable layout. We try,
+    in order, and return the first candidate that actually contains ``env.py``:
+
+      1. ``ALEMBIC_MIGRATIONS_DIR`` env override (explicit escape hatch).
+      2. source/editable layout (``_source_relative_migrations``).
+      3. cwd and each ancestor — both ``<dir>/migrations`` and the monorepo
+         ``<dir>/apps/api/migrations``. Covers the container (start.sh cd's to
+         apps/api, so cwd/migrations matches) and running from the repo root.
+
+    Validating on ``env.py`` is what makes this robust: a wrong candidate (e.g.
+    the site-packages path) is skipped instead of handed to alembic, which would
+    raise ``CommandError: Path doesn't exist``.
+    """
+    candidates: list[Path] = []
+
+    override = os.getenv("ALEMBIC_MIGRATIONS_DIR")
+    if override:
+        candidates.append(Path(override))
+
+    candidates.append(_source_relative_migrations())
+
+    cwd = Path.cwd().resolve()
+    for base in [cwd, *cwd.parents]:
+        candidates.append(base / "migrations")
+        candidates.append(base / "apps" / "api" / "migrations")
+
+    for cand in candidates:
+        if (cand / "env.py").is_file():
+            return cand.resolve()
+
+    raise SchemaGuardConfigError(
+        "Could not locate the alembic migrations directory. Tried: "
+        + ", ".join(str(c) for c in candidates[:6])
+        + " … Set ALEMBIC_MIGRATIONS_DIR to override."
+    )
 
 
 def code_heads() -> set[str]:
@@ -44,7 +99,7 @@ def code_heads() -> set[str]:
     from alembic.script import ScriptDirectory
 
     cfg = Config()
-    cfg.set_main_option("script_location", str(_MIGRATIONS_DIR))
+    cfg.set_main_option("script_location", str(_resolve_migrations_dir()))
     return set(ScriptDirectory.from_config(cfg).get_heads())
 
 
@@ -88,6 +143,7 @@ async def assert_schema_at_head(engine: AsyncEngine) -> None:
 
 __all__ = [
     "SchemaBehindError",
+    "SchemaGuardConfigError",
     "assert_schema_at_head",
     "check_revision",
     "code_heads",

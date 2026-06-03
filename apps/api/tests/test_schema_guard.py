@@ -13,12 +13,14 @@ against the migrated test DB.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from job_assist.db.schema_guard import (
     SchemaBehindError,
+    SchemaGuardConfigError,
     assert_schema_at_head,
     check_revision,
     code_heads,
@@ -53,6 +55,62 @@ def test_code_heads_reads_single_head_from_migration_scripts() -> None:
     single current head — the single-head rule in action."""
     heads = code_heads()
     assert len(heads) == 1, f"expected a single migration head, got {heads}"
+
+
+# ── Migrations-dir resolution (reproduces the prod crash-loop) ────────────────
+# Bug: code_heads() resolved script_location via Path(__file__).parents[3], which
+# in a NON-EDITABLE install points at site-packages (…/python3.13/migrations),
+# not the repo — so ScriptDirectory raised CommandError and the guard crash-
+# looped prod. CI missed it because there the package resolved to the source
+# tree. These reproduce the installed layout (bogus package anchor) + a cwd that
+# is NOT apps/api, and assert resolution still succeeds.
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]  # apps/api/tests/.. -> repo root
+
+
+def test_code_heads_resolves_from_installed_layout_and_foreign_cwd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """Simulate the non-editable install (package anchor points into a fake
+    site-packages with no migrations) AND run from the repo root rather than
+    apps/api. code_heads() must still resolve and return the head WITHOUT an
+    alembic CommandError — the exact prod failure, now guarded."""
+    import job_assist.db.schema_guard as sg
+
+    # The package-relative anchor is wrong (as in site-packages) → must fall
+    # through to the cwd / apps-api search.
+    monkeypatch.setattr(
+        sg, "_source_relative_migrations", lambda: tmp_path / "site-packages" / "migrations"
+    )
+    monkeypatch.chdir(_REPO_ROOT)  # NOT apps/api
+
+    heads = sg.code_heads()  # would raise alembic CommandError under the old code
+    assert heads, "must resolve migrations from repo-root cwd despite a bogus package anchor"
+    assert "a7b8c9d0e1f2" in heads
+
+
+def test_resolve_honors_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    """ALEMBIC_MIGRATIONS_DIR wins, so the guard works on any layout/host."""
+    import job_assist.db.schema_guard as sg
+
+    monkeypatch.setattr(sg, "_source_relative_migrations", lambda: tmp_path / "nope" / "migrations")
+    monkeypatch.setenv("ALEMBIC_MIGRATIONS_DIR", str(_REPO_ROOT / "apps" / "api" / "migrations"))
+    monkeypatch.chdir(tmp_path)  # nothing findable via cwd
+    assert "a7b8c9d0e1f2" in sg.code_heads()
+
+
+def test_resolve_raises_config_error_when_unfindable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """When no candidate has env.py, raise a clear SchemaGuardConfigError rather
+    than hand a bad path to alembic."""
+    import job_assist.db.schema_guard as sg
+
+    monkeypatch.setattr(sg, "_source_relative_migrations", lambda: tmp_path / "nope" / "migrations")
+    monkeypatch.delenv("ALEMBIC_MIGRATIONS_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)  # tmp_path + ancestors contain no migrations/env.py
+    with pytest.raises(SchemaGuardConfigError):
+        sg.code_heads()
 
 
 # ── assert_schema_at_head with the fetch monkeypatched (no DB) ────────────────
