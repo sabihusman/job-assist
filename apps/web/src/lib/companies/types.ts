@@ -25,6 +25,13 @@ export type CompanyListItem = {
   ats: string | null;
   ats_handle: string | null;
   notes: string | null;
+  // feat/applied-company-tracking: provenance + application activity.
+  // `source` is 'curated' | 'broad' | 'applied' (tracking-only). Optional so
+  // older payloads still typecheck. application_count/last_applied_at derive
+  // from linked application_confirmation outcomes.
+  source?: 'curated' | 'broad' | 'applied' | string;
+  application_count?: number;
+  last_applied_at?: string | null;
 };
 
 export type CompaniesListResponse = {

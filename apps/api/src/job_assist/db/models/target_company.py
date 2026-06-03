@@ -9,7 +9,7 @@ from sqlalchemy import DateTime, Index, Integer, String, Text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.sql import func
+from sqlalchemy.sql import func, text
 
 from job_assist.db.base import Base
 from job_assist.db.enums import ATS
@@ -46,6 +46,15 @@ class TargetCompany(Base):
     # endpoint already emits ``tier=None`` for postings with no matched
     # company — so a matched-company-with-NULL-tier renders identically.
     tier: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Provenance discriminator (feat/applied-company-tracking):
+    #   curated — hand-seeded target with a pedigree tier (daily-cron source).
+    #   broad   — thin shell auto-created by broad-ingest (tier NULL, handle SET).
+    #   applied — tracking-only row from a Gmail application_confirmation
+    #             (tier NULL, ats_handle NULL); NEVER ingested. The ingest plan
+    #             excludes these explicitly (belt-and-suspenders on tier NULL).
+    source: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'curated'")
+    )
     role_filter: Mapped[str | None] = mapped_column(String(50), nullable=True)
     domain: Mapped[str | None] = mapped_column(String, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -76,4 +85,5 @@ class TargetCompany(Base):
     __table_args__ = (
         Index("idx_target_company_tier", "tier"),
         Index("idx_target_company_ats", "ats"),
+        Index("idx_target_company_source", "source"),
     )

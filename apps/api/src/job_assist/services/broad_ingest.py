@@ -39,7 +39,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from job_assist.adapters.base import Adapter, HandleNotFoundError
+from job_assist.db.enums import ATS
 from job_assist.db.models import DiscoveredHandle, JobPosting, TargetCompany
+from job_assist.gmail.backfill import _normalize_company
 from job_assist.services.ingestion import IngestionService
 
 logger = logging.getLogger(__name__)
@@ -202,12 +204,35 @@ async def _ensure_shell_company(session: AsyncSession, *, ats: str, handle: str)
     ).scalar_one_or_none()
     if existing is not None:
         return False
+
     # Name is a best-effort title-case of the handle; the operator can
     # rename later. This matches the canonical-name fallback that
     # ingest_source would compute anyway, so the posting rows are
     # labeled consistently whether or not the shell exists first.
+    candidate_name = handle.replace("-", " ").title()
+
+    # feat/applied-company-tracking: a tracking-only ('applied') row may already
+    # exist for this company BY NAME — it has no ats_handle, so the lookup above
+    # misses it, and a fresh insert would collide on UNIQUE(name). Resolve to a
+    # LINK: attach this handle/ats to the existing row (promoting it so its
+    # postings join) and skip the insert.
+    norm = _normalize_company(candidate_name)
+    if norm:
+        same_name = [
+            r
+            for r in (await session.execute(select(TargetCompany))).scalars().all()
+            if _normalize_company(r.name) == norm
+        ]
+        if same_name:
+            row = same_name[0]
+            if row.ats_handle is None:
+                row.ats = ATS(ats)
+                row.ats_handle = handle
+                await session.flush()
+            return False
+
     shell = TargetCompany(
-        name=handle.replace("-", " ").title(),
+        name=candidate_name,
         ats=ats,
         ats_handle=handle,
         tier=None,

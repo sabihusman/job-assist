@@ -23,6 +23,9 @@ export type OutcomeEvent = {
   subject?: string | null;
   from_domain?: string | null;
   email_thread_id?: string | null;
+  // feat/applied-company-tracking: company linkage (posting_id is uniformly
+  // NULL). Drives the Companies OUTCOMES column by company.
+  target_company_id?: string | null;
 };
 
 export type OutcomesListResponse = {
