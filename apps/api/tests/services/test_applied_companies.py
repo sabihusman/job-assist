@@ -78,9 +78,7 @@ async def test_creates_tracking_row_and_excluded_from_ingest_plan(db_session: An
     assert report.linked == 2
 
     tc = (
-        await db_session.execute(
-            select(TargetCompany).where(TargetCompany.source == "applied")
-        )
+        await db_session.execute(select(TargetCompany).where(TargetCompany.source == "applied"))
     ).scalar_one()
     assert tc.name == "Brightwheel"
     assert tc.tier is None
@@ -192,9 +190,13 @@ async def test_ensure_shell_company_links_to_existing_tracking_name(db_session: 
     assert inserted is False  # linked, not inserted
 
     rows = (
-        await db_session.execute(
-            select(TargetCompany).where(TargetCompany.name == "Goldman Sachs")
+        (
+            await db_session.execute(
+                select(TargetCompany).where(TargetCompany.name == "Goldman Sachs")
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(rows) == 1  # no duplicate
     assert rows[0].ats_handle == "goldman-sachs"

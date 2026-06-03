@@ -44,8 +44,7 @@ def upgrade() -> None:
     )
     # Existing broad-ingest shells: tier NULL AND ats_handle present.
     op.execute(
-        "UPDATE target_company SET source = 'broad' "
-        "WHERE tier IS NULL AND ats_handle IS NOT NULL"
+        "UPDATE target_company SET source = 'broad' WHERE tier IS NULL AND ats_handle IS NOT NULL"
     )
     op.create_index("idx_target_company_source", "target_company", ["source"])
 
