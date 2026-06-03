@@ -34,10 +34,22 @@ not a feature — it is dead storage.
 | `looking_for_text` | setting it **changes a posting's score / ranking** | row saved |
 | "interested" action | marking a posting **makes it appear in a view** | action row written |
 | per-company cap | changing it **changes which rows surface** (3→3, 6→6, 0→all) | param accepted |
+| field on a typed endpoint | the **endpoint/response_model serialization** includes it | service function returns it |
 
 > **Worked example.** `looking_for_text` (labelled "the strongest signal") and
 > the pass reasons were stored and read by nothing — yet had passing tests that
 > only proved the value was *stored*, never *used*.
+
+> **Worked example (response_model strip).** Endpoints with a Pydantic
+> `response_model`: tests must exercise the **endpoint/model serialization**, not
+> just the underlying service function — a `response_model` silently drops
+> undeclared fields, so a service-level test passes while the HTTP consumer
+> returns stale/stripped data. Slice 2a added `similarity_spread` + per-row
+> `similarity_score` to `nearest_postings()` but not to `NearestResponse`; the
+> DB test asserted on the service dict and passed, while `GET …/nearest`
+> (`return NearestResponse(**out)`) stripped both fields on every response — it
+> looked exactly like a stale prod deploy. The guard test round-trips through
+> `NearestResponse(**out)`, not just the service function.
 
 ## 3. No control or label may claim an effect the code doesn't produce
 
