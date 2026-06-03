@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import math
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -118,6 +119,21 @@ def text_hash(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
+def l2_normalize(vec: list[float]) -> list[float]:
+    """Return the unit-length (L2-normalized) version of ``vec``.
+
+    gemini-embedding-001 does NOT normalize sub-3072 outputs (we request 768),
+    and the Gemini docs require the caller to do it. Cosine (our nearest()
+    consumer) is scale-invariant so it's unaffected, but unit vectors are the
+    doc-recommended storage form and keep us correct if a future slice uses
+    inner-product / L2 distance. A zero vector is returned unchanged.
+    """
+    norm = math.sqrt(sum(x * x for x in vec))
+    if norm == 0.0:
+        return vec
+    return [x / norm for x in vec]
+
+
 def select_embedding_text(posting: JobPosting) -> tuple[str, str] | None:
     """Pick what to embed for a posting: the JD summary if present, else the
     truncated raw JD text.
@@ -189,7 +205,7 @@ async def embed_text(
         raise ValueError(
             f"embedding dim mismatch: got {len(values)}, expected {settings.embedding_dim}"
         )
-    return [float(v) for v in values]
+    return l2_normalize([float(v) for v in values])
 
 
 # ── Row-level orchestrator ────────────────────────────────────────────────────
@@ -470,6 +486,7 @@ __all__ = [
     "embed_one_posting",
     "embed_profile_if_changed",
     "embed_text",
+    "l2_normalize",
     "nearest_postings",
     "reset_attempts_and_retry",
     "select_embedding_text",
