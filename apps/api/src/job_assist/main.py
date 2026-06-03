@@ -167,6 +167,10 @@ async def get_ingest_plan(db: DbSession) -> list[dict[str, str]]:
             .where(TargetCompany.ats_handle.isnot(None))
             # Curated only — exclude broad-ingest shells (tier IS NULL).
             .where(TargetCompany.tier.isnot(None))
+            # feat/applied-company-tracking: never ingest tracking-only rows.
+            # Redundant with the tier/handle guards above (applied rows have
+            # both NULL), but explicit so the intent survives future edits.
+            .where(TargetCompany.source != "applied")
             .where(~active_closed)
             .order_by(TargetCompany.tier.asc(), TargetCompany.name.asc())
         )
@@ -1275,6 +1279,24 @@ def _surface_gmail_failure(endpoint: str, exc: BaseException) -> HTTPException:
     )
 
 
+async def _sync_applied_companies_best_effort(db: AsyncSession) -> None:
+    """Reflect newly-crawled applications in the Companies list (tracking-only).
+
+    Runs on the Gmail crawl tail. Best-effort: a failure here must NEVER fail
+    the crawl (same contract as the embeddings recalibrate-on-sweep-tail). The
+    sweep itself is idempotent, so the next crawl picks up anything missed.
+    """
+    try:
+        from job_assist.services.applied_companies import sync_applied_companies
+
+        await sync_applied_companies(db)
+    except Exception as exc:
+        await db.rollback()
+        logging.getLogger("job_assist.main").warning(
+            "applied_companies.sync_hook_failed", extra={"error": str(exc)[:300]}
+        )
+
+
 @app.post("/admin/gmail/backfill")
 async def gmail_backfill(
     db: DbSession,
@@ -1312,6 +1334,7 @@ async def gmail_backfill(
         raise
     except Exception as exc:
         raise _surface_gmail_failure("/admin/gmail/backfill", exc) from exc
+    await _sync_applied_companies_best_effort(db)
     return report.model_dump(mode="json")
 
 
@@ -1350,6 +1373,7 @@ async def gmail_poll(db: DbSession) -> dict[str, Any]:
         raise
     except Exception as exc:
         raise _surface_gmail_failure("/admin/gmail/poll", exc) from exc
+    await _sync_applied_companies_best_effort(db)
     return report.model_dump(mode="json")
 
 
@@ -1425,6 +1449,31 @@ async def outcomes_relink(
         raise
     except Exception as exc:
         raise _surface_gmail_failure("/admin/outcomes/relink", exc) from exc
+    return report.model_dump(mode="json")
+
+
+@app.post("/admin/companies/sync-applied", tags=["admin"])
+async def sync_applied_companies_endpoint(
+    db: DbSession,
+    threshold: int = 2,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Reflect real application activity in the Companies list (TRACKING-ONLY).
+
+    Scans ``application_confirmation`` outcomes, resolves a company name
+    (existing link → subject extraction → skip; never ``from_domain``), and
+    upserts: an existing company is annotated (its outcomes get linked, never
+    duplicated); a net-new company seen ``>= threshold`` times becomes a
+    ``source='applied'`` tracking row (``ats=unknown``, ``ats_handle=NULL``,
+    ``tier=NULL``) — which the ingest plan never crawls. One-off names are
+    returned in ``suggested`` WITHOUT committing.
+
+    NO ATS resolution (operator decision): tracking rows can never be ingested.
+    Read-mostly; the only writes are tracking rows + ``target_company_id`` links.
+    """
+    from job_assist.services.applied_companies import sync_applied_companies
+
+    report = await sync_applied_companies(db, threshold=threshold, limit=limit)
     return report.model_dump(mode="json")
 
 
@@ -2548,7 +2597,7 @@ async def list_companies(
     """
     from sqlalchemy import distinct, func, select
 
-    from job_assist.db.models import JobPosting, PostingSource, TargetCompany
+    from job_assist.db.models import JobPosting, OutcomeEvent, PostingSource, TargetCompany
 
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="limit must be 1..100")
@@ -2589,9 +2638,35 @@ async def list_companies(
         .scalar_subquery()
         .label("ats_set")
     )
+    # feat/applied-company-tracking: how many times the operator applied here
+    # (linked application_confirmation outcomes) + when last. Single source of
+    # truth is outcome_event — counts are derived, never denormalised.
+    application_count = (
+        select(func.count(OutcomeEvent.id))
+        .where(OutcomeEvent.target_company_id == TargetCompany.id)
+        .where(OutcomeEvent.outcome_type == "application_confirmation")
+        .correlate(TargetCompany)
+        .scalar_subquery()
+        .label("application_count")
+    )
+    last_applied_at = (
+        select(func.max(OutcomeEvent.received_at))
+        .where(OutcomeEvent.target_company_id == TargetCompany.id)
+        .where(OutcomeEvent.outcome_type == "application_confirmation")
+        .correlate(TargetCompany)
+        .scalar_subquery()
+        .label("last_applied_at")
+    )
 
     rows_stmt = (
-        select(TargetCompany, total_postings, active_postings, ats_set)
+        select(
+            TargetCompany,
+            total_postings,
+            active_postings,
+            ats_set,
+            application_count,
+            last_applied_at,
+        )
         .order_by(TargetCompany.tier.asc().nulls_last(), TargetCompany.name.asc())
         .limit(limit)
         .offset(offset)
@@ -2602,7 +2677,7 @@ async def list_companies(
     rows = (await db.execute(rows_stmt)).all()
 
     items: list[dict[str, Any]] = []
-    for tc, total_count, active_count, ats_arr in rows:
+    for tc, total_count, active_count, ats_arr, applied_count, last_applied in rows:
         items.append(
             {
                 "id": str(tc.id),
@@ -2628,6 +2703,10 @@ async def list_companies(
                 ),
                 "ats_handle": tc.ats_handle,
                 "notes": tc.notes,
+                # feat/applied-company-tracking: provenance + application activity.
+                "source": tc.source,
+                "application_count": int(applied_count or 0),
+                "last_applied_at": (last_applied.isoformat() if last_applied is not None else None),
             }
         )
 
@@ -2697,6 +2776,9 @@ async def list_outcomes(
         {
             "id": str(o.id),
             "posting_id": str(o.job_posting_id) if o.job_posting_id else None,
+            # feat/applied-company-tracking: company linkage drives the
+            # Companies OUTCOMES column (posting_id is uniformly NULL).
+            "target_company_id": (str(o.target_company_id) if o.target_company_id else None),
             "received_at": o.received_at.isoformat(),
             "stage": _enum_value(o.outcome_type),
             "confidence": o.classifier_confidence,

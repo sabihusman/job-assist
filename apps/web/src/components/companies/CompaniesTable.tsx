@@ -1,10 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo } from 'react';
 
-import { useAllOutcomes, useAppliedPostings } from '@/lib/api/applied';
-import { countAppliedByCompany, summarizeOutcomes } from '@/lib/companies/summaries';
+import { useAllOutcomes } from '@/lib/api/applied';
+import { summarizeOutcomes } from '@/lib/companies/summaries';
 import type { CompanyListItem } from '@/lib/companies/types';
 import { cn } from '@/lib/utils';
 
@@ -40,13 +39,11 @@ export function CompaniesTable({
 }: {
   companies: readonly CompanyListItem[];
 }) {
-  const { data: applied } = useAppliedPostings();
+  // feat/applied-company-tracking: APPLIED is now the server-derived
+  // application_count (linked application_confirmation outcomes); OUTCOMES is
+  // summarised from outcomes matched by target_company_id. Both replace the
+  // old applied-postings signals, which were uniformly 0 / NULL.
   const { data: outcomes } = useAllOutcomes();
-
-  const appliedCountByCompany = useMemo(
-    () => countAppliedByCompany(applied?.items ?? []),
-    [applied],
-  );
 
   return (
     <table className="w-full border-separate border-spacing-0 text-[13px]">
@@ -72,12 +69,15 @@ export function CompaniesTable({
                   users couldn't surface hover-only content. Mirrors the
                   ContactDetailPanel "source under name" pattern. */}
               <div className="flex flex-col">
-                <Link
-                  href={`/?target_company_id=${c.id}&state=triage`}
-                  className="font-medium text-foreground hover:underline focus-visible:underline focus-visible:outline-none"
-                >
-                  {c.name}
-                </Link>
+                <div className="flex items-center gap-1.5">
+                  <Link
+                    href={`/?target_company_id=${c.id}&state=triage`}
+                    className="font-medium text-foreground hover:underline focus-visible:underline focus-visible:outline-none"
+                  >
+                    {c.name}
+                  </Link>
+                  {c.source === 'applied' && <AppliedBadge />}
+                </div>
                 {c.notes && <p className="mt-0.5 text-[12px] text-muted-foreground">{c.notes}</p>}
               </div>
             </Td>
@@ -98,11 +98,18 @@ export function CompaniesTable({
               {c.active_postings}
             </Td>
             <Td align="right" mono>
-              {appliedCountByCompany.get(c.id) ?? 0}
+              <div className="flex flex-col items-end">
+                <span>{c.application_count ?? 0}</span>
+                {c.last_applied_at && (
+                  <span className="text-[10px] font-normal text-muted-foreground">
+                    last {fmtMonthDay(c.last_applied_at)}
+                  </span>
+                )}
+              </div>
             </Td>
             <Td>
               <span className="text-muted-foreground">
-                {summarizeOutcomes(c.id, applied?.items ?? [], outcomes?.items ?? [])}
+                {summarizeOutcomes(c.id, [], outcomes?.items ?? [])}
               </span>
             </Td>
           </tr>
@@ -174,6 +181,22 @@ function TierBadge({ tier }: { tier: number | null }) {
       )}
     >
       T{tier}
+    </span>
+  );
+}
+
+function fmtMonthDay(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function AppliedBadge() {
+  return (
+    <span
+      aria-label="Applied — tracking only, not ingested"
+      title="You applied here (from email). Tracking only — not crawled for new roles."
+      className="inline-flex rounded bg-positive/15 px-1.5 py-0 font-mono text-[10px] font-medium uppercase tracking-wide text-positive ring-1 ring-inset ring-positive/30"
+    >
+      Applied
     </span>
   );
 }

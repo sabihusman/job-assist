@@ -1241,6 +1241,7 @@ async def test_outcomes_response_shape(db_session: Any) -> None:
     assert set(sample) == {
         "id",
         "posting_id",
+        "target_company_id",
         "received_at",
         "stage",
         "confidence",

@@ -995,6 +995,68 @@
         }
       }
     },
+    "/admin/companies/sync-applied": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Sync Applied Companies Endpoint",
+        "description": "Reflect real application activity in the Companies list (TRACKING-ONLY).\n\nScans ``application_confirmation`` outcomes, resolves a company name\n(existing link \u2192 subject extraction \u2192 skip; never ``from_domain``), and\nupserts: an existing company is annotated (its outcomes get linked, never\nduplicated); a net-new company seen ``>= threshold`` times becomes a\n``source='applied'`` tracking row (``ats=unknown``, ``ats_handle=NULL``,\n``tier=NULL``) \u2014 which the ingest plan never crawls. One-off names are\nreturned in ``suggested`` WITHOUT committing.\n\nNO ATS resolution (operator decision): tracking rows can never be ingested.\nRead-mostly; the only writes are tracking rows + ``target_company_id`` links.",
+        "operationId": "sync_applied_companies_endpoint_admin_companies_sync_applied_post",
+        "parameters": [
+          {
+            "name": "threshold",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 2,
+              "title": "Threshold"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Sync Applied Companies Endpoint Admin Companies Sync Applied Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/operator/profile": {
       "get": {
         "tags": [
