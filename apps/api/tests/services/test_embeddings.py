@@ -31,6 +31,7 @@ from job_assist.services.embeddings import (
     recalibrate_similarity,
     reset_attempts_and_retry,
     select_embedding_text,
+    similarity_distribution,
     sweep_embeddings,
     text_hash,
 )
@@ -671,5 +672,42 @@ async def test_recalibrate_recomputes_on_profile_change(db_session: Any) -> None
     await _set_profile_embedding(db_session, emb_b, "atB")
     await recalibrate_similarity(db_session)
     assert await _score(b_id) > await _score(a_id)
+
+    await _reset_profile(db_session)
+
+
+@_NEEDS_DB
+async def test_similarity_distribution_reads_the_gate(db_session: Any) -> None:
+    """The read-only gate (POST /admin/embeddings/similarity-distribution and
+    the recalibrate response): reports the uniform 0-100 spread + top-15 by
+    similarity_score, straight from the DB (not the stale nearest GET)."""
+    company = _company()
+    db_session.add(company)
+    await db_session.flush()
+    cosines = [0.58, 0.62, 0.66, 0.70, 0.75]
+    for c in cosines:
+        db_session.add(_posting(target_company_id=company.id, embedding=_emb_cos(c)))
+    await db_session.flush()
+    await _set_profile_embedding(db_session, _vec(0), "e0")
+
+    # recalibrate with the gate inline mirrors the endpoint call.
+    out = await recalibrate_similarity(db_session, include_distribution=True)
+    assert out["calibrated"] == 5
+    dist = out["distribution"]
+    assert dist["count"] == 5
+    assert dist["calibrated_count"] == 5
+    assert dist["min"] == 0
+    assert dist["max"] == 100
+    assert dist["min"] <= dist["p25"] <= dist["median"] <= dist["p75"] <= dist["max"]
+    # Top-15 by similarity_score: highest-cosine role (0.75) leads at 100.
+    top = out["top_by_similarity"]
+    assert len(top) == 5
+    assert top[0]["similarity_score"] == 100
+    assert all("fit_score" in row for row in top)
+
+    # The standalone read path returns the same gate without recomputing.
+    again = await similarity_distribution(db_session)
+    assert again["distribution"]["max"] == 100
+    assert again["top_by_similarity"][0]["similarity_score"] == 100
 
     await _reset_profile(db_session)

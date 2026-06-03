@@ -539,7 +539,77 @@ async def nearest_postings(session: AsyncSession, n: int = 20) -> dict[str, Any]
 # ── Calibration: cosine → PERCENT_RANK 0-100 (slice 2a) ───────────────────────
 
 
-async def recalibrate_similarity(session: AsyncSession) -> dict[str, Any]:
+async def similarity_distribution(session: AsyncSession) -> dict[str, Any]:
+    """Read-only: the ``similarity_score`` distribution + top-15 semantic roles
+    across embedded open rows — the literal slice 2a verification gate.
+
+    Exposed as a callable (not only the cached nearest GET) so the gate can be
+    read off the reliable POST path. Issues the two gate queries verbatim:
+    a count/min/percentile/max aggregate, then ``ORDER BY similarity_score DESC
+    LIMIT 15``.
+    """
+    dist = (
+        await session.execute(
+            select(
+                func.count(),  # count(*) — total embedded open rows
+                func.count(JobPosting.similarity_score),  # calibrated rows
+                func.min(JobPosting.similarity_score),
+                func.percentile_cont(0.25).within_group(JobPosting.similarity_score.asc()),
+                func.percentile_cont(0.5).within_group(JobPosting.similarity_score.asc()),
+                func.percentile_cont(0.75).within_group(JobPosting.similarity_score.asc()),
+                func.max(JobPosting.similarity_score),
+            )
+            .where(JobPosting.jd_embedding.is_not(None))
+            .where(JobPosting.closed_at.is_(None))
+        )
+    ).one()
+    total = int(dist[0] or 0)
+    calibrated = int(dist[1] or 0)
+    if calibrated == 0:
+        distribution: dict[str, Any] = {
+            "count": total,
+            "calibrated_count": 0,
+            "note": "run POST /admin/embeddings/recalibrate",
+        }
+    else:
+        distribution = {
+            "count": total,
+            "calibrated_count": calibrated,
+            "min": int(dist[2]),
+            "p25": round(float(dist[3]), 1),
+            "median": round(float(dist[4]), 1),
+            "p75": round(float(dist[5]), 1),
+            "max": int(dist[6]),
+        }
+    top_rows = (
+        await session.execute(
+            select(
+                JobPosting.normalized_title,
+                JobPosting.canonical_company_name,
+                JobPosting.similarity_score,
+                JobPosting.fit_score,
+            )
+            .where(JobPosting.similarity_score.is_not(None))
+            .where(JobPosting.closed_at.is_(None))
+            .order_by(JobPosting.similarity_score.desc())
+            .limit(15)
+        )
+    ).all()
+    top = [
+        {
+            "title": r.normalized_title,
+            "company": r.canonical_company_name,
+            "similarity_score": r.similarity_score,
+            "fit_score": r.fit_score,
+        }
+        for r in top_rows
+    ]
+    return {"distribution": distribution, "top_by_similarity": top}
+
+
+async def recalibrate_similarity(
+    session: AsyncSession, *, include_distribution: bool = False
+) -> dict[str, Any]:
     """Materialize ``job_posting.similarity_score`` for every embedded open row
     as ``100 * PERCENT_RANK()`` of its cosine-to-profile across the corpus.
 
@@ -551,6 +621,10 @@ async def recalibrate_similarity(session: AsyncSession) -> dict[str, Any]:
 
     No-op (calibrated=0) when the profile isn't embedded. Does NOT touch
     fit_score / score_posting — similarity_score is a separate column.
+
+    ``include_distribution`` (endpoint only) appends the verification gate
+    (distribution + top-15) so it can be read off the POST path; the sweep /
+    PUT hooks leave it False to avoid the two extra queries on the hot path.
     """
     from typing import cast
 
@@ -582,7 +656,10 @@ async def recalibrate_similarity(session: AsyncSession) -> dict[str, Any]:
     )
     await session.commit()
     rowcount = cast("CursorResult[Any]", result).rowcount or 0
-    return {"available": True, "calibrated": int(rowcount)}
+    out: dict[str, Any] = {"available": True, "calibrated": int(rowcount)}
+    if include_distribution:
+        out.update(await similarity_distribution(session))
+    return out
 
 
 __all__ = [
@@ -596,6 +673,7 @@ __all__ = [
     "recalibrate_similarity",
     "reset_attempts_and_retry",
     "select_embedding_text",
+    "similarity_distribution",
     "sweep_embeddings",
     "text_hash",
 ]

@@ -3229,10 +3229,26 @@ async def recalibrate_embeddings_endpoint(db: DbSession) -> dict[str, Any]:
     corpus. One SQL pass; NO ranking change (similarity_score is materialized
     here, not by score_posting). Fires automatically on the sweep tail + on
     profile change; exposed for manual recalibration / verification.
+
+    Returns the verification gate inline (``distribution`` + ``top_by_similarity``)
+    so the 2a spread can be read off this POST — the cached nearest GET can lag
+    a deploy by serving a stale replica, but POST reliably hits current code.
     """
     from job_assist.services.embeddings import recalibrate_similarity
 
-    return await recalibrate_similarity(db)
+    return await recalibrate_similarity(db, include_distribution=True)
+
+
+@app.post("/admin/embeddings/similarity-distribution", tags=["admin"])
+async def similarity_distribution_endpoint(db: DbSession) -> dict[str, Any]:
+    """Read-only slice 2a gate: the ``similarity_score`` distribution
+    (count / calibrated_count / min / p25 / median / p75 / max over embedded
+    open rows) + the top-15 roles by ``similarity_score``. POST (not GET) so it
+    isn't served from a stale cached replica during a rollout. Does not write.
+    """
+    from job_assist.services.embeddings import similarity_distribution
+
+    return await similarity_distribution(db)
 
 
 @app.get("/admin/embeddings/nearest", tags=["admin"])
