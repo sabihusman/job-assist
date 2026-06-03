@@ -55,7 +55,7 @@ itself cleanly instead of taking prod down.
 | Feature | Status | Defect | Harm |
 |---|---|---|---|
 | **"Interested" view** | BROKEN | key `1` sets `interested`, posting leaves Triage into **no view** | ↓↓ suppresses operator's hand-picked best roles |
-| **`looking_for_text`** | MISLABELED + INERT | labelled "the strongest signal"; consumed by nothing (embedding Slice 1 was reverted) | misleads; no effect |
+| **`looking_for_text`** | VALIDATED — Slice 2 pending | Embedding Slice 1 is now live (PR #114/#115): `looking_for_text` is embedded and powers `GET /admin/embeddings/nearest`. Validation gate ran in prod — **1,591 postings embedded**; the top-20 nearest the profile vector are **all fintech/wealthtech PM roles** matching the operator (Justworks, Plaid, Ramp, Altruist, MeridianLink, Betterment, Upstart, Gusto), and it **meaningfully disagrees with the heuristic on domain fit**. Cosine spread 0.58–0.75 (median 0.64) — relative ordering is good but compressed, so Slice 2 must calibrate before blending. Still MISLABELED ("the strongest signal") until Slice 2 wires it into ranking. | none yet (read-only gate); the label remains aspirational until Slice 2 |
 | **`role_keywords`** | INERT | stored; read by nothing (scorer uses hardcoded families) | lost intent |
 | **Pass reasons** (`posting_action.reason`) | INERT | stored + displayed only; no scorer/classifier consumer | lost feedback signal |
 | **API-keys Settings section** | MISLABELED | hardcodes "set" for all 5 keys regardless of real env state | can mask a missing key (e.g. dead Gmail token) |
