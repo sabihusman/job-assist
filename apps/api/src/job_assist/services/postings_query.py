@@ -36,13 +36,7 @@ from sqlalchemy import Text, and_, cast, func, or_, select, true
 from sqlalchemy import false as sa_false
 from sqlalchemy.sql import Select
 
-from job_assist.db.models import (
-    JobPosting,
-    OperatorProfile,
-    OutcomeEvent,
-    PostingSource,
-    TargetCompany,
-)
+from job_assist.db.models import JobPosting, OutcomeEvent, PostingSource, TargetCompany
 from job_assist.schemas.public import DEFAULT_SORT, SortKey
 from job_assist.services.posting_actions import latest_action_lateral
 
@@ -73,12 +67,7 @@ class PostingsViewSpec:
     include_snoozed_past_only: bool = False
     target_company_id: uuid.UUID | None = None
     sort: SortKey = DEFAULT_SORT
-    # feat/tunable-per-company-cap: an explicit int is an override (0 =
-    # disabled). ``None`` means "use the operator's persisted
-    # operator_profile.per_company_cap", resolved as an inlined SQL scalar
-    # subquery in build_view_parts — so the default path adds NO extra DB
-    # round-trip (the 2-query COUNT+SELECT budget is preserved).
-    per_company_cap: int | None = 3
+    per_company_cap: int = 3
     include_closed: bool = False
     include_filtered: bool = False
 
@@ -94,7 +83,7 @@ class PostingsViewSpec:
         include_snoozed_past_only: bool,
         target_company_id: uuid.UUID | None,
         sort: SortKey,
-        per_company_cap: int | None,
+        per_company_cap: int,
         include_closed: bool,
         include_filtered: bool,
     ) -> PostingsViewSpec:
@@ -278,18 +267,8 @@ def build_view_parts(spec: PostingsViewSpec) -> PostingsQueryParts:
     # the outer sort then orders the cap-survivors. So
     # ``sort=oldest&per_company_cap=3`` returns "oldest of each company's
     # top-3 by score", not "oldest 3 per company".
-    # feat/tunable-per-company-cap: three cap modes —
-    #   * explicit 0           → cap disabled (capped_ids stays None, no CTE)
-    #   * explicit int N > 0    → ``rn <= N`` (literal; the original behavior)
-    #   * None (profile default)→ ``rn <= COALESCE((SELECT per_company_cap
-    #                             FROM operator_profile WHERE id=1), 3)`` with
-    #                             0 = unlimited. The scalar subquery INLINES
-    #                             into the COUNT/SELECT statements, so the
-    #                             operator's persisted cap is honored with NO
-    #                             extra round-trip (2-query budget preserved).
     capped_ids: Select[Any] | None = None
-    explicit_disabled = spec.per_company_cap == 0
-    if not explicit_disabled:
+    if spec.per_company_cap > 0:
         ranked_from = base_join.outerjoin(recent_pa, true()) if spec.state else base_join
         ranked_select = select(
             JobPosting.id.label("posting_id"),
@@ -310,22 +289,7 @@ def build_view_parts(spec: PostingsViewSpec) -> PostingsQueryParts:
         for clause in where_clauses:
             ranked_select = ranked_select.where(clause)
         ranked_cte = ranked_select.cte("ranked_postings")
-        if spec.per_company_cap is None:
-            # Resolve the operator's persisted cap inline; COALESCE to 3 when
-            # the singleton is unseeded; 0 in the column means "unlimited".
-            cap_expr = func.coalesce(
-                select(OperatorProfile.per_company_cap)
-                .where(OperatorProfile.id == 1)
-                .scalar_subquery(),
-                3,
-            )
-            capped_ids = select(ranked_cte.c.posting_id).where(
-                or_(cap_expr == 0, ranked_cte.c.rn <= cap_expr)
-            )
-        else:
-            capped_ids = select(ranked_cte.c.posting_id).where(
-                ranked_cte.c.rn <= spec.per_company_cap
-            )
+        capped_ids = select(ranked_cte.c.posting_id).where(ranked_cte.c.rn <= spec.per_company_cap)
 
     # ORDER BY — ``JobPosting.id ASC`` is the stable tiebreaker on every
     # key. The Literal-typed FastAPI param guarantees the mapping is
