@@ -2,31 +2,31 @@
 
 import { useMemo } from 'react';
 
-import { useAllOutcomes, useAppliedPostings } from '@/lib/api/applied';
-import { bucketPostings, emptyBuckets } from '@/lib/pipeline/bucket';
+import { useAllOutcomes } from '@/lib/api/applied';
+import { bucketOutcomes, emptyBuckets } from '@/lib/pipeline/bucket';
 
 /**
- * Combines the two GET requests that drive Pipeline into a single
- * memoized bucketing result. react-query handles parallel fetching
- * because both hooks fire on mount; the heavy work is the bucket
- * computation, which memo-keys on the two response references.
+ * Drives the Pipeline kanban from **outcome_events** (feat/pipeline-outcome-
+ * cards). The operator's job-search history lives entirely in `outcome_event`
+ * (Gmail crawl); the old applied-postings source was empty (0 in-app "applied"
+ * actions) and dropped every outcome on a NULL `posting_id`, so the page
+ * always rendered empty. We now fetch the job-related outcomes and bucket them
+ * into cards client-side.
  */
 export function usePipelineData() {
-  const postingsQ = useAppliedPostings();
-  const outcomesQ = useAllOutcomes();
+  const outcomesQ = useAllOutcomes(true);
 
   const buckets = useMemo(() => {
-    if (!postingsQ.data || !outcomesQ.data) return emptyBuckets();
-    return bucketPostings(postingsQ.data.items, outcomesQ.data.items);
-  }, [postingsQ.data, outcomesQ.data]);
+    if (!outcomesQ.data) return emptyBuckets();
+    return bucketOutcomes(outcomesQ.data.items);
+  }, [outcomesQ.data]);
 
   return {
     buckets,
-    isLoading: postingsQ.isLoading || outcomesQ.isLoading,
-    isError: postingsQ.isError || outcomesQ.isError,
-    error: postingsQ.error ?? outcomesQ.error,
+    isLoading: outcomesQ.isLoading,
+    isError: outcomesQ.isError,
+    error: outcomesQ.error,
     refetch: () => {
-      postingsQ.refetch();
       outcomesQ.refetch();
     },
   };

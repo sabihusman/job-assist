@@ -71,11 +71,20 @@ const OUTCOMES = {
   limit: 2000,
   items: [
     {
+      // feat/pipeline-outcome-cards: the Pipeline now builds cards from the
+      // outcome itself (not a linked posting). This row is UNLINKED
+      // (posting_id + company_name null) — the real-world majority — so the
+      // card label is extracted from the subject. from_domain is the ATS
+      // vendor (last-resort label only).
       id: 'o-1',
-      posting_id: 'p-alpha',
+      posting_id: null,
       received_at: recentIso(2),
       stage: 'recruiter_screen_invite',
       confidence: 0.9,
+      company_name: null,
+      subject: 'Thank you for applying to Alpha Co',
+      from_domain: 'greenhouse.io',
+      email_thread_id: 't-alpha',
     },
   ],
 };
@@ -180,11 +189,18 @@ test('Pipeline page renders 8 stage columns in order', async ({ page }) => {
   }
 });
 
-test('Pipeline buckets the alpha posting into RECRUITER (latest outcome)', async ({ page }) => {
+test('Pipeline buckets the alpha outcome into RECRUITER, labelled from its subject', async ({
+  page,
+}) => {
+  // feat/pipeline-outcome-cards: cards come from outcome_events. The unlinked
+  // recruiter_screen_invite lands in RECRUITER and is labelled "Alpha Co",
+  // extracted from "Thank you for applying to Alpha Co" (NOT the ATS domain).
   await page.goto('/pipeline');
   await waitForDataReady(page);
   const recruiter = mainContent(page).getByRole('region', { name: /recruiter screen/i });
-  await expect(recruiter.getByText('Alpha Co')).toBeVisible();
+  // exact: the subject subtitle ("Thank you for applying to Alpha Co") also
+  // contains "Alpha Co" — match only the company-label span.
+  await expect(recruiter.getByText('Alpha Co', { exact: true })).toBeVisible();
 });
 
 // ── Companies ───────────────────────────────────────────────────────────

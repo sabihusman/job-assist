@@ -1144,14 +1144,20 @@ def _outcome(
     *,
     received_at: datetime,
     job_posting_id: uuid.UUID | None = None,
+    target_company_id: uuid.UUID | None = None,
     outcome_type: str = "rejection_pre_screen",
+    subject: str = "x",
+    from_domain: str = "example.com",
+    email_thread_id: str | None = None,
 ) -> OutcomeEvent:
     return OutcomeEvent(
         job_posting_id=job_posting_id,
+        target_company_id=target_company_id,
         email_message_id=f"msg-{uuid.uuid4().hex}",
+        email_thread_id=email_thread_id,
         from_address="r@example.com",
-        from_domain="example.com",
-        subject="x",
+        from_domain=from_domain,
+        subject=subject,
         received_at=received_at,
         outcome_type=outcome_type,
         classifier_version="gemini-flash-lite-v1",
@@ -1232,6 +1238,96 @@ async def test_outcomes_response_shape(db_session: Any) -> None:
     items = resp.json()["items"]
     assert items, "expected at least one outcome row"
     sample = items[-1]  # newest at the end of ASC order
-    assert set(sample) == {"id", "posting_id", "received_at", "stage", "confidence"}
+    assert set(sample) == {
+        "id",
+        "posting_id",
+        "received_at",
+        "stage",
+        "confidence",
+        "company_name",
+        "subject",
+        "from_domain",
+        "email_thread_id",
+    }
     assert sample["stage"] == "application_confirmation"
     assert sample["confidence"] == pytest.approx(0.9)
+
+
+@_NEEDS_DB
+async def test_outcomes_carry_label_fields_for_linked_and_unlinked(db_session: Any) -> None:
+    """feat/pipeline-outcome-cards: every row must carry subject + from_domain
+    (the Pipeline card label source) — for a company-LINKED row (company_name
+    populated via the join) AND an UNLINKED row (company_name null, labelled
+    from subject). Asserts through the endpoint serialization, not the query."""
+    c = _company(name="Solv Health")
+    db_session.add(c)
+    await db_session.flush()
+    base = datetime(2026, 5, 1, tzinfo=UTC)
+    db_session.add_all(
+        [
+            _outcome(
+                received_at=base,
+                target_company_id=c.id,
+                outcome_type="application_confirmation",
+                subject="Thank you for applying to Solv Health",
+                from_domain="greenhouse.io",
+            ),
+            _outcome(
+                received_at=base + timedelta(hours=1),
+                target_company_id=None,  # unlinked — the 119-row majority
+                outcome_type="application_confirmation",
+                subject="Thank you for applying to Uphold!",
+                from_domain="ashbyhq.com",
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp = await ac.get("/outcomes")
+    finally:
+        await _drop_override()
+
+    items = resp.json()["items"]
+    by_subject = {it["subject"]: it for it in items}
+    linked = by_subject["Thank you for applying to Solv Health"]
+    unlinked = by_subject["Thank you for applying to Uphold!"]
+
+    assert linked["company_name"] == "Solv Health"
+    assert linked["from_domain"] == "greenhouse.io"
+    # Unlinked still carries subject + from_domain so the client can label it.
+    assert unlinked["company_name"] is None
+    assert unlinked["subject"] == "Thank you for applying to Uphold!"
+    assert unlinked["from_domain"] == "ashbyhq.com"
+
+
+@_NEEDS_DB
+async def test_outcomes_job_related_filter_excludes_noise(db_session: Any) -> None:
+    """``?job_related=true`` drops unrelated/unclassified (the 1,687 noise rows
+    in prod); lifecycle rows remain."""
+    base = datetime(2026, 5, 1, tzinfo=UTC)
+    db_session.add_all(
+        [
+            _outcome(received_at=base, outcome_type="application_confirmation"),
+            _outcome(received_at=base + timedelta(hours=1), outcome_type="rejection_post_screen"),
+            _outcome(received_at=base + timedelta(hours=2), outcome_type="unrelated"),
+            _outcome(received_at=base + timedelta(hours=3), outcome_type="unclassified"),
+        ]
+    )
+    await db_session.commit()
+
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            unfiltered = await ac.get("/outcomes")
+            filtered = await ac.get("/outcomes?job_related=true")
+    finally:
+        await _drop_override()
+
+    assert unfiltered.json()["total"] == 4
+    fj = filtered.json()
+    assert fj["total"] == 2
+    kinds = {it["stage"] for it in fj["items"]}
+    assert kinds == {"application_confirmation", "rejection_post_screen"}
