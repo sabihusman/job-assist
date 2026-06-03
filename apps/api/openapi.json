@@ -2514,7 +2514,7 @@
           "admin"
         ],
         "summary": "Sweep Embeddings Endpoint",
-        "description": "Embed up to ``limit`` eligible OPEN postings (text-embedding-004).\n\nOpt-in / cron-driven \u2014 embeddings are NOT computed at ingest, so this never\nauto-costs. Idempotent + cache-aware: a row with a fresh vector\n(``jd_text_hash_embedded == jd_text_hash``) short-circuits without an API\ncall; a row whose JD text changed is re-embedded.\n\nNO scoring change \u2014 this only populates ``job_posting.jd_embedding``.\n\nTODO: add authentication before exposing publicly (dev-mode / single-user).",
+        "description": "Embed up to ``limit`` eligible OPEN postings (gemini-embedding-001).\n\nOpt-in / cron-driven \u2014 embeddings are NOT computed at ingest, so this never\nauto-costs. Idempotent + cache-aware: a row with a fresh vector\n(``jd_text_hash_embedded == jd_text_hash``) short-circuits without an API\ncall; a row whose JD text changed is re-embedded.\n\nNO scoring change \u2014 this only populates ``job_posting.jd_embedding``.\n\nTODO: add authentication before exposing publicly (dev-mode / single-user).",
         "operationId": "sweep_embeddings_endpoint_admin_embeddings_sweep_post",
         "parameters": [
           {
