@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -28,10 +29,38 @@ from job_assist.schemas.score import ScoreSweepRequest, ScoreSweepResponse
 logger = structlog.get_logger(__name__)
 
 
+def _schema_guard_enabled() -> bool:
+    """Whether the startup schema guard runs (feat/migration-deploy-gate).
+
+    On in production (the deploy hole that caused #104/#107). Overridable via
+    SCHEMA_GUARD=strict (force on, e.g. CI) / SCHEMA_GUARD=off (force off, an
+    escape hatch). Off by default in dev/test so an unmigrated local DB doesn't
+    block boot.
+    """
+    flag = os.getenv("SCHEMA_GUARD", "").strip().lower()
+    if flag == "strict":
+        return True
+    if flag == "off":
+        return False
+    return settings.environment == "production"
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Startup/shutdown hooks."""
     logger.info("api.startup", environment=settings.environment, version="0.0.1")
+    # Layer 2 of the migration-deploy gate: refuse to serve if the live DB
+    # schema is behind the code's migration head. A raise here aborts startup
+    # so the deploy fails and the prior healthy version keeps running — instead
+    # of serving 500s against a stale schema (the #104 / #107 failure mode).
+    # Layer 1 (scripts/start.sh) normally guarantees this passed by running
+    # `alembic upgrade head` before uvicorn; this catches an entrypoint bypass.
+    if _schema_guard_enabled():
+        from job_assist.db.schema_guard import assert_schema_at_head
+        from job_assist.db.session import engine
+
+        await assert_schema_at_head(engine)
+        logger.info("api.schema_guard.ok")
     yield
     logger.info("api.shutdown")
 
