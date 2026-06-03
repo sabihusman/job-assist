@@ -1,11 +1,18 @@
 name: Deploy
 
-# Runs on every merge to main. Steps are strictly ordered: migrations first,
-# API second, web third, smoke checks last. If any step fails, the workflow
-# halts — there is no retry logic. Surface the failure clearly and fix forward.
+# Runs on every merge to main. Order: wait for the API to come up healthy,
+# then deploy web, then smoke checks. If any step fails, the workflow halts —
+# no retry logic. Surface the failure clearly and fix forward.
+#
+# Migrations are NOT applied here anymore (feat/migration-deploy-gate). They run
+# in the API's start command (apps/api/scripts/start.sh: `alembic upgrade head`
+# then `exec uvicorn`), atomically with the code deploy and using Railway's
+# runtime DATABASE_URL. This closed the #104/#107 hole where this side-channel
+# migration step (a) raced Railway's independent webhook auto-deploy and
+# (b) failed silently on a stale GitHub DATABASE_URL secret while Railway
+# shipped the code anyway.
 #
 # Required secrets (set once in repo Settings → Secrets → Actions):
-#   DATABASE_URL          — Supabase production connection string (sync, psycopg2 format)
 #   API_URL               — Railway production URL (e.g. https://job-assist-api.railway.app)
 #   VERCEL_TOKEN          — Vercel personal access token
 #   VERCEL_ORG_ID         — Vercel team/org ID (from vercel link or dashboard)
@@ -52,30 +59,18 @@ jobs:
         run: uv sync --frozen
 
       # -----------------------------------------------------------------------
-      # Step 1 — Apply Alembic migrations to production Supabase
+      # Migrations: applied by the API start command, NOT here.
       # -----------------------------------------------------------------------
-      # Migrations run before the API deploy so the schema is ready when the
-      # new API version starts. If migration fails, the old API version continues
-      # running against the old schema — no downtime.
-      #
-      # Note: DATABASE_URL must use the sync psycopg2 format for Alembic:
-      #   postgresql://postgres:[password]@[host]:5432/postgres
-      # (Not postgresql+asyncpg:// — that is for the app runtime only.)
-      - name: Apply database migrations
-        # Skips gracefully if alembic.ini doesn't exist yet (expected until
-        # Week 1 when the first migration is added).
-        working-directory: apps/api
-        run: |
-          if [ ! -f "alembic.ini" ]; then
-            echo "No alembic.ini found — skipping migrations (expected until Week 1)."
-            exit 0
-          fi
-          uv run alembic upgrade head
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      # apps/api/scripts/start.sh runs `alembic upgrade head` then `exec uvicorn`
+      # with `set -euo pipefail`, so a failed migration aborts container start
+      # and the prior healthy deploy keeps serving. The Layer-2 startup schema
+      # guard (job_assist.db.schema_guard, on in production) refuses to serve if
+      # the live schema is ever behind the code head. See docs/VERIFICATION.md
+      # rule 4. (No GitHub DATABASE_URL secret dependency — runtime env only.)
 
       # -----------------------------------------------------------------------
-      # Step 2 — Wait for Railway's GitHub auto-deploy to come up healthy
+      # Wait for Railway's GitHub auto-deploy to come up healthy
+      # -----------------------------------------------------------------------
       # -----------------------------------------------------------------------
       # Railway is connected to this repo with auto-deploy on push to main, so
       # the moment the merge commit lands Railway begins building. We do NOT
