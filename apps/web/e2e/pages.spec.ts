@@ -198,7 +198,9 @@ test('Pipeline buckets the alpha outcome into RECRUITER, labelled from its subje
   await page.goto('/pipeline');
   await waitForDataReady(page);
   const recruiter = mainContent(page).getByRole('region', { name: /recruiter screen/i });
-  await expect(recruiter.getByText('Alpha Co')).toBeVisible();
+  // exact: the subject subtitle ("Thank you for applying to Alpha Co") also
+  // contains "Alpha Co" — match only the company-label span.
+  await expect(recruiter.getByText('Alpha Co', { exact: true })).toBeVisible();
 });
 
 // ── Companies ───────────────────────────────────────────────────────────
