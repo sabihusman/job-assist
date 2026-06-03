@@ -1471,10 +1471,15 @@ async def sync_applied_companies_endpoint(
     NO ATS resolution (operator decision): tracking rows can never be ingested.
     Read-mostly; the only writes are tracking rows + ``target_company_id`` links.
     """
+    import traceback
+
     from job_assist.services.applied_companies import sync_applied_companies
 
-    report = await sync_applied_companies(db, threshold=threshold, limit=limit)
-    return report.model_dump(mode="json")
+    try:
+        report = await sync_applied_companies(db, threshold=threshold, limit=limit)
+        return report.model_dump(mode="json")
+    except Exception as exc:  # TEMP diagnostic — surface the real prod error
+        return {"_error": repr(exc), "_trace": traceback.format_exc()[-2500:]}
 
 
 # ── Operator profile ──────────────────────────────────────────────────────────
