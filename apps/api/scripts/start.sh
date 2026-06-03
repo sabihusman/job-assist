@@ -10,17 +10,23 @@
 # Uses the RUNTIME DATABASE_URL from the environment (Railway service env /
 # Docker env), NOT a CI secret — so it can't fail on a stale GitHub secret.
 #
-# Host-agnostic: invoked via the Procfile on Railway (Nixpacks) and as the
-# Dockerfile ENTRYPOINT on Hetzner later — the same script, unchanged.
+# Tools run via `uv run` because this is a uv-managed project: the deps live in
+# uv's venv, which is NOT on bare PATH in the Railway/Nixpacks container (the
+# prior working start command was `uv run uvicorn …`). `uv run` resolves
+# alembic/uvicorn from that venv; bare invocations would fail "command not
+# found". Host-agnostic: invoked via the Procfile on Railway (Nixpacks) and as
+# the Dockerfile ENTRYPOINT on Hetzner later — the same script, unchanged.
 set -euo pipefail
 
 # Resolve to apps/api regardless of the caller's cwd (scripts/ lives under it),
-# so alembic.ini and the package import path are found on any host.
+# so pyproject.toml/uv.lock, alembic.ini, and the package import path are found
+# on any host.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}/.."
 
-echo "[start.sh] Applying migrations (alembic upgrade head)…"
-alembic upgrade head
+echo "[start.sh] Applying migrations (uv run alembic upgrade head)…"
+uv run alembic upgrade head
 echo "[start.sh] Migrations at head. Starting uvicorn…"
 
-exec uvicorn job_assist.main:app --host 0.0.0.0 --port "${PORT:-8000}"
+# Binds Railway's $PORT (8000 is only a local fallback).
+exec uv run uvicorn job_assist.main:app --host 0.0.0.0 --port "${PORT:-8000}"
