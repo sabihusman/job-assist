@@ -396,3 +396,136 @@ async def test_default_cap_3_applied_when_param_omitted(db_session: Any) -> None
     surfaced = {item["id"] for item in body["items"]}
     assert str(ids["a"][3]) not in surfaced  # score 70
     assert str(ids["a"][4]) not in surfaced  # score 60
+
+
+# ── feat/tunable-per-company-cap: the reachability fix ──────────────────────
+# The cap mechanism is already covered above. These pin the NEW wiring: that
+# the operator can MOVE the cap (raise it / disable it) and that moving it
+# changes what surfaces — including via the persisted operator_profile default
+# (the gap that left the operator stuck at 3). Per the verification standard.
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_cap_4_surfaces_more_than_cap_3(db_session: Any) -> None:
+    """Intermediate raise: cap=4 on the 5-role company A surfaces its 4th-best
+    role (score 70), which cap=3 hides. Proves raising the cap surfaces more.
+    Total: 4 (A) + 2 (B) + 3 (NULL) = 9."""
+    ids = await _seed_cap_fixture(db_session)
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp = await ac.get("/postings?per_company_cap=4&limit=100&sort=best_fit")
+    finally:
+        await _drop_override()
+
+    body = resp.json()
+    assert body["total"] == 9
+    surfaced = {item["id"] for item in body["items"]}
+    assert str(ids["a"][3]) in surfaced  # score 70 NOW surfaces (hidden at cap=3)
+    assert str(ids["a"][4]) not in surfaced  # score 60 still capped out
+
+
+async def _set_profile_cap(db_session: Any, cap: int) -> None:
+    """Set operator_profile.per_company_cap on the singleton (id=1)."""
+    from sqlalchemy import select
+
+    from job_assist.db.models import OperatorProfile
+
+    prof = (
+        await db_session.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
+    ).scalar_one()
+    prof.per_company_cap = cap
+    await db_session.commit()
+
+
+async def _seed_one_company(db_session: Any, n: int) -> uuid.UUID:
+    """One company with ``n`` postings, fit_scores 100, 99, …; staggered
+    first_seen so ordering is deterministic. Returns the company id."""
+    now = datetime.now(tz=UTC)
+    co = _company("CapCo", tier=1)
+    db_session.add(co)
+    await db_session.flush()
+    for idx in range(n):
+        jp = _posting(
+            target_company_id=co.id,
+            first_seen_at=now - timedelta(hours=idx),
+            fit_score=100 - idx,
+        )
+        db_session.add(jp)
+        await db_session.flush()
+        db_session.add(_posting_source(job_posting_id=jp.id))
+    await db_session.commit()
+    return co.id
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_endpoint_reads_profile_cap_default_and_param_overrides(db_session: Any) -> None:
+    """The reachability proof. Company with 6 roles:
+    - profile cap=6, no param  → 6 surface (operator default honored)
+    - ?per_company_cap=2       → 2 surface (explicit override wins)
+    - profile cap=0, no param  → all 6 surface (disabled)
+    """
+    await _seed_one_company(db_session, 6)
+
+    # profile default = 6 → no-param view surfaces all 6
+    await _set_profile_cap(db_session, 6)
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            no_param = await ac.get("/postings?limit=100&sort=best_fit")
+            override = await ac.get("/postings?per_company_cap=2&limit=100&sort=best_fit")
+        assert no_param.json()["total"] == 6, "profile cap=6 must surface all 6 (operator default)"
+        assert override.json()["total"] == 2, (
+            "explicit ?per_company_cap=2 must override the profile"
+        )
+
+        # profile cap=0 → disabled → all surface with no param
+        await _set_profile_cap(db_session, 0)
+        async with await _client(db_session):
+            from job_assist.db.session import get_db
+            from job_assist.main import app
+
+            async def _ov() -> Any:
+                yield db_session
+
+            app.dependency_overrides[get_db] = _ov
+            ac2 = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+            async with ac2:
+                disabled = await ac2.get("/postings?limit=100&sort=best_fit")
+        assert disabled.json()["total"] == 6, "profile cap=0 must disable the cap (show all)"
+    finally:
+        await _set_profile_cap(db_session, 3)  # restore singleton default
+        await _drop_override()
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_export_honors_profile_cap_matching_the_view(db_session: Any) -> None:
+    """Export parity: with profile cap=2 and a 6-role company, both the list
+    view AND the xlsx export surface exactly 2 rows — the "exported == visible"
+    contract holds through the profile-default fallback."""
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    await _seed_one_company(db_session, 6)
+    await _set_profile_cap(db_session, 2)
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            view = await ac.get("/postings?limit=100&sort=best_fit")
+            export = await ac.get("/postings/export.xlsx?sort=best_fit")
+    finally:
+        await _set_profile_cap(db_session, 3)
+        await _drop_override()
+
+    view_total = view.json()["total"]
+    assert view_total == 2  # profile cap applied to the view
+
+    wb = load_workbook(BytesIO(export.content))
+    ws = wb["Jobs"]
+    # Column 1 is the integer rank; count data rows (skip the header).
+    data_rows = [r[0].value for r in ws.iter_rows(min_row=2) if isinstance(r[0].value, int)]
+    assert len(data_rows) == view_total, "export row count must match the capped view"
