@@ -19,6 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from job_assist.config import settings
 from job_assist.db.session import get_db
 from job_assist.schemas.contact import ContactCreate, ContactUpdate
+from job_assist.schemas.embeddings import (
+    EmbeddingRetryResponse,
+    EmbeddingSweepResponse,
+    NearestResponse,
+)
 from job_assist.schemas.operator_profile import OperatorProfileUpdate
 from job_assist.schemas.outreach import OutreachMessageCreate
 from job_assist.schemas.public import DEFAULT_SORT, PostingStateRequest, SortKey
@@ -1482,6 +1487,21 @@ async def update_operator_profile(
 
     await db.commit()
     await db.refresh(row)
+
+    # Semantic profile embedding (slice 1): re-embed looking_for_text when it
+    # changed (hash-gated inside the helper). Wrapped so an embedding failure
+    # NEVER fails the profile save — same "must not cascade" contract as
+    # scoring at ingest. This is the ONLY scoring-adjacent side effect, and it
+    # writes only the operator_profile vector columns; fit_score is untouched.
+    try:
+        from job_assist.services.embeddings import embed_profile_if_changed
+
+        await embed_profile_if_changed(db)
+    except Exception as exc:
+        logging.getLogger("job_assist.main").warning(
+            "operator_profile.embed_failed", extra={"error": str(exc)[:300]}
+        )
+
     return OperatorProfileRead.model_validate(row).model_dump(mode="json")
 
 
@@ -3134,6 +3154,85 @@ async def retry_jd_summary_enrichment_endpoint(
         "posting_id": result.posting_id,
         "error": result.error,
     }
+
+
+# ── Semantic embeddings (slice 1, feat/embeddings-slice1) ─────────────────────
+# Populate-only + a read-only validation gate. NOTHING here changes scoring:
+# score_posting / fit_score / scorer_version / the sort modes / postings_query
+# are untouched. These endpoints write/read ONLY the new vector columns.
+
+
+@app.post("/admin/embeddings/sweep", tags=["admin"])
+async def sweep_embeddings_endpoint(
+    db: DbSession,
+    limit: int = 100,
+) -> EmbeddingSweepResponse:
+    """Embed up to ``limit`` eligible OPEN postings (text-embedding-004).
+
+    Opt-in / cron-driven — embeddings are NOT computed at ingest, so this never
+    auto-costs. Idempotent + cache-aware: a row with a fresh vector
+    (``jd_text_hash_embedded == jd_text_hash``) short-circuits without an API
+    call; a row whose JD text changed is re-embedded.
+
+    NO scoring change — this only populates ``job_posting.jd_embedding``.
+
+    TODO: add authentication before exposing publicly (dev-mode / single-user).
+    """
+    from job_assist.services.embeddings import sweep_embeddings
+
+    summary = await sweep_embeddings(db, limit=limit)
+    return EmbeddingSweepResponse(
+        total=summary.total,
+        embedded=summary.embedded,
+        skipped=summary.skipped,
+        exhausted=summary.exhausted,
+        missing_context=summary.missing_context,
+        errors=summary.errors,
+        error_details=summary.error_details,
+    )
+
+
+@app.post("/admin/embeddings/{posting_id}/retry", tags=["admin"])
+async def retry_embedding_endpoint(
+    posting_id: uuid.UUID,
+    db: DbSession,
+) -> EmbeddingRetryResponse:
+    """Reset ``embedding_attempt_count`` + clear the vector, then re-embed.
+
+    Mirrors the jd-summary / enrichment retry endpoints.
+    """
+    from job_assist.services.embeddings import reset_attempts_and_retry
+
+    result = await reset_attempts_and_retry(db, posting_id)
+    if result.status == "not_found":
+        raise HTTPException(status_code=404, detail=f"job_posting id={posting_id} not found")
+    return EmbeddingRetryResponse(
+        status=result.status,
+        posting_id=result.posting_id,
+        source=result.source,
+        error=result.error,
+    )
+
+
+@app.get("/admin/embeddings/nearest", tags=["admin"])
+async def nearest_embeddings_endpoint(
+    db: DbSession,
+    n: int = 20,
+) -> NearestResponse:
+    """Read-only validation gate: the N postings nearest the profile vector by
+    cosine similarity.
+
+    The slice-1 go/no-go signal. Returns title / company / cosine_sim /
+    heuristic fit_score / embedded_source per row, plus the cosine
+    min/median/max spread across all embedded open rows. ``available=False``
+    (with a reason) when the profile or corpus isn't embedded yet. Reads only —
+    no scoring, no mutation.
+    """
+    from job_assist.services.embeddings import nearest_postings
+
+    n_clamped = max(1, min(n, 100))
+    out = await nearest_postings(db, n=n_clamped)
+    return NearestResponse(**out)
 
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
