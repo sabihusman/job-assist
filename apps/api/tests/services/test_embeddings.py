@@ -711,3 +711,41 @@ async def test_similarity_distribution_reads_the_gate(db_session: Any) -> None:
     assert again["top_by_similarity"][0]["similarity_score"] == 100
 
     await _reset_profile(db_session)
+
+
+def test_nearest_response_model_keeps_2a_fields() -> None:
+    """Regression: the GET endpoint does ``NearestResponse(**out)``; Pydantic
+    drops keys the model doesn't declare. The slice-2a fields (``similarity_spread``
+    and per-row ``similarity_score``) MUST survive that round-trip — otherwise the
+    service computes them but the response silently strips them (which is exactly
+    what shipped: new service code, un-updated response_model). Pure, no DB —
+    this is the gap the service-level tests missed."""
+    from job_assist.schemas.embeddings import NearestResponse
+
+    out = {
+        "available": True,
+        "n": 1,
+        "results": [
+            {
+                "posting_id": "abc",
+                "title": "senior product manager",
+                "company": "Altruist",
+                "cosine_sim": 0.7524,
+                "fit_score": 72,
+                "similarity_score": 100,
+                "embedded_source": "summary",
+            }
+        ],
+        "spread": {"embedded_count": 1591, "cosine_sim_min": 0.58, "cosine_sim_max": 0.75},
+        "similarity_spread": {
+            "calibrated_count": 1591,
+            "min": 0,
+            "p25": 25.0,
+            "median": 50.0,
+            "p75": 75.0,
+            "max": 100,
+        },
+    }
+    dumped = NearestResponse(**out).model_dump()
+    assert dumped["similarity_spread"]["median"] == 50.0
+    assert dumped["results"][0]["similarity_score"] == 100

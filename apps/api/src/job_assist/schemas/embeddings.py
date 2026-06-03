@@ -7,6 +7,8 @@ both endpoints take only query params (``limit`` / ``n``).
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel
 
 
@@ -39,6 +41,10 @@ class NearestPosting(BaseModel):
     company: str
     cosine_sim: float
     fit_score: int | None
+    # slice 2a: calibrated 0-100 similarity (PERCENT_RANK of cosine-to-profile).
+    # NULL until POST /admin/embeddings/recalibrate has run. Declared here so the
+    # response_model doesn't strip it off the GET (the slice-1 model omitted it).
+    similarity_score: int | None = None
     embedded_source: str | None
 
 
@@ -55,3 +61,9 @@ class NearestResponse(BaseModel):
     n: int | None = None
     results: list[NearestPosting] = []
     spread: dict[str, float | int] | None = None
+    # slice 2a: distribution of the calibrated similarity_score (count /
+    # calibrated_count / min / p25 / median / p75 / max) — the verification gate.
+    # dict[str, Any] because the not-yet-calibrated case carries a string note.
+    # Declared so the response_model surfaces it (the slice-1 model omitted it,
+    # which silently stripped it off the GET).
+    similarity_spread: dict[str, Any] | None = None

@@ -3303,6 +3303,17 @@
             ],
             "title": "Fit Score"
           },
+          "similarity_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Similarity Score"
+          },
           "embedded_source": {
             "anyOf": [
               {
@@ -3383,6 +3394,18 @@
               }
             ],
             "title": "Spread"
+          },
+          "similarity_spread": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Similarity Spread"
           }
         },
         "type": "object",
