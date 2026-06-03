@@ -83,7 +83,7 @@ class OperatorProfile(Base):
     )
 
     # ── Semantic profile embedding (slice 1, feat/embeddings-slice1) ─────
-    # text-embedding-004 vector of ``looking_for_text``. Re-embedded on
+    # gemini-embedding-001 (768-dim) vector of ``looking_for_text``. Re-embedded on
     # PUT /operator/profile when the text changes (hash-gated). NULL until
     # the operator sets a non-empty ``looking_for_text`` and it embeds.
     # NOTHING reads this for ranking in slice 1 — it powers only the

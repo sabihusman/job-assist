@@ -16,7 +16,7 @@ Mirrors ``services/jd_summary_enrichment.py``:
 Row selector is OPEN rows (``closed_at IS NULL``); the vestigial ``should_embed``
 flag is ignored (it is always False and was never wired).
 
-Embedding model: ``text-embedding-004`` (768-dim) via the already-present
+Embedding model: ``gemini-embedding-001`` (output_dimensionality=768) via the
 google-genai SDK + ``GEMINI_API_KEY``. Asymmetric task types — postings embed
 as ``RETRIEVAL_DOCUMENT``, the profile query as ``RETRIEVAL_QUERY``.
 
@@ -145,7 +145,7 @@ async def embed_text(
     api_key: str | None = None,
     model: str | None = None,
 ) -> list[float]:
-    """Embed one text via Gemini ``text-embedding-004``.
+    """Embed one text via Gemini ``gemini-embedding-001`` (768-dim).
 
     Returns a 768-float list. Raises ``RuntimeError`` / ``ValueError`` on a
     missing key, empty response, or dimension mismatch. Monkeypatched in tests
@@ -171,7 +171,13 @@ async def embed_text(
         return client.models.embed_content(
             model=used_model,
             contents=cleaned,
-            config=types.EmbedContentConfig(task_type=task_type),
+            # gemini-embedding-001 defaults to 3072 dims; pin to our Vector
+            # column width (768). Cosine (the only consumer) is scale-invariant,
+            # so the non-normalized truncated vector is fine for nearest().
+            config=types.EmbedContentConfig(
+                task_type=task_type,
+                output_dimensionality=settings.embedding_dim,
+            ),
         )
 
     response = await asyncio.to_thread(_call)

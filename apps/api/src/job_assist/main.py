@@ -3167,7 +3167,7 @@ async def sweep_embeddings_endpoint(
     db: DbSession,
     limit: int = 100,
 ) -> EmbeddingSweepResponse:
-    """Embed up to ``limit`` eligible OPEN postings (text-embedding-004).
+    """Embed up to ``limit`` eligible OPEN postings (gemini-embedding-001).
 
     Opt-in / cron-driven — embeddings are NOT computed at ingest, so this never
     auto-costs. Idempotent + cache-aware: a row with a fresh vector

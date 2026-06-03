@@ -60,11 +60,14 @@ class Settings(BaseSettings):
     jd_summary_enrich_max_attempts: int = Field(default=3)
     jd_summary_max_output_tokens: int = Field(default=500)
 
-    # Semantic embeddings (slice 1, feat/embeddings-slice1) — text-embedding-004
-    # outputs 768 dims natively. The sweep gives up on a row after this many
+    # Semantic embeddings (slice 1, feat/embeddings-slice1).
+    # gemini-embedding-001 is the current GA text embedding model
+    # (text-embedding-004 was shut down → 404 on embedContent). It defaults to
+    # 3072 dims; we request output_dimensionality=embedding_dim (768) to match
+    # the Vector(768) columns. The sweep gives up on a row after this many
     # failed attempts until /retry resets it, same cap pattern as the other
     # enrichment paths. NOTHING reads the vectors for ranking in slice 1.
-    embedding_model: str = Field(default="text-embedding-004")
+    embedding_model: str = Field(default="gemini-embedding-001")
     embedding_dim: int = Field(default=768)
     embedding_enrich_max_attempts: int = Field(default=3)
 
