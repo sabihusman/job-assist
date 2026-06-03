@@ -1325,14 +1325,8 @@
             "in": "query",
             "required": false,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
+              "type": "integer",
+              "default": 3,
               "title": "Per Company Cap"
             }
           },
@@ -1557,14 +1551,8 @@
             "in": "query",
             "required": false,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
+              "type": "integer",
+              "default": 3,
               "title": "Per Company Cap"
             }
           },
@@ -3070,17 +3058,6 @@
               }
             ],
             "title": "Applicant Cap"
-          },
-          "per_company_cap": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Per Company Cap"
           },
           "staffing_firm_blocklist": {
             "anyOf": [

@@ -33,7 +33,6 @@ function profile(overrides: Partial<OperatorProfileRead> = {}): OperatorProfileR
     salary_floor_usd: 85_000,
     salary_ceiling_usd: null,
     applicant_cap: 500,
-    per_company_cap: 3,
     staffing_firm_blocklist: [],
     seniority_levels_included: null,
     created_at: '2026-05-26T00:00:00Z',
@@ -95,39 +94,6 @@ describe('HardRulesSection — PR #43 controls', () => {
     await user.click(apmChip);
     expect(apmChip).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByText(/all seniority levels are currently included/i)).toBeInTheDocument();
-  });
-
-  // feat/tunable-per-company-cap — the reachability fix. These prove the
-  // operator can actually SEE and MOVE the cap (the gap), and that moving it
-  // is sent to the backend, per the verification standard.
-  test('renders the "Roles per company" control showing the current value', () => {
-    wrap(<HardRulesSection profile={profile({ per_company_cap: 3 })} />);
-    const input = screen.getByLabelText('Roles per company');
-    expect(input).toBeInTheDocument();
-    expect(input).toHaveValue(3);
-  });
-
-  test('per_company_cap=0 displays "Unlimited"', () => {
-    wrap(<HardRulesSection profile={profile({ per_company_cap: 0 })} />);
-    expect(screen.getByText('Unlimited')).toBeInTheDocument();
-  });
-
-  test('changing the cap and saving sends per_company_cap to the backend', async () => {
-    const user = userEvent.setup();
-    mockMutate.mockClear();
-    mockMutate.mockResolvedValueOnce(undefined);
-    wrap(<HardRulesSection profile={profile({ per_company_cap: 3 })} />);
-
-    const input = screen.getByLabelText('Roles per company');
-    await user.clear(input);
-    await user.type(input, '8');
-
-    // Submit → confirm modal → Save changes → mutateAsync.
-    await user.click(screen.getByRole('button', { name: /save hard rules/i }));
-    await user.click(await screen.findByRole('button', { name: /save changes/i }));
-
-    expect(mockMutate).toHaveBeenCalledTimes(1);
-    expect(mockMutate.mock.calls[0][0]).toMatchObject({ per_company_cap: 8 });
   });
 
   test('pre-selected seniority levels render as pressed', () => {

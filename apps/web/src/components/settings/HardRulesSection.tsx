@@ -31,8 +31,6 @@ import { cn } from '@/lib/utils';
 
 type HardRulesFormState = {
   applicant_cap: number;
-  // feat/tunable-per-company-cap: roles surfaced per company; 0 = unlimited.
-  per_company_cap: number;
   salary_floor_usd: number;
   // PR #43: nullable ceiling. The form represents "no ceiling" as 0 so the
   // numeric input works naturally; the save handler converts 0 back to null.
@@ -54,7 +52,6 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
   const form = useForm<HardRulesFormState>({
     defaultValues: {
       applicant_cap: profile.applicant_cap,
-      per_company_cap: profile.per_company_cap,
       salary_floor_usd: profile.salary_floor_usd,
       // PR #43: backend stores null when unset; surface that as 0 in the
       // form so the numeric input has a real value to bind to.
@@ -82,7 +79,6 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
     const ceiling = values.salary_ceiling_usd > 0 ? values.salary_ceiling_usd : null;
     const body = {
       applicant_cap: values.applicant_cap,
-      per_company_cap: values.per_company_cap,
       salary_floor_usd: values.salary_floor_usd,
       salary_ceiling_usd: ceiling,
       seniority_levels_included: values.seniority_levels_included,
@@ -111,14 +107,6 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
       label: 'Maximum applicant count',
       from: String(profile.applicant_cap),
       to: String(watch('applicant_cap')),
-    });
-  }
-  if (formState.dirtyFields.per_company_cap) {
-    const capNow = watch('per_company_cap');
-    changes.push({
-      label: 'Roles per company',
-      from: profile.per_company_cap === 0 ? 'Unlimited' : String(profile.per_company_cap),
-      to: capNow === 0 ? 'Unlimited' : String(capNow),
     });
   }
   if (formState.dirtyFields.salary_floor_usd) {
@@ -178,27 +166,6 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
                 max={1000}
                 step={10}
                 inputAriaLabel="Maximum applicant count"
-              />
-            )}
-          />
-        </SettingsRow>
-
-        <SettingsRow
-          label="Roles per company"
-          sub="How many of each company's best-fit roles to surface in lists. Set to 0 for unlimited (show every role). Raise it to see more per company."
-        >
-          <Controller
-            control={control}
-            name="per_company_cap"
-            render={({ field }) => (
-              <SliderRow
-                value={field.value}
-                onChange={field.onChange}
-                min={0}
-                max={25}
-                step={1}
-                inputAriaLabel="Roles per company"
-                displayFormat={(n) => (n === 0 ? 'Unlimited' : String(n))}
               />
             )}
           />
