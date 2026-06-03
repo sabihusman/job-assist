@@ -80,17 +80,22 @@ ORM selects. Code and schema move together, or the deploy is blocked.
 ## 5. The feature-reality audit is the standing backlog
 
 The audit (every feature classified
-**WORKING / INERT / BROKEN / MISLABELED / PARTIAL**) is the live debt backlog.
+**WORKING / INERT / BROKEN / MISLABELED / PARTIAL**) is the live debt backlog —
+maintained in **[`docs/FEATURE_AUDIT.md`](./FEATURE_AUDIT.md)**.
 
 - Each non-WORKING item is a tracked fix.
 - **Every fix lands with the guard test that would have caught the bug** (rule 2),
   so the same class of failure can't silently return.
-- After a fix lands, re-verify in prod (rule 1) before moving it to WORKING.
+- After a fix lands, re-verify in prod (rule 1) before moving it to WORKING, and
+  update `FEATURE_AUDIT.md`.
 
-> Open items (illustrative): "interested" hides into no view (BROKEN);
-> `looking_for_text` / `role_keywords` / pass reasons inert; API-keys status
-> hardcoded; Applied/Rejected attribution is company-level (PARTIAL); seniority
-> parser under-levels (PARTIAL).
+> First item moved suppressor → WORKING under this standard: the **per-company
+> cap** (PR #112 — migration auto-applied via the gate, tunability verified live
+> 3→35 / 10→107 / 0→494, operator-reachable via the "Roles per company" Settings
+> control). Remaining open items (BROKEN/INERT/MISLABELED/PARTIAL) are tracked in
+> `FEATURE_AUDIT.md`: "interested" hides into no view; `looking_for_text` /
+> `role_keywords` / pass reasons inert; API-keys status hardcoded;
+> Applied/Rejected attribution is company-level; seniority parser under-levels.
 
 ---
 
