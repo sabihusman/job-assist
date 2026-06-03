@@ -196,14 +196,18 @@ async def sync_applied_companies(
     if writes_since_commit > 0:
         await session.commit()
 
+    # NB: keys must not collide with reserved LogRecord attributes (``created``,
+    # ``message``, ``name``, …) — ``extra={"created": ...}`` raises KeyError at
+    # INFO level (prod), though it's silent when INFO is disabled (tests). Prefix
+    # the counters to stay clear of that whole namespace.
     logger.info(
         "applied_companies.sync_complete",
         extra={
-            "scanned": report.scanned,
-            "created": report.created,
-            "linked": report.linked,
-            "suggested": len(report.suggested),
-            "skipped_unnamed": report.skipped_unnamed,
+            "n_scanned": report.scanned,
+            "n_created": report.created,
+            "n_linked": report.linked,
+            "n_suggested": len(report.suggested),
+            "n_skipped_unnamed": report.skipped_unnamed,
         },
     )
     return report

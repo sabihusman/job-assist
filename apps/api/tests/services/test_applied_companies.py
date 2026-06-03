@@ -7,6 +7,7 @@ suggested correctly and are NEVER picked up by the ingest cron driver.
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -64,7 +65,14 @@ def _confirmation(subject: str, *, received_at: datetime | None = None) -> Outco
 
 
 @_NEEDS_DB
-async def test_creates_tracking_row_and_excluded_from_ingest_plan(db_session: Any) -> None:
+async def test_creates_tracking_row_and_excluded_from_ingest_plan(
+    db_session: Any, caplog: Any
+) -> None:
+    # INFO level so the final ``logger.info(... extra=...)`` actually builds a
+    # LogRecord — guards against extra keys colliding with reserved LogRecord
+    # attributes (e.g. ``created``), which raises KeyError only when INFO is
+    # enabled (prod) and is silent otherwise (the bug that 500'd in prod).
+    caplog.set_level(logging.INFO, logger="job_assist.services.applied_companies")
     db_session.add_all(
         [
             _confirmation("Thank you for applying to Brightwheel"),
