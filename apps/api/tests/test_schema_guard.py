@@ -68,6 +68,18 @@ def test_code_heads_reads_single_head_from_migration_scripts() -> None:
 _REPO_ROOT = Path(__file__).resolve().parents[3]  # apps/api/tests/.. -> repo root
 
 
+def _expected_heads() -> set[str]:
+    """Head(s) read directly from the known-absolute migrations dir — so these
+    resolution tests don't hardcode a revision id (which changes with every
+    migration-bearing PR). They assert the resolver finds the SAME dir."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    cfg = Config()
+    cfg.set_main_option("script_location", str(_REPO_ROOT / "apps" / "api" / "migrations"))
+    return set(ScriptDirectory.from_config(cfg).get_heads())
+
+
 def test_code_heads_resolves_from_installed_layout_and_foreign_cwd(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
@@ -86,7 +98,7 @@ def test_code_heads_resolves_from_installed_layout_and_foreign_cwd(
 
     heads = sg.code_heads()  # would raise alembic CommandError under the old code
     assert heads, "must resolve migrations from repo-root cwd despite a bogus package anchor"
-    assert "a7b8c9d0e1f2" in heads
+    assert heads == _expected_heads(), "must resolve the SAME migrations dir as the canonical path"
 
 
 def test_resolve_honors_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
@@ -96,7 +108,7 @@ def test_resolve_honors_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     monkeypatch.setattr(sg, "_source_relative_migrations", lambda: tmp_path / "nope" / "migrations")
     monkeypatch.setenv("ALEMBIC_MIGRATIONS_DIR", str(_REPO_ROOT / "apps" / "api" / "migrations"))
     monkeypatch.chdir(tmp_path)  # nothing findable via cwd
-    assert "a7b8c9d0e1f2" in sg.code_heads()
+    assert sg.code_heads() == _expected_heads()
 
 
 def test_resolve_raises_config_error_when_unfindable(

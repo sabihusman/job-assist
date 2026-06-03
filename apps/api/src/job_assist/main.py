@@ -1956,7 +1956,7 @@ async def list_postings(
     include_snoozed_past_only: bool = False,
     target_company_id: uuid.UUID | None = None,
     sort: SortKey = DEFAULT_SORT,
-    per_company_cap: int = 3,
+    per_company_cap: int | None = None,
     limit: int = 20,
     offset: int = 0,
     include_closed: bool = False,
@@ -1992,11 +1992,15 @@ async def list_postings(
         raise HTTPException(status_code=422, detail="limit must be 1..100")
     if offset < 0:
         raise HTTPException(status_code=422, detail="offset must be >= 0")
-    if per_company_cap < 0:
+    if per_company_cap is not None and per_company_cap < 0:
         raise HTTPException(
             status_code=422,
             detail="per_company_cap must be >= 0 (0 disables the cap entirely)",
         )
+    # feat/tunable-per-company-cap: pass through as-is. None flows to the query
+    # builder, which resolves the operator's persisted
+    # operator_profile.per_company_cap inline (no extra round-trip); an explicit
+    # ?per_company_cap= override (including 0 = disabled) wins.
     ats = _validate_ats_filter(ats)
     remote_type = _validate_remote_type_filter(remote_type)
     state = _validate_state_filter(state)
@@ -2150,7 +2154,7 @@ async def export_postings_xlsx(
     include_snoozed_past_only: bool = False,
     target_company_id: uuid.UUID | None = None,
     sort: SortKey = DEFAULT_SORT,
-    per_company_cap: int = 3,
+    per_company_cap: int | None = None,
     include_closed: bool = False,
     include_filtered: bool = False,
 ) -> Response:
@@ -2180,11 +2184,14 @@ async def export_postings_xlsx(
     # Reuse the same validators the list endpoint uses; they raise 422
     # on bad input. per_company_cap is validated inline here (limit/
     # offset are not user-facing on this endpoint).
-    if per_company_cap < 0:
+    if per_company_cap is not None and per_company_cap < 0:
         raise HTTPException(
             status_code=422,
             detail="per_company_cap must be >= 0 (0 disables the cap entirely)",
         )
+    # feat/tunable-per-company-cap: pass through (None → builder resolves the
+    # operator's persisted cap inline), so the export surfaces the SAME slice
+    # the operator sees.
     ats = _validate_ats_filter(ats)
     remote_type = _validate_remote_type_filter(remote_type)
     state = _validate_state_filter(state)
