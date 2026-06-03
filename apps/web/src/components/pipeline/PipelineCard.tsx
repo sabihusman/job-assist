@@ -14,7 +14,7 @@ export function PipelineCard({ card }: { card: ApplicationCard }) {
       data-card-id={card.id}
       className="flex flex-col gap-1 rounded-md border border-border bg-card p-2.5 shadow-card"
     >
-      <TierBadge tier={tier} />
+      {typeof tier === 'number' && <TierBadge tier={tier} />}
       <span className="truncate text-[13px] font-semibold">{card.companyName}</span>
       <span className="truncate text-[12px] text-muted-foreground">
         {card.roleTitle}

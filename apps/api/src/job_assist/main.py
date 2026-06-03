@@ -2638,19 +2638,29 @@ async def list_companies(
 async def list_outcomes(
     db: DbSession,
     posting_id: uuid.UUID | None = None,
+    job_related: bool = False,
     limit: int = 100,
     offset: int = 0,
 ) -> dict[str, Any]:
     """Paginated list of outcome events, sorted chronologically (ASC).
 
     Optionally narrows to one posting via ``?posting_id=...``. Feeds the
-    Applied-page timeline UI.
+    Applied-page timeline UI and the Pipeline kanban.
+
+    ``?job_related=true`` excludes the ``unrelated`` / ``unclassified`` noise
+    rows (~1,884 → ~197 in prod) — the Pipeline only renders lifecycle
+    outcomes. Each row carries the fields the Pipeline needs to label a card
+    without a per-posting link: ``company_name`` (LEFT JOIN ``target_company``,
+    usually NULL — ``job_posting_id`` / ``target_company_id`` are mostly
+    unset), ``subject``, ``from_domain``, and ``email_thread_id`` (the
+    client-side group key). The client derives the card label from
+    ``company_name`` → subject-extraction → ``from_domain``.
 
     TODO: add authentication before exposing publicly.
     """
     from sqlalchemy import func, select
 
-    from job_assist.db.models import OutcomeEvent
+    from job_assist.db.models import OutcomeEvent, TargetCompany
 
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=422, detail="limit must be 1..200")
@@ -2660,18 +2670,28 @@ async def list_outcomes(
     where_clauses: list[Any] = []
     if posting_id is not None:
         where_clauses.append(OutcomeEvent.job_posting_id == posting_id)
+    if job_related:
+        # Pipeline lifecycle only — drop the classifier's noise buckets.
+        where_clauses.append(OutcomeEvent.outcome_type.not_in(["unrelated", "unclassified"]))
 
     count_stmt = select(func.count()).select_from(OutcomeEvent)
     for clause in where_clauses:
         count_stmt = count_stmt.where(clause)
     total: int = (await db.execute(count_stmt)).scalar_one() or 0
 
+    # LEFT JOIN target_company so a linked row can surface its real name; the
+    # join column is NULL for the unlinked majority (which the client labels
+    # from the subject instead).
     rows_stmt = (
-        select(OutcomeEvent).order_by(OutcomeEvent.received_at.asc()).limit(limit).offset(offset)
+        select(OutcomeEvent, TargetCompany.name)
+        .outerjoin(TargetCompany, OutcomeEvent.target_company_id == TargetCompany.id)
+        .order_by(OutcomeEvent.received_at.asc())
+        .limit(limit)
+        .offset(offset)
     )
     for clause in where_clauses:
         rows_stmt = rows_stmt.where(clause)
-    rows = (await db.execute(rows_stmt)).scalars().all()
+    rows = (await db.execute(rows_stmt)).all()
 
     items = [
         {
@@ -2680,8 +2700,13 @@ async def list_outcomes(
             "received_at": o.received_at.isoformat(),
             "stage": _enum_value(o.outcome_type),
             "confidence": o.classifier_confidence,
+            # Pipeline card fields (feat/pipeline-outcome-cards):
+            "company_name": company_name,
+            "subject": o.subject,
+            "from_domain": o.from_domain,
+            "email_thread_id": o.email_thread_id,
         }
-        for o in rows
+        for (o, company_name) in rows
     ]
 
     return {"total": total, "offset": offset, "limit": limit, "items": items}

@@ -29,9 +29,9 @@ const PAGE_SIZE = 100;
 export const appliedKeys = {
   appliedPostings: (offset = 0) => [POSTINGS_KEY, { state: ['applied'], offset }] as const,
   postingOutcomes: (postingId: string) => [OUTCOMES_KEY, { posting_id: postingId }] as const,
-  /** No params — useAllOutcomes returns the full set, so the cache key
-   *  doesn't vary. */
-  allOutcomes: () => [OUTCOMES_KEY, { scope: 'all' }] as const,
+  /** Full outcome set. `jobRelated` varies the key so the Pipeline's
+   *  filtered fetch doesn't collide with Companies/Stats' full fetch. */
+  allOutcomes: (jobRelated = false) => [OUTCOMES_KEY, { scope: 'all', jobRelated }] as const,
 };
 
 /**
@@ -87,9 +87,9 @@ export function usePostingOutcomes(postingId: string | null) {
  * grows past ~1000 rows the page-load latency becomes noticeable;
  * escalate to a server-side aggregator endpoint as its own PR.
  */
-export function useAllOutcomes() {
+export function useAllOutcomes(jobRelated = false) {
   return useQuery({
-    queryKey: appliedKeys.allOutcomes(),
+    queryKey: appliedKeys.allOutcomes(jobRelated),
     queryFn: async () => {
       const all: OutcomesListResponse['items'] = [];
       let offset = 0;
@@ -99,7 +99,9 @@ export function useAllOutcomes() {
       // at 100k outcome rows, which is well above any realistic volume.
       for (let i = 0; i < 1000; i++) {
         const { data, error } = await api.GET('/outcomes', {
-          params: { query: { limit: PAGE_SIZE, offset } as never },
+          params: {
+            query: { limit: PAGE_SIZE, offset, ...(jobRelated && { job_related: true }) } as never,
+          },
         });
         if (error) throw error;
         const page = data as unknown as OutcomesListResponse;

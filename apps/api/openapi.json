@@ -1794,7 +1794,7 @@
           "public"
         ],
         "summary": "List Outcomes",
-        "description": "Paginated list of outcome events, sorted chronologically (ASC).\n\nOptionally narrows to one posting via ``?posting_id=...``. Feeds the\nApplied-page timeline UI.\n\nTODO: add authentication before exposing publicly.",
+        "description": "Paginated list of outcome events, sorted chronologically (ASC).\n\nOptionally narrows to one posting via ``?posting_id=...``. Feeds the\nApplied-page timeline UI and the Pipeline kanban.\n\n``?job_related=true`` excludes the ``unrelated`` / ``unclassified`` noise\nrows (~1,884 \u2192 ~197 in prod) \u2014 the Pipeline only renders lifecycle\noutcomes. Each row carries the fields the Pipeline needs to label a card\nwithout a per-posting link: ``company_name`` (LEFT JOIN ``target_company``,\nusually NULL \u2014 ``job_posting_id`` / ``target_company_id`` are mostly\nunset), ``subject``, ``from_domain``, and ``email_thread_id`` (the\nclient-side group key). The client derives the card label from\n``company_name`` \u2192 subject-extraction \u2192 ``from_domain``.\n\nTODO: add authentication before exposing publicly.",
         "operationId": "list_outcomes_outcomes_get",
         "parameters": [
           {
@@ -1812,6 +1812,16 @@
                 }
               ],
               "title": "Posting Id"
+            }
+          },
+          {
+            "name": "job_related",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Job Related"
             }
           },
           {
