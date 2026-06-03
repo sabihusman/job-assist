@@ -28,6 +28,7 @@ from job_assist.services.embeddings import (
     embed_one_posting,
     embed_profile_if_changed,
     nearest_postings,
+    recalibrate_similarity,
     reset_attempts_and_retry,
     select_embedding_text,
     sweep_embeddings,
@@ -558,3 +559,117 @@ async def test_migration_adds_embedding_columns(db_session: Any) -> None:
         .all()
     )
     assert {"looking_for_embedding", "looking_for_embedded_at"}.issubset(set(prof_cols))
+
+
+# ── DB-gated: similarity calibration (slice 2a) ──────────────────────────────
+
+
+def _emb_cos(cos: float) -> list[float]:
+    """A 768-dim *unit* vector whose cosine to ``_vec(0)`` (the e0 axis) is
+    exactly ``cos`` - lets calibration tests stage a tightly-compressed band of
+    cosines (mirrors prod's 0.58-0.75) with deterministic ordering."""
+    import math
+
+    v = [0.0] * _DIM
+    v[0] = cos
+    v[1] = math.sqrt(max(0.0, 1.0 - cos * cos))
+    return v
+
+
+async def _set_profile_embedding(db_session: Any, vec: list[float], tag: str) -> None:
+    prof = (
+        await db_session.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
+    ).scalar_one()
+    prof.looking_for_text = f"profile-{tag}"
+    prof.looking_for_embedding = vec
+    prof.looking_for_embedding_hash = tag
+    await db_session.commit()
+
+
+@_NEEDS_DB
+async def test_recalibrate_spreads_compressed_cosines_to_uniform_0_100(
+    db_session: Any,
+) -> None:
+    """The hard design point: raw cosine is compressed (~0.58-0.75); after
+    PERCENT_RANK calibration the similarity_score must span ~0..100, be
+    monotonic in cosine, and tie equal cosines to equal scores."""
+    company = _company()
+    db_session.add(company)
+    await db_session.flush()
+
+    # Six embedded rows in a compressed band, with a deliberate tie at 0.66.
+    cosines = [0.58, 0.62, 0.66, 0.66, 0.70, 0.75]
+    rows: list[tuple[float, uuid.UUID]] = []
+    for c in cosines:
+        p = _posting(target_company_id=company.id, embedding=_emb_cos(c))
+        db_session.add(p)
+        await db_session.flush()
+        rows.append((c, p.id))
+    await _set_profile_embedding(db_session, _vec(0), "e0")
+
+    out = await recalibrate_similarity(db_session)
+    assert out == {"available": True, "calibrated": 6}
+
+    scores: dict[uuid.UUID, int] = {}
+    for _c, pid in rows:
+        scores[pid] = (
+            await db_session.execute(
+                select(JobPosting.similarity_score).where(JobPosting.id == pid)
+            )
+        ).scalar_one()
+
+    ordered = [scores[pid] for _c, pid in sorted(rows, key=lambda r: r[0])]
+    # Uniform spread: lowest cosine -> 0, highest -> 100 (not the 58-75 band).
+    assert ordered[0] == 0
+    assert ordered[-1] == 100
+    # Monotonic non-decreasing with cosine.
+    assert ordered == sorted(ordered)
+    # The two equal cosines (0.66) get identical calibrated scores.
+    tie = [scores[pid] for c, pid in rows if c == 0.66]
+    assert len(tie) == 2
+    assert tie[0] == tie[1]
+
+    await _reset_profile(db_session)
+
+
+@_NEEDS_DB
+async def test_recalibrate_noop_when_profile_unembedded(db_session: Any) -> None:
+    await _reset_profile(db_session)  # looking_for_embedding is NULL
+    out = await recalibrate_similarity(db_session)
+    assert out == {"available": False, "calibrated": 0, "reason": "profile not embedded yet"}
+
+
+@_NEEDS_DB
+async def test_recalibrate_recomputes_on_profile_change(db_session: Any) -> None:
+    """similarity_score is percentile-of-cosine-to-*profile*, so changing the
+    profile vector must flip the ranking — this is what the PUT-hook recompute
+    relies on."""
+    company = _company()
+    db_session.add(company)
+    await db_session.flush()
+    emb_a = _emb_cos(0.95)
+    emb_b = _emb_cos(0.60)
+    a = _posting(target_company_id=company.id, embedding=emb_a)
+    b = _posting(target_company_id=company.id, embedding=emb_b)
+    db_session.add_all([a, b])
+    await db_session.flush()
+    a_id, b_id = a.id, b.id
+
+    async def _score(pid: uuid.UUID) -> int:
+        return (
+            await db_session.execute(
+                select(JobPosting.similarity_score).where(JobPosting.id == pid)
+            )
+        ).scalar_one()
+
+    # Profile = e0: A (cos .95) is nearer than B (cos .60) → A ranks top.
+    await _set_profile_embedding(db_session, _vec(0), "e0")
+    await recalibrate_similarity(db_session)
+    assert await _score(a_id) > await _score(b_id)
+
+    # Re-point the profile AT B's own vector → B is now nearest → B ranks top.
+    await _set_profile_embedding(db_session, emb_b, "atB")
+    await recalibrate_similarity(db_session)
+    assert await _score(b_id) > await _score(a_id)
+
+    await _reset_profile(db_session)

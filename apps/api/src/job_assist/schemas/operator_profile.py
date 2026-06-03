@@ -56,6 +56,8 @@ class OperatorProfileRead(BaseModel):
     # feat/tunable-per-company-cap: how many of each company's top-by-score
     # postings to surface; 0 = disabled (show all).
     per_company_cap: int
+    # slice 2a: semantic blend weight 0..1; 0 = off (heuristic unchanged).
+    similarity_weight: float
     staffing_firm_blocklist: list[str]
     # PR #43: list of SeniorityLevel enum values to include. NULL or empty
     # means "include all levels".
@@ -87,6 +89,8 @@ class OperatorProfileUpdate(BaseModel):
     # feat/tunable-per-company-cap: 0 = disabled (show all). None = leave
     # column unchanged (partial-update semantics).
     per_company_cap: int | None = None
+    # slice 2a: semantic blend weight 0..1; 0 = off. None = leave unchanged.
+    similarity_weight: float | None = None
     staffing_firm_blocklist: list[str] | None = None
     # PR #43: list of SeniorityLevel enum values. None = "leave column
     # unchanged"; empty list = "clear filter" (include all levels).
@@ -123,6 +127,13 @@ class OperatorProfileUpdate(BaseModel):
     def _validate_per_company_cap(cls, value: int | None) -> int | None:
         if value is not None and value < 0:
             raise ValueError("per_company_cap cannot be negative (0 disables the cap)")
+        return value
+
+    @field_validator("similarity_weight")
+    @classmethod
+    def _validate_similarity_weight(cls, value: float | None) -> float | None:
+        if value is not None and not (0.0 <= value <= 1.0):
+            raise ValueError("similarity_weight must be between 0 and 1 (0 = off)")
         return value
 
     @field_validator("seniority_levels_included")

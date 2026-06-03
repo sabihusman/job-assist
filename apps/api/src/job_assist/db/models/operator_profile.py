@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import CheckConstraint, DateTime, Integer, String, Text
+from sqlalchemy import CheckConstraint, DateTime, Float, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func, text
@@ -88,6 +88,13 @@ class OperatorProfile(Base):
     # the operator sets a non-empty ``looking_for_text`` and it embeds.
     # NOTHING reads this for ranking in slice 1 — it powers only the
     # read-only GET /admin/embeddings/nearest validation gate.
+    # Semantic blend weight (slice 2a): 0..1, DEFAULT 0 = off. Slice 2b's
+    # "Best fit (semantic)" sort blends (1-w)*fit_score + w*similarity_score;
+    # at w=0 the heuristic is byte-identical. Stored here; nothing reads it for
+    # ranking in 2a.
+    similarity_weight: Mapped[float] = mapped_column(
+        Float, nullable=False, server_default=text("0")
+    )
     looking_for_embedding: Mapped[list[float] | None] = mapped_column(Vector(768), nullable=True)
     looking_for_embedding_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     looking_for_embedded_at: Mapped[datetime | None] = mapped_column(

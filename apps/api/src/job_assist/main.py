@@ -1494,9 +1494,17 @@ async def update_operator_profile(
     # scoring at ingest. This is the ONLY scoring-adjacent side effect, and it
     # writes only the operator_profile vector columns; fit_score is untouched.
     try:
-        from job_assist.services.embeddings import embed_profile_if_changed
+        from job_assist.services.embeddings import (
+            embed_profile_if_changed,
+            recalibrate_similarity,
+        )
 
-        await embed_profile_if_changed(db)
+        changed = await embed_profile_if_changed(db)
+        # slice 2a: the profile vector drives every posting's cosine, so a
+        # changed profile invalidates similarity_score — recompute the
+        # calibration. Best-effort; never fails the save.
+        if changed:
+            await recalibrate_similarity(db)
     except Exception as exc:
         logging.getLogger("job_assist.main").warning(
             "operator_profile.embed_failed", extra={"error": str(exc)[:300]}
@@ -3212,6 +3220,19 @@ async def retry_embedding_endpoint(
         source=result.source,
         error=result.error,
     )
+
+
+@app.post("/admin/embeddings/recalibrate", tags=["admin"])
+async def recalibrate_embeddings_endpoint(db: DbSession) -> dict[str, Any]:
+    """Recompute ``job_posting.similarity_score`` (slice 2a) — the calibrated
+    0-100 PERCENT_RANK of each embedded posting's cosine-to-profile across the
+    corpus. One SQL pass; NO ranking change (similarity_score is materialized
+    here, not by score_posting). Fires automatically on the sweep tail + on
+    profile change; exposed for manual recalibration / verification.
+    """
+    from job_assist.services.embeddings import recalibrate_similarity
+
+    return await recalibrate_similarity(db)
 
 
 @app.get("/admin/embeddings/nearest", tags=["admin"])
