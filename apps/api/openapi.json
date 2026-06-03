@@ -2602,7 +2602,7 @@
           "admin"
         ],
         "summary": "Recalibrate Embeddings Endpoint",
-        "description": "Recompute ``job_posting.similarity_score`` (slice 2a) \u2014 the calibrated\n0-100 PERCENT_RANK of each embedded posting's cosine-to-profile across the\ncorpus. One SQL pass; NO ranking change (similarity_score is materialized\nhere, not by score_posting). Fires automatically on the sweep tail + on\nprofile change; exposed for manual recalibration / verification.",
+        "description": "Recompute ``job_posting.similarity_score`` (slice 2a) \u2014 the calibrated\n0-100 PERCENT_RANK of each embedded posting's cosine-to-profile across the\ncorpus. One SQL pass; NO ranking change (similarity_score is materialized\nhere, not by score_posting). Fires automatically on the sweep tail + on\nprofile change; exposed for manual recalibration / verification.\n\nReturns the verification gate inline (``distribution`` + ``top_by_similarity``)\nso the 2a spread can be read off this POST \u2014 the cached nearest GET can lag\na deploy by serving a stale replica, but POST reliably hits current code.",
         "operationId": "recalibrate_embeddings_endpoint_admin_embeddings_recalibrate_post",
         "responses": {
           "200": {
@@ -2613,6 +2613,30 @@
                   "additionalProperties": true,
                   "type": "object",
                   "title": "Response Recalibrate Embeddings Endpoint Admin Embeddings Recalibrate Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/embeddings/similarity-distribution": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Similarity Distribution Endpoint",
+        "description": "Read-only slice 2a gate: the ``similarity_score`` distribution\n(count / calibrated_count / min / p25 / median / p75 / max over embedded\nopen rows) + the top-15 roles by ``similarity_score``. POST (not GET) so it\nisn't served from a stale cached replica during a rollout. Does not write.",
+        "operationId": "similarity_distribution_endpoint_admin_embeddings_similarity_distribution_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Similarity Distribution Endpoint Admin Embeddings Similarity Distribution Post"
                 }
               }
             }
