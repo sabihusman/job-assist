@@ -329,6 +329,17 @@ async def sweep_embeddings(session: AsyncSession, limit: int = 100) -> SweepSumm
             )
             result = EmbeddingResult(status="error", posting_id=str(posting_id), error=err)
         summary.record(result)
+
+    # slice 2a: when new vectors landed, the percentile ranks shift — recompute
+    # the calibrated similarity_score across the corpus. Best-effort: a
+    # calibration failure must not fail the sweep.
+    if summary.embedded > 0:
+        try:
+            await recalibrate_similarity(session)
+        except Exception as exc:
+            await session.rollback()
+            logger.warning("embeddings.recalibrate_failed", extra={"error": str(exc)[:300]})
+
     return summary
 
 
@@ -429,6 +440,7 @@ async def nearest_postings(session: AsyncSession, n: int = 20) -> dict[str, Any]
                 JobPosting.normalized_title,
                 JobPosting.canonical_company_name,
                 JobPosting.fit_score,
+                JobPosting.similarity_score,
                 JobPosting.embedded_source,
                 distance.label("distance"),
             )
@@ -446,6 +458,9 @@ async def nearest_postings(session: AsyncSession, n: int = 20) -> dict[str, Any]
             "company": r.canonical_company_name,
             "cosine_sim": round(1.0 - float(r.distance), 4),
             "fit_score": r.fit_score,
+            # slice 2a: the calibrated similarity (PERCENT_RANK 0-100). NULL
+            # until POST /admin/embeddings/recalibrate has run.
+            "similarity_score": r.similarity_score,
             "embedded_source": r.embedded_source,
         }
         for r in rows
@@ -477,7 +492,97 @@ async def nearest_postings(session: AsyncSession, n: int = 20) -> dict[str, Any]
             "cosine_sim_min": round(1.0 - float(agg[2]), 4),
         }
 
-    return {"available": True, "n": len(results), "results": results, "spread": spread}
+    # slice 2a verification: distribution of the CALIBRATED similarity_score
+    # across embedded open rows. After recalibrate this should be a uniform
+    # ~0-100 spread (vs the compressed 0.58-0.75 raw-cosine band).
+    sim_agg = (
+        await session.execute(
+            select(
+                func.count(JobPosting.similarity_score),
+                func.min(JobPosting.similarity_score),
+                func.percentile_cont(0.25).within_group(JobPosting.similarity_score.asc()),
+                func.percentile_cont(0.5).within_group(JobPosting.similarity_score.asc()),
+                func.percentile_cont(0.75).within_group(JobPosting.similarity_score.asc()),
+                func.max(JobPosting.similarity_score),
+            )
+            .where(JobPosting.jd_embedding.is_not(None))
+            .where(JobPosting.closed_at.is_(None))
+            .where(JobPosting.similarity_score.is_not(None))
+        )
+    ).one()
+    sim_count = int(sim_agg[0] or 0)
+    similarity_spread: dict[str, Any]
+    if sim_count == 0:
+        similarity_spread = {
+            "calibrated_count": 0,
+            "note": "run POST /admin/embeddings/recalibrate",
+        }
+    else:
+        similarity_spread = {
+            "calibrated_count": sim_count,
+            "min": int(sim_agg[1]),
+            "p25": round(float(sim_agg[2]), 1),
+            "median": round(float(sim_agg[3]), 1),
+            "p75": round(float(sim_agg[4]), 1),
+            "max": int(sim_agg[5]),
+        }
+
+    return {
+        "available": True,
+        "n": len(results),
+        "results": results,
+        "spread": spread,
+        "similarity_spread": similarity_spread,
+    }
+
+
+# ── Calibration: cosine → PERCENT_RANK 0-100 (slice 2a) ───────────────────────
+
+
+async def recalibrate_similarity(session: AsyncSession) -> dict[str, Any]:
+    """Materialize ``job_posting.similarity_score`` for every embedded open row
+    as ``100 * PERCENT_RANK()`` of its cosine-to-profile across the corpus.
+
+    ONE SQL UPDATE...FROM pass, deterministic. Turns the compressed raw-cosine
+    band (0.58-0.75) into a uniform 0-100 score that's directly comparable to
+    ``fit_score`` for slice 2b's blend. Percentile depends on the profile
+    vector, so this must re-run when the profile embedding changes (wired into
+    the sweep tail + the PUT /operator/profile hook).
+
+    No-op (calibrated=0) when the profile isn't embedded. Does NOT touch
+    fit_score / score_posting — similarity_score is a separate column.
+    """
+    from typing import cast
+
+    from sqlalchemy import Integer as SAInteger
+    from sqlalchemy import update
+    from sqlalchemy.engine import CursorResult
+
+    profile = (
+        await session.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
+    ).scalar_one_or_none()
+    if profile is None or profile.looking_for_embedding is None:
+        return {"available": False, "calibrated": 0, "reason": "profile not embedded yet"}
+
+    profile_vec = list(profile.looking_for_embedding)
+    distance = JobPosting.jd_embedding.cosine_distance(profile_vec)
+    # Order by distance DESC → largest distance (least similar) gets
+    # percent_rank 0, smallest distance (most similar) gets 1. Scale to 0-100.
+    score_expr = func.round(100.0 * func.percent_rank().over(order_by=distance.desc())).cast(
+        SAInteger
+    )
+    ranked = (
+        select(JobPosting.id.label("jid"), score_expr.label("ss"))
+        .where(JobPosting.jd_embedding.is_not(None))
+        .where(JobPosting.closed_at.is_(None))
+        .subquery()
+    )
+    result = await session.execute(
+        update(JobPosting).where(JobPosting.id == ranked.c.jid).values(similarity_score=ranked.c.ss)
+    )
+    await session.commit()
+    rowcount = cast("CursorResult[Any]", result).rowcount or 0
+    return {"available": True, "calibrated": int(rowcount)}
 
 
 __all__ = [
@@ -488,6 +593,7 @@ __all__ = [
     "embed_text",
     "l2_normalize",
     "nearest_postings",
+    "recalibrate_similarity",
     "reset_attempts_and_retry",
     "select_embedding_text",
     "sweep_embeddings",

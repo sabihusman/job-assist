@@ -145,6 +145,13 @@ class JobPosting(Base):
     # ``embedded_source`` records which text was embedded ("summary" |
     # "jd_text") for debuggability. The enrichment-style attempt counter +
     # error column mirror the jd-summary state machine.
+    # ── Semantic similarity calibration (slice 2a) ──────────────────────
+    # Calibrated 0-100 = PERCENT_RANK of this posting's cosine-to-profile
+    # across the embedded corpus. Materialized by the recalibrate pass (NOT
+    # score_posting); NULL until the corpus is embedded + recalibrated. Slice
+    # 2b's "Best fit (semantic)" sort blends it with fit_score behind an
+    # off-by-default weight; nothing reads it for ranking in 2a.
+    similarity_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     jd_embedding: Mapped[list[float] | None] = mapped_column(Vector(768), nullable=True)
     embedded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     embedding_model_version: Mapped[str | None] = mapped_column(Text, nullable=True)
