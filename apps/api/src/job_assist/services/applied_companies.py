@@ -179,8 +179,14 @@ async def sync_applied_companies(
             await session.flush()  # assign tc.id for the FK below
             report.created += 1
 
+        # Capture the id as a plain value BEFORE the link loop. ``session.commit``
+        # below expires every ORM object (expire_on_commit default), so reading
+        # ``tc.id`` after a commit would trigger an implicit IO refresh outside
+        # the async greenlet → MissingGreenlet. Setting the (also-expired)
+        # ``event`` attribute is safe; the next flush refreshes within context.
+        tc_id = tc.id
         for event in events:
-            event.target_company_id = tc.id
+            event.target_company_id = tc_id
             report.linked += 1
             writes_since_commit += 1
             if writes_since_commit >= 25:
