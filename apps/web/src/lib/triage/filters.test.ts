@@ -63,6 +63,11 @@ describe('parseFilters', () => {
     const f = parseFilters(new URLSearchParams('sort=best_fit'));
     expect(f.sort).toBe('best_fit');
   });
+
+  test('Slice 2b: best_fit_semantic is a valid sort key', () => {
+    const f = parseFilters(new URLSearchParams('sort=best_fit_semantic'));
+    expect(f.sort).toBe('best_fit_semantic');
+  });
 });
 
 describe('encodeFilters', () => {

@@ -96,7 +96,7 @@ async def test_invalid_sort_returns_422() -> None:
 
 
 def test_sort_key_literal_membership() -> None:
-    """Schema-level check that all 6 documented sort keys are in the
+    """Schema-level check that all 7 documented sort keys are in the
     SortKey Literal. Catches accidental enum drift between
     schemas/public.py and the SortDropdown frontend component."""
     from typing import get_args
@@ -112,6 +112,9 @@ def test_sort_key_literal_membership() -> None:
         "recently_posted",
         # PR #57: best_fit reads from job_posting.fit_score.
         "best_fit",
+        # Slice 2b: best_fit_semantic blends fit_score with similarity_score
+        # behind operator_profile.similarity_weight (0 = off → == best_fit).
+        "best_fit_semantic",
     }
     assert DEFAULT_SORT == "newest"
 

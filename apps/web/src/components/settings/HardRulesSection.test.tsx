@@ -34,6 +34,7 @@ function profile(overrides: Partial<OperatorProfileRead> = {}): OperatorProfileR
     salary_ceiling_usd: null,
     applicant_cap: 500,
     per_company_cap: 3,
+    similarity_weight: 0,
     staffing_firm_blocklist: [],
     seniority_levels_included: null,
     created_at: '2026-05-26T00:00:00Z',
@@ -128,6 +129,45 @@ describe('HardRulesSection — PR #43 controls', () => {
 
     expect(mockMutate).toHaveBeenCalledTimes(1);
     expect(mockMutate.mock.calls[0][0]).toMatchObject({ per_company_cap: 8 });
+  });
+
+  // Slice 2b — the "Semantic weight" control sends similarity_weight (off by
+  // default; the operator must be able to see it and move it, per rule 2).
+  test('renders the "Semantic weight" control, off by default', () => {
+    wrap(<HardRulesSection profile={profile({ similarity_weight: 0 })} />);
+    expect(screen.getByLabelText('Semantic weight')).toBeInTheDocument();
+    expect(screen.getByText('Off')).toBeInTheDocument();
+  });
+
+  // Regression: an API that predates the similarity_weight response field
+  // serves a profile without it. The control must default to Off and the
+  // page must still render — never crash on `undefined.toFixed()`.
+  test('renders without crashing when the API omits similarity_weight', () => {
+    // Simulate a profile served without the field (no `delete` — biome
+    // noDelete): strip it via destructuring rest.
+    const { similarity_weight: _omit, ...legacy } = profile();
+    wrap(<HardRulesSection profile={legacy as OperatorProfileRead} />);
+    expect(screen.getByLabelText('Semantic weight')).toBeInTheDocument();
+    // Both the ceiling readout ("No ceiling") and the semantic readout
+    // ("Off") render — proving the section mounted fully past the slider.
+    expect(screen.getByText('Off')).toBeInTheDocument();
+  });
+
+  test('changing the semantic weight and saving sends similarity_weight', async () => {
+    const user = userEvent.setup();
+    mockMutate.mockClear();
+    mockMutate.mockResolvedValueOnce(undefined);
+    wrap(<HardRulesSection profile={profile({ similarity_weight: 0 })} />);
+
+    const input = screen.getByLabelText('Semantic weight');
+    await user.clear(input);
+    await user.type(input, '0.5');
+
+    await user.click(screen.getByRole('button', { name: /save hard rules/i }));
+    await user.click(await screen.findByRole('button', { name: /save changes/i }));
+
+    expect(mockMutate).toHaveBeenCalledTimes(1);
+    expect(mockMutate.mock.calls[0][0]).toMatchObject({ similarity_weight: 0.5 });
   });
 
   test('pre-selected seniority levels render as pressed', () => {

@@ -33,6 +33,8 @@ type HardRulesFormState = {
   applicant_cap: number;
   // feat/tunable-per-company-cap: roles surfaced per company; 0 = unlimited.
   per_company_cap: number;
+  // Slice 2b: semantic blend weight 0..1; 0 = off (heuristic-only ranking).
+  similarity_weight: number;
   salary_floor_usd: number;
   // PR #43: nullable ceiling. The form represents "no ceiling" as 0 so the
   // numeric input works naturally; the save handler converts 0 back to null.
@@ -55,6 +57,11 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
     defaultValues: {
       applicant_cap: profile.applicant_cap,
       per_company_cap: profile.per_company_cap,
+      // Coalesce to 0 (= off) so the numeric field + displayFormat always
+      // bind to a real number. A profile served by an API that predates the
+      // similarity_weight response field would otherwise feed `undefined`
+      // into `n.toFixed(1)` and crash the entire Settings page render.
+      similarity_weight: profile.similarity_weight ?? 0,
       salary_floor_usd: profile.salary_floor_usd,
       // PR #43: backend stores null when unset; surface that as 0 in the
       // form so the numeric input has a real value to bind to.
@@ -83,6 +90,7 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
     const body = {
       applicant_cap: values.applicant_cap,
       per_company_cap: values.per_company_cap,
+      similarity_weight: values.similarity_weight,
       salary_floor_usd: values.salary_floor_usd,
       salary_ceiling_usd: ceiling,
       seniority_levels_included: values.seniority_levels_included,
@@ -119,6 +127,15 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
       label: 'Roles per company',
       from: profile.per_company_cap === 0 ? 'Unlimited' : String(profile.per_company_cap),
       to: capNow === 0 ? 'Unlimited' : String(capNow),
+    });
+  }
+  if (formState.dirtyFields.similarity_weight) {
+    const wNow = watch('similarity_weight');
+    const wFrom = profile.similarity_weight ?? 0;
+    changes.push({
+      label: 'Semantic weight',
+      from: wFrom === 0 ? 'Off' : wFrom.toFixed(1),
+      to: wNow === 0 ? 'Off' : wNow.toFixed(1),
     });
   }
   if (formState.dirtyFields.salary_floor_usd) {
@@ -199,6 +216,27 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
                 step={1}
                 inputAriaLabel="Roles per company"
                 displayFormat={(n) => (n === 0 ? 'Unlimited' : String(n))}
+              />
+            )}
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          label="Semantic weight"
+          sub="How much the 'Best fit (semantic)' sort blends calibrated semantic similarity with the heuristic fit score. 0 = off (heuristic only). Higher leans on semantic similarity. Does not affect any other sort."
+        >
+          <Controller
+            control={control}
+            name="similarity_weight"
+            render={({ field }) => (
+              <SliderRow
+                value={field.value}
+                onChange={field.onChange}
+                min={0}
+                max={1}
+                step={0.1}
+                inputAriaLabel="Semantic weight"
+                displayFormat={(n) => (n === 0 ? 'Off' : n.toFixed(1))}
               />
             )}
           />
@@ -372,7 +410,12 @@ function SliderRow({
         max={max}
         step={step}
         aria-label={inputAriaLabel}
-        onChange={(e) => onChange(Number.parseInt(e.target.value, 10) || min)}
+        onChange={(e) => {
+          // Number (not parseInt) so fractional steps work (e.g. similarity
+          // weight 0.1); empty/NaN falls back to min.
+          const n = Number(e.target.value);
+          onChange(Number.isNaN(n) ? min : n);
+        }}
         className="h-8 w-28 rounded-md border border-border bg-input px-2 text-[13px] outline-none focus:border-border-strong"
       />
       <input
@@ -382,7 +425,7 @@ function SliderRow({
         step={step}
         value={value}
         aria-label={`${inputAriaLabel} slider`}
-        onChange={(e) => onChange(Number.parseInt(e.target.value, 10))}
+        onChange={(e) => onChange(Number(e.target.value))}
         className="h-1 w-64 cursor-pointer accent-primary"
       />
       {displayFormat && (

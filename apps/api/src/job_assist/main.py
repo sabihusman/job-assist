@@ -2213,6 +2213,10 @@ async def list_postings(
                 # PR #57: wired to ``fit_score`` (PR #56's heuristic 0-100).
                 # NULL on rows the score sweep hasn't visited yet.
                 "score": jp.fit_score,
+                # Slice 2b: calibrated 0-100 semantic similarity (NULL until the
+                # corpus is recalibrated). Surfaced so the UI can show it
+                # alongside fit_score for the best_fit_semantic sort.
+                "similarity_score": jp.similarity_score,
                 "state": _state_block(pa_action_type, pa_reason, pa_snooze_until, pa_created_at),
             }
         )
@@ -2527,6 +2531,8 @@ async def get_posting(
         "first_seen_at": jp.first_seen_at.isoformat() if jp.first_seen_at else None,
         # PR #57: wired to ``fit_score`` (see PostingListItem schema comment).
         "score": jp.fit_score,
+        # Slice 2b: calibrated semantic similarity (NULL until recalibrated).
+        "similarity_score": jp.similarity_score,
         "state": _state_block(pa_action_type, pa_reason, pa_snooze_until, pa_created_at),
         "description_markdown": jp.jd_text or None,
         "jd_summary_markdown": jp.jd_summary_markdown,

@@ -35,6 +35,10 @@ from job_assist.db.enums import ActionReason, ActionType
 #   recently_posted    → job_posting.posted_at DESC NULLS LAST
 #   best_fit (PR #57)  → job_posting.fit_score DESC NULLS LAST
 #                        (index-backed by idx_job_posting_fit_score_desc_nulls_last)
+#   best_fit_semantic  → (1-w)*fit_score + w*COALESCE(similarity_score, fit_score)
+#     (Slice 2b)          DESC NULLS LAST, where w = operator_profile.similarity_weight
+#                         (0 = off → byte-identical to best_fit). Un-embedded rows
+#                         (similarity_score NULL) fall back to fit_score.
 #
 # Every sort gets ``job_posting.id ASC`` as a tiebreaker so pagination
 # stays stable when many rows share a same-second timestamp or a NULL
@@ -46,6 +50,7 @@ SortKey = Literal[
     "tier",
     "recently_posted",
     "best_fit",
+    "best_fit_semantic",
 ]
 DEFAULT_SORT: SortKey = "newest"
 

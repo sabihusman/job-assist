@@ -60,6 +60,7 @@ def test_each_sort_key_produces_clauses() -> None:
         "tier",
         "recently_posted",
         "best_fit",
+        "best_fit_semantic",
     ):
         parts = build_view_parts(PostingsViewSpec(sort=sort))  # type: ignore[arg-type]
         assert len(parts.order_clauses) >= 1
