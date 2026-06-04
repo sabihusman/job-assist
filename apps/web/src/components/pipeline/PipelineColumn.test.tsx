@@ -18,13 +18,13 @@ function card(id: string, name = 'Co'): ApplicationCard {
 describe('PipelineColumn', () => {
   test('renders the stage label and count pill', () => {
     render(<PipelineColumn stage="applied" cards={[card('a'), card('b')]} />);
-    expect(screen.getByText('APPLIED')).toBeInTheDocument();
+    expect(screen.getByText('STILL ALIVE')).toBeInTheDocument();
     expect(screen.getByLabelText('2 cards')).toBeInTheDocument();
   });
 
   test('renders one li per card', () => {
     render(<PipelineColumn stage="applied" cards={[card('a'), card('b')]} />);
-    const section = screen.getByRole('region', { name: /applied/i });
+    const section = screen.getByRole('region', { name: /still alive/i });
     expect(within(section).getAllByRole('listitem')).toHaveLength(2);
   });
 

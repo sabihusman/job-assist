@@ -3,7 +3,11 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-import { PIPELINE_STAGES, type PipelineStage, sanitizeColumnOrder } from '@/lib/applied/stages';
+import {
+  PIPELINE_BOARD_STAGES,
+  type PipelineStage,
+  sanitizeColumnOrder,
+} from '@/lib/applied/stages';
 
 /**
  * UI-shell state: things the chrome cares about but pages don't.
@@ -53,7 +57,7 @@ export const useUiStore = create<UiState>()(
       sidebarCollapsed: false,
       sidebarMobileOpen: false,
       paletteOpen: false,
-      pipelineColumnOrder: [...PIPELINE_STAGES],
+      pipelineColumnOrder: [...PIPELINE_BOARD_STAGES],
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
       openSidebarMobile: () => set({ sidebarMobileOpen: true }),
@@ -73,7 +77,7 @@ export const useUiStore = create<UiState>()(
           [next[i], next[j]] = [next[j], next[i]];
           return { pipelineColumnOrder: next };
         }),
-      resetPipelineColumnOrder: () => set({ pipelineColumnOrder: [...PIPELINE_STAGES] }),
+      resetPipelineColumnOrder: () => set({ pipelineColumnOrder: [...PIPELINE_BOARD_STAGES] }),
     }),
     {
       name: 'job-assist:ui',

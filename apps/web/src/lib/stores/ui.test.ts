@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from 'vitest';
 
-import { PIPELINE_STAGES } from '@/lib/applied/stages';
+import { PIPELINE_BOARD_STAGES } from '@/lib/applied/stages';
 import { useUiStore } from '@/lib/stores/ui';
 
 describe('useUiStore — pipeline column order', () => {
@@ -9,8 +9,8 @@ describe('useUiStore — pipeline column order', () => {
     useUiStore.getState().resetPipelineColumnOrder();
   });
 
-  test('default is the canonical PIPELINE_STAGES order', () => {
-    expect(useUiStore.getState().pipelineColumnOrder).toEqual([...PIPELINE_STAGES]);
+  test('default is the canonical PIPELINE_BOARD_STAGES order', () => {
+    expect(useUiStore.getState().pipelineColumnOrder).toEqual([...PIPELINE_BOARD_STAGES]);
   });
 
   test("movePipelineColumn('down') swaps a column with the next one", () => {
@@ -20,7 +20,7 @@ describe('useUiStore — pipeline column order', () => {
     expect(after[0]).toBe(second);
     expect(after[1]).toBe(first);
     // still a complete permutation
-    expect(new Set(after).size).toBe(PIPELINE_STAGES.length);
+    expect(new Set(after).size).toBe(PIPELINE_BOARD_STAGES.length);
   });
 
   test('moving the first column up is a no-op (bounds)', () => {
@@ -30,9 +30,9 @@ describe('useUiStore — pipeline column order', () => {
   });
 
   test('the order persists to localStorage under job-assist:ui (partialize)', () => {
-    useUiStore.getState().movePipelineColumn(PIPELINE_STAGES[0], 'down');
+    useUiStore.getState().movePipelineColumn(PIPELINE_BOARD_STAGES[0], 'down');
     const persisted = JSON.parse(localStorage.getItem('job-assist:ui') ?? '{}');
-    expect(persisted.state.pipelineColumnOrder[0]).toBe(PIPELINE_STAGES[1]);
+    expect(persisted.state.pipelineColumnOrder[0]).toBe(PIPELINE_BOARD_STAGES[1]);
     // sidebarCollapsed is also persisted; palette/mobile are not.
     expect(persisted.state).not.toHaveProperty('paletteOpen');
   });
@@ -44,8 +44,8 @@ describe('useUiStore — pipeline column order', () => {
     });
     useUiStore.getState().movePipelineColumn('applied', 'up');
     const order = useUiStore.getState().pipelineColumnOrder;
-    expect(order).toHaveLength(PIPELINE_STAGES.length);
+    expect(order).toHaveLength(PIPELINE_BOARD_STAGES.length);
     expect(order).not.toContain('bogus');
-    expect(new Set(order).size).toBe(PIPELINE_STAGES.length);
+    expect(new Set(order).size).toBe(PIPELINE_BOARD_STAGES.length);
   });
 });

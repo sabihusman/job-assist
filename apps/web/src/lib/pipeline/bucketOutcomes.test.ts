@@ -110,3 +110,72 @@ describe('bucketOutcomes', () => {
     expect(b.applied).toHaveLength(2);
   });
 });
+
+// feat/still-alive: the `applied` column IS "Still Alive" (latest event =
+// application_confirmation). Confirm the clean funnel — each thread lands in
+// exactly one column by its latest event — and that membership is age-
+// independent (no recency cutoff).
+describe('Still Alive funnel (no double-count, age-independent)', () => {
+  test('applied-only → Still Alive (applied column)', () => {
+    const b = bucketOutcomes([oc({ stage: 'application_confirmation', email_thread_id: 't' })]);
+    expect(b.applied).toHaveLength(1);
+    expect(b.rejected).toHaveLength(0);
+    expect(b.recruiter).toHaveLength(0);
+  });
+
+  test('applied + rejection → Rejected, NOT Still Alive (terminal wins)', () => {
+    const b = bucketOutcomes([
+      oc({
+        stage: 'application_confirmation',
+        email_thread_id: 't',
+        received_at: '2026-05-01T00:00:00Z',
+      }),
+      oc({
+        stage: 'rejection_post_screen',
+        email_thread_id: 't',
+        received_at: '2026-05-09T00:00:00Z',
+      }),
+    ]);
+    expect(b.applied).toHaveLength(0);
+    expect(b.rejected).toHaveLength(1);
+  });
+
+  test('applied + screen-invite → Recruiter (advanced past Still Alive, no double-count)', () => {
+    const b = bucketOutcomes([
+      oc({
+        stage: 'application_confirmation',
+        email_thread_id: 't',
+        received_at: '2026-05-01T00:00:00Z',
+      }),
+      oc({
+        stage: 'recruiter_screen_invite',
+        email_thread_id: 't',
+        received_at: '2026-05-05T00:00:00Z',
+      }),
+    ]);
+    expect(b.recruiter).toHaveLength(1);
+    expect(b.applied).toHaveLength(0); // moved out of Still Alive
+  });
+
+  test('offer → Offer (won, terminal)', () => {
+    const b = bucketOutcomes([
+      oc({
+        stage: 'application_confirmation',
+        email_thread_id: 't',
+        received_at: '2026-05-01T00:00:00Z',
+      }),
+      oc({ stage: 'offer', email_thread_id: 't', received_at: '2026-06-01T00:00:00Z' }),
+    ]);
+    expect(b.offer).toHaveLength(1);
+    expect(b.applied).toHaveLength(0);
+  });
+
+  test('a 90-day-old applied-only thread is STILL Alive (no age cutoff)', () => {
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    const b = bucketOutcomes([
+      oc({ stage: 'application_confirmation', email_thread_id: 'old', received_at: ninetyDaysAgo }),
+    ]);
+    expect(b.applied).toHaveLength(1);
+    expect(b.ghosted).toHaveLength(0); // age never demotes it
+  });
+});

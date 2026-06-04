@@ -171,22 +171,24 @@ test('Applied sort=tier reorders the URL', async ({ page }) => {
 
 // ── Pipeline ────────────────────────────────────────────────────────────
 
-test('Pipeline page renders 8 stage columns in order', async ({ page }) => {
+test('Pipeline page renders the 7 board stage columns in order', async ({ page }) => {
+  // feat/still-alive: the applied column reads "STILL ALIVE"; the always-empty
+  // GHOSTED column is dropped from the Pipeline board.
   await page.goto('/pipeline');
   await waitForDataReady(page);
   const content = mainContent(page);
   for (const label of [
-    'APPLIED',
+    'STILL ALIVE',
     'RECRUITER',
     'PHONE',
     'VIDEO',
     'ONSITE',
     'OFFER',
     'REJECTED',
-    'GHOSTED',
   ]) {
     await expect(content.getByText(label, { exact: true })).toBeVisible();
   }
+  await expect(content.getByText('GHOSTED', { exact: true })).toHaveCount(0);
 });
 
 test('Pipeline buckets the alpha outcome into RECRUITER, labelled from its subject', async ({
