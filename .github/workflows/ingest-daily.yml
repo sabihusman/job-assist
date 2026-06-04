@@ -35,6 +35,10 @@ jobs:
     timeout-minutes: 30
     env:
       API_URL: ${{ secrets.API_URL }}
+      # feat/api-auth: bearer token for gated /admin/* calls. /health stays
+      # header-less (allowlisted). Empty until the secret is provisioned —
+      # harmless in the API's warn-only mode.
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -44,7 +48,7 @@ jobs:
       - name: Fetch ingest plan
         id: plan
         run: |
-          plan=$(curl -fsS --max-time 30 "$API_URL/admin/ingest/plan")
+          plan=$(curl -fsS --max-time 30 -H "Authorization: Bearer $API_AUTH_TOKEN" "$API_URL/admin/ingest/plan")
           # Pretty-print to the job log so the operator can see what will run.
           echo "$plan" | python3 -m json.tool
           # Stash to a file (avoids shell-quoting headaches downstream).
@@ -65,7 +69,7 @@ jobs:
       - name: Mark stale postings
         if: always()
         run: |
-          resp=$(curl -fsS --max-time 60 -X POST "$API_URL/admin/postings/mark-stale")
+          resp=$(curl -fsS --max-time 60 -X POST -H "Authorization: Bearer $API_AUTH_TOKEN" "$API_URL/admin/postings/mark-stale")
           echo "$resp"
           # NB: keep single-quote keys (``d['marked_stale']``) inside the
           # python ``-c`` string so the surrounding single quotes don't

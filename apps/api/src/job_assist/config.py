@@ -24,6 +24,17 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000)
     cors_origins: list[str] = Field(default=["http://localhost:3000"])
 
+    # Auth (feat/api-auth) — single shared bearer token gating every route
+    # except /health. The frontend sends it via the Next.js server-side proxy
+    # (token never reaches the browser); the GitHub Actions crons send it via
+    # the API_AUTH_TOKEN secret. Empty = unconfigured → the middleware fails
+    # OPEN with a loud log rather than bricking the app. ``auth_enforce`` flips
+    # warn-only (log missing/invalid, allow through) → enforce (401). Roll out
+    # by wiring every client to SEND the token in warn mode, verifying the
+    # warn-logs, THEN flipping ``AUTH_ENFORCE=true``.
+    api_auth_token: str = Field(default="")
+    auth_enforce: bool = Field(default=False)
+
     # Database
     database_url: str = Field(default="postgresql+asyncpg://localhost/job_assist")
 

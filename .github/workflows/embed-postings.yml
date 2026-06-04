@@ -44,6 +44,10 @@ jobs:
     timeout-minutes: 15
     env:
       API_URL: ${{ secrets.API_URL }}
+      # feat/api-auth: gated /admin/* call needs the bearer token (/health
+      # pre-check stays header-less). Empty until provisioned — harmless in
+      # the API's warn-only mode.
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
     steps:
       - name: Verify API is up
         run: curl -fsS --max-time 10 "$API_URL/health"
@@ -55,6 +59,7 @@ jobs:
           # logged before the step exits 1.
           status=$(curl -sS --max-time 540 \
             -o /tmp/embed.json -w "%{http_code}" \
+            -H "Authorization: Bearer $API_AUTH_TOKEN" \
             -X POST "$API_URL/admin/embeddings/sweep?limit=200")
 
           if [ "$status" != "200" ]; then
