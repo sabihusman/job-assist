@@ -7,6 +7,7 @@ import { ActionButton } from '@/components/shared/ActionButton';
 import { CompanyAvatar } from '@/components/shared/CompanyAvatar';
 import { MarkdownRenderer } from '@/components/shared/MarkdownRenderer';
 import { ReasonPicker } from '@/components/triage/ReasonPicker';
+import { ResumeAttach } from '@/components/triage/ResumeAttach';
 import type { TriageCardAction } from '@/components/triage/TriageCard';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { usePosting } from '@/lib/api/hooks';
@@ -227,6 +228,10 @@ function DetailContentBody({
             )}
           </div>
         </section>
+
+        {/* feat/application-resume: per-application resume attach (upload a
+            .docx/.pdf or paste text). Replaces the apply-time dropdown. */}
+        <ResumeAttach postingId={posting.id} resume={posting.resume} />
 
         {/* JD markdown — summary preferred, full description on toggle.
             Keyed on posting.id so the showFullJd state resets whenever

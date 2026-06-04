@@ -1,5 +1,6 @@
 """ORM model package — importing this module registers all models with Base.metadata."""
 
+from job_assist.db.models.application_resume import ApplicationResume
 from job_assist.db.models.application_state import ApplicationState
 from job_assist.db.models.closed_channel import ClosedChannel
 from job_assist.db.models.contact import Contact
@@ -17,6 +18,7 @@ from job_assist.db.models.target_company import TargetCompany
 from job_assist.db.models.triage_result import TriageResult
 
 __all__ = [
+    "ApplicationResume",
     "ApplicationState",
     "ClosedChannel",
     "Contact",

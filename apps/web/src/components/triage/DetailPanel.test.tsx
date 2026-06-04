@@ -12,6 +12,7 @@ const mockState = vi.hoisted(() => ({
 
 vi.mock('@/lib/api/hooks', () => ({
   usePosting: () => ({ data: mockState.data, isLoading: mockState.isLoading }),
+  queryKeys: { posting: (id: string) => ['posting', id] },
 }));
 
 function makeDetail(overrides: Partial<PostingDetail> = {}): PostingDetail {
@@ -46,6 +47,7 @@ function makeDetail(overrides: Partial<PostingDetail> = {}): PostingDetail {
     last_seen_at: null,
     closed_at: null,
     state_history: [],
+    resume: null,
     ...overrides,
   };
 }

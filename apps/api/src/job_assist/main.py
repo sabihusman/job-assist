@@ -2604,6 +2604,17 @@ async def get_posting(
             "description": div.description,
         }
 
+    # feat/application-resume: the resume attached to THIS application (if any).
+    # Metadata only — the file bytes stream from GET /postings/{id}/resume.
+    from job_assist.db.models import ApplicationResume
+
+    resume_row = (
+        await db.execute(
+            select(ApplicationResume).where(ApplicationResume.job_posting_id == posting_id)
+        )
+    ).scalar_one_or_none()
+    resume_block = _resume_meta(resume_row) if resume_row is not None else None
+
     return {
         "id": str(jp.id),
         "company": {
@@ -2643,6 +2654,8 @@ async def get_posting(
         "last_seen_at": jp.last_seen_at.isoformat() if jp.last_seen_at else None,
         "closed_at": jp.closed_at.isoformat() if jp.closed_at else None,
         "state_history": state_history,
+        # feat/application-resume: per-application resume metadata (null if none).
+        "resume": resume_block,
     }
 
 
@@ -2684,6 +2697,152 @@ async def post_posting_state(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return _state_block(row.action_type, row.reason, row.snooze_until, row.created_at)
+
+
+# ── Application resume (feat/application-resume Phase 1) ──────────────────────
+# One tailored resume per application, keyed on job_posting_id. Upload a
+# .docx/.pdf (raw body — python-multipart isn't a dep) OR paste text (JSON
+# body). Same endpoint, dispatched on Content-Type; UPSERTs the row. The file
+# streams back from GET so the download goes through the auth proxy like the
+# xlsx export. Replaces the global resume_version dropdown (left dormant).
+
+_RESUME_CONTENT_TYPES = {
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".pdf": "application/pdf",
+}
+_RESUME_MAX_BYTES = 8 * 1024 * 1024  # 8 MB — generous for a resume doc.
+
+
+def _resume_meta(row: Any) -> dict[str, Any]:
+    """Serialize an ApplicationResume row to metadata (never the file bytes)."""
+    return {
+        "has_file": row.file_blob is not None,
+        "file_name": row.file_name,
+        "content_type": row.content_type,
+        "resume_text": row.resume_text,
+        "angle": row.angle,
+        "label": row.label,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _safe_filename(name: str) -> str:
+    """Strip characters that would break a Content-Disposition header."""
+    return name.replace('"', "").replace("\r", "").replace("\n", "").strip() or "resume"
+
+
+@app.post("/postings/{posting_id}/resume", tags=["public"])
+async def upsert_application_resume(
+    posting_id: uuid.UUID,
+    request: Request,
+    db: DbSession,
+    filename: Annotated[str | None, Query()] = None,
+    angle: Annotated[str | None, Query()] = None,
+    label: Annotated[str | None, Query()] = None,
+) -> dict[str, Any]:
+    """Attach/replace THIS application's resume. UPSERT by job_posting_id.
+
+    Two modes, dispatched on Content-Type:
+      * ``application/json`` body ``{resume_text?, angle?, label?}`` — paste.
+      * any other Content-Type — raw file bytes (``.docx``/``.pdf``);
+        ``?filename=`` is required, ``?angle=``/``?label=`` optional.
+
+    404 if the posting doesn't exist; 422 on bad input; 413 if the file
+    exceeds the size cap.
+    """
+    import os
+
+    from sqlalchemy import select
+
+    from job_assist.db.models import ApplicationResume, JobPosting
+
+    posting = (
+        await db.execute(select(JobPosting.id).where(JobPosting.id == posting_id))
+    ).scalar_one_or_none()
+    if posting is None:
+        raise HTTPException(status_code=404, detail=f"posting {posting_id} not found")
+
+    row = (
+        await db.execute(
+            select(ApplicationResume).where(ApplicationResume.job_posting_id == posting_id)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = ApplicationResume(job_posting_id=posting_id)
+        db.add(row)
+
+    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+
+    if content_type == "application/json":
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail="invalid JSON body") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail="JSON body must be an object")
+        if "resume_text" in payload:
+            text = payload["resume_text"]
+            if text is not None and not isinstance(text, str):
+                raise HTTPException(status_code=422, detail="resume_text must be a string or null")
+            row.resume_text = text
+        if "angle" in payload:
+            row.angle = payload["angle"]
+        if "label" in payload:
+            row.label = payload["label"]
+        if row.resume_text is None and row.file_blob is None:
+            raise HTTPException(status_code=422, detail="provide a file or non-empty resume_text")
+    else:
+        body = await request.body()
+        if not body:
+            raise HTTPException(status_code=422, detail="empty request body")
+        if len(body) > _RESUME_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="file too large (max 8 MB)")
+        if not filename:
+            raise HTTPException(
+                status_code=422, detail="filename query param is required for a file upload"
+            )
+        ext = os.path.splitext(filename.lower())[1]
+        if ext not in _RESUME_CONTENT_TYPES:
+            raise HTTPException(status_code=422, detail="only .docx or .pdf files are accepted")
+        row.file_blob = body
+        row.file_name = filename
+        row.content_type = _RESUME_CONTENT_TYPES[ext]
+        if angle is not None:
+            row.angle = angle
+        if label is not None:
+            row.label = label
+
+    await db.commit()
+    await db.refresh(row)
+    return _resume_meta(row)
+
+
+@app.get("/postings/{posting_id}/resume", tags=["public"])
+async def download_application_resume(posting_id: uuid.UUID, db: DbSession) -> Response:
+    """Stream the attached resume file (Content-Disposition: attachment).
+
+    404 if the posting has no attached FILE (a paste-only resume has no blob).
+    Routed through the /api/be proxy on the frontend, so the auth token stays
+    server-side — same pattern as the xlsx export.
+    """
+    from sqlalchemy import select
+
+    from job_assist.db.models import ApplicationResume
+
+    row = (
+        await db.execute(
+            select(ApplicationResume).where(ApplicationResume.job_posting_id == posting_id)
+        )
+    ).scalar_one_or_none()
+    if row is None or row.file_blob is None:
+        raise HTTPException(status_code=404, detail="no resume file attached to this posting")
+
+    filename = _safe_filename(row.file_name or "resume")
+    return Response(
+        content=row.file_blob,
+        media_type=row.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/companies", tags=["public"])
