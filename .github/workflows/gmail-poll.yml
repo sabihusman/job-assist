@@ -1,9 +1,14 @@
 name: Gmail poll
 
-# Fires every 15 minutes against POST /admin/gmail/poll. The endpoint
+# Fires every 6 hours against POST /admin/gmail/poll. The endpoint
 # queries Gmail for messages received since MAX(outcome_event.received_at),
 # classifies each with Gemini Flash Lite, inserts one outcome_event per
 # message. Idempotent — re-running over the same window adds zero rows.
+#
+# Cadence note: the poll is WATERMARK-based (after:<MAX received_at>), so a
+# wider gap between runs just means each run scans a wider window and catches
+# up — no data is lost. (Bootstrap on an empty table is a 24h lookback; after
+# the first run it's always watermark-driven.)
 #
 # Secrets required (already configured in repo settings):
 #   API_URL — Railway production base URL. Same secret used by
@@ -14,10 +19,11 @@ name: Gmail poll
 
 on:
   schedule:
-    # Every 15 minutes. ~96 runs / day. Most polls find 0 new mail and
-    # never hit Gemini; on a busy day the per-poll Gemini count tops out
-    # at ~15 calls (free-tier RPM cap).
-    - cron: '*/15 * * * *'
+    # Every 6 hours (00/06/12/18 UTC). ~4 runs / day, down from ~96 at the
+    # old */15 cadence. Each run scans everything since the last watermark, so
+    # a busy 6h window may make more Gemini calls per poll, but total daily
+    # volume drops sharply. Use workflow_dispatch for an immediate catch-up.
+    - cron: '0 */6 * * *'
   workflow_dispatch: {}
 
 permissions:
