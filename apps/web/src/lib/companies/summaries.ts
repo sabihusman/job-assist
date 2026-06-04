@@ -44,14 +44,3 @@ export function summarizeOutcomes(
   if (parts.length > 0) return parts.join(', ');
   return 'No response yet';
 }
-
-/** Count applied postings per company (for the APPLIED column). */
-export function countAppliedByCompany(postings: readonly PostingListItem[]): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const p of postings) {
-    const id = p.company.id;
-    if (!id) continue;
-    counts.set(id, (counts.get(id) ?? 0) + 1);
-  }
-  return counts;
-}

@@ -1,25 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import type { OutcomeEvent } from '@/lib/applied/types';
-import { countAppliedByCompany, summarizeOutcomes } from '@/lib/companies/summaries';
-import type { PostingListItem } from '@/lib/triage/types';
-
-function posting(id: string, companyId: string): PostingListItem {
-  const iso = new Date().toISOString();
-  return {
-    id,
-    company: { id: companyId, name: companyId, domain: null, description: null, tier: 1 },
-    role: { title: 'PM', family: null, department: null, team: null, seniority: null },
-    location_raw: null,
-    locations_normalized: [],
-    remote_type: null,
-    salary: null,
-    source: { ats: 'greenhouse', url: null },
-    first_seen_at: iso,
-    score: null,
-    state: { current: 'applied', reason: null, snooze_until: null, current_at: iso },
-  };
-}
+import { summarizeOutcomes } from '@/lib/companies/summaries';
 
 let seq = 0;
 // feat/applied-company-tracking: outcomes match a company by target_company_id
@@ -68,18 +50,5 @@ describe('summarizeOutcomes', () => {
     expect(summarizeOutcomes('c1', [], [outcome('c1', 'rejection_pre_screen')])).toBe(
       '1 rejection',
     );
-  });
-});
-
-describe('countAppliedByCompany', () => {
-  test('counts unique applied postings per company', () => {
-    const counts = countAppliedByCompany([
-      posting('p1', 'a'),
-      posting('p2', 'a'),
-      posting('p3', 'b'),
-    ]);
-    expect(counts.get('a')).toBe(2);
-    expect(counts.get('b')).toBe(1);
-    expect(counts.get('missing')).toBeUndefined();
   });
 });
