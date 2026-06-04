@@ -156,14 +156,16 @@ describe('ContactsPage pagination (fix/contacts-pagination)', () => {
     const all = [0, 1, 2, 3].map(buildContact);
     // Server returns 2 rows per call (sliced by offset); total stays 4 so
     // the page knows there are more after the first page.
-    getMock.mockImplementation((_path: string, opts: { params?: { query?: { offset?: number } } }) => {
-      const offset = Number(opts?.params?.query?.offset ?? 0);
-      return Promise.resolve({
-        data: { total: 4, offset, limit: 100, items: all.slice(offset, offset + 2) },
-        error: null,
-        response: new Response(null, { status: 200 }),
-      });
-    });
+    getMock.mockImplementation(
+      (_path: string, opts: { params?: { query?: { offset?: number } } }) => {
+        const offset = Number(opts?.params?.query?.offset ?? 0);
+        return Promise.resolve({
+          data: { total: 4, offset, limit: 100, items: all.slice(offset, offset + 2) },
+          error: null,
+          response: new Response(null, { status: 200 }),
+        });
+      },
+    );
 
     const user = userEvent.setup();
     render(wrap(<ContactsPage />));
