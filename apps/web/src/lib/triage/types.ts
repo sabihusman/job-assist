@@ -189,6 +189,14 @@ export type TriageFilters = {
   // PR #49: sort order for the list. Default `newest` is omitted from
   // the encoded URL — see `lib/triage/filters.ts`.
   sort: SortKey;
+  // feat/pm-po-only-filter: default-on "PM/PO only" gate. When true (the
+  // default) and no explicit `role_family` chips are selected, the view is
+  // restricted to product_management + product_owner — collapsing the
+  // non-PM noise that floods the matched cohort (hard rules don't gate
+  // role_family, and the role_family classifier is unreliable, so this is
+  // a REVERSIBLE filter, never a hard exclude). Toggle off (pm_only=false
+  // in the URL) to see every family; explicit family chips override it.
+  pm_only: boolean;
   limit: number;
   offset: number;
 };
