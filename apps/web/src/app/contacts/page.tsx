@@ -80,8 +80,17 @@ function ContactsPageInner() {
   );
 
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
-  const { data, isLoading, isError, error, refetch } = useContacts(filters);
-  const items = data?.items ?? [];
+  const {
+    items,
+    total,
+    isLoading,
+    isError,
+    error,
+    refetch,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage,
+  } = useContacts(filters);
 
   const toggleSource = (source: ContactSourceType) => {
     // Mutate the URL (replace, not push — filter toggles shouldn't
@@ -150,7 +159,7 @@ function ContactsPageInner() {
         </label>
 
         <div className="ml-auto text-[12px] text-muted-foreground">
-          {data ? `${items.length} of ${data.total}` : '…'}
+          {isLoading ? '…' : `${items.length} of ${total}`}
         </div>
       </div>
 
@@ -162,12 +171,29 @@ function ContactsPageInner() {
       ) : isLoading ? (
         <LoadingSkeleton />
       ) : (
-        <ContactsTable
-          contacts={items}
-          showingArchived={stateBits.include_archived}
-          onOpenDetail={setSelectedContactId}
-          selectedId={selectedContactId}
-        />
+        <>
+          <ContactsTable
+            contacts={items}
+            showingArchived={stateBits.include_archived}
+            onOpenDetail={setSelectedContactId}
+            selectedId={selectedContactId}
+          />
+          {/* fix/contacts-pagination: Load More so all 374 alumni are
+              reachable (was hard-capped at the first 50). Hidden once every
+              row is loaded. */}
+          {hasNextPage ? (
+            <div className="flex justify-center pt-1">
+              <button
+                type="button"
+                onClick={() => fetchNextPage()}
+                disabled={isFetchingNextPage}
+                className="inline-flex h-9 items-center rounded-md border border-border bg-surface px-4 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-60"
+              >
+                {isFetchingNextPage ? 'Loading…' : `Load more (${total - items.length} more)`}
+              </button>
+            </div>
+          ) : null}
+        </>
       )}
 
       <ContactDetailPanel
