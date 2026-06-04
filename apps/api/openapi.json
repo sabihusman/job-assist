@@ -52,6 +52,29 @@
         }
       }
     },
+    "/admin/auth-status": {
+      "get": {
+        "summary": "Auth Status",
+        "description": "Auth-rollout diagnostic (feat/api-auth) \u2014 BOOL ONLY, never the token.\n\nConfirms, without reading logs and without flipping enforce:\n  * ``token_configured`` \u2014 whether ``API_AUTH_TOKEN`` actually loaded into\n    THIS running build (the thing warn-mode behavior can't reveal, since a\n    valid token is logged silently and a wrong/missing one behaves the same\n    as a right one until enforce is on).\n  * ``enforce`` \u2014 the live ``AUTH_ENFORCE`` flag.\n\nDeliberately a GATED route (NOT in the /health allowlist): hitting it\nwithout a token in warn mode returns the bools AND emits a fresh\n``auth.missing_or_invalid`` log line \u2014 proving the middleware is evaluating.\nAfter enforce flips, it requires the token like every other route.\n\nNever returns the secret value \u2014 only whether one is present.",
+        "operationId": "auth_status_admin_auth_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "type": "object",
+                  "title": "Response Auth Status Admin Auth Status Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/ingest/plan": {
       "get": {
         "summary": "Get Ingest Plan",

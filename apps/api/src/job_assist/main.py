@@ -169,6 +169,30 @@ async def root() -> dict[str, str]:
     return {"name": "job-assist-api", "version": "0.0.1"}
 
 
+@app.get("/admin/auth-status")
+async def auth_status() -> dict[str, bool]:
+    """Auth-rollout diagnostic (feat/api-auth) — BOOL ONLY, never the token.
+
+    Confirms, without reading logs and without flipping enforce:
+      * ``token_configured`` — whether ``API_AUTH_TOKEN`` actually loaded into
+        THIS running build (the thing warn-mode behavior can't reveal, since a
+        valid token is logged silently and a wrong/missing one behaves the same
+        as a right one until enforce is on).
+      * ``enforce`` — the live ``AUTH_ENFORCE`` flag.
+
+    Deliberately a GATED route (NOT in the /health allowlist): hitting it
+    without a token in warn mode returns the bools AND emits a fresh
+    ``auth.missing_or_invalid`` log line — proving the middleware is evaluating.
+    After enforce flips, it requires the token like every other route.
+
+    Never returns the secret value — only whether one is present.
+    """
+    return {
+        "token_configured": bool(settings.api_auth_token),
+        "enforce": settings.auth_enforce,
+    }
+
+
 # ── Admin — ingestion ─────────────────────────────────────────────────────────
 
 
