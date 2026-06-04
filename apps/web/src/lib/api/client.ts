@@ -4,12 +4,16 @@ import type { paths } from '@/lib/types/openapi';
 import createClient from 'openapi-fetch';
 
 /**
- * Base URL for the FastAPI backend. Defaults to localhost for dev; the
- * Vercel project overrides this via `NEXT_PUBLIC_API_BASE_URL` so preview
- * and prod hit Railway. Falls back to "" (same-origin) only as a last
- * resort — that's almost certainly wrong in v1 and worth a console nudge.
+ * Base URL for the FastAPI backend.
+ *
+ * feat/frontend-api-proxy: all calls go through the SAME-ORIGIN Next.js proxy
+ * (`app/api/be/[...path]`), which injects the server-side bearer token — the
+ * token never reaches the browser. The proxy reads the real Railway origin
+ * from a server-only env var; the browser only ever sees `/api/be`. The export
+ * anchor in ExportButton.tsx uses this same base, so it routes through the
+ * proxy too and still streams the xlsx download.
  */
-const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000';
+const baseUrl = '/api/be';
 
 /**
  * Type-safe HTTP client. Path strings, path params, query params, and
