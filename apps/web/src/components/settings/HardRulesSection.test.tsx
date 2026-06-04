@@ -143,9 +143,10 @@ describe('HardRulesSection — PR #43 controls', () => {
   // serves a profile without it. The control must default to Off and the
   // page must still render — never crash on `undefined.toFixed()`.
   test('renders without crashing when the API omits similarity_weight', () => {
-    const legacy = profile();
-    delete (legacy as Partial<OperatorProfileRead>).similarity_weight;
-    wrap(<HardRulesSection profile={legacy} />);
+    // Simulate a profile served without the field (no `delete` — biome
+    // noDelete): strip it via destructuring rest.
+    const { similarity_weight: _omit, ...legacy } = profile();
+    wrap(<HardRulesSection profile={legacy as OperatorProfileRead} />);
     expect(screen.getByLabelText('Semantic weight')).toBeInTheDocument();
     // Both the ceiling readout ("No ceiling") and the semantic readout
     // ("Off") render — proving the section mounted fully past the slider.
