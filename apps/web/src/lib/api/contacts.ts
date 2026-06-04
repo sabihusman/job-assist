@@ -1,6 +1,6 @@
 'use client';
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { api } from '@/lib/api/client';
 import { MutationError, extractDetail } from '@/lib/api/mutation-error';
@@ -36,31 +36,66 @@ export const outreachKeys = {
     [OUTREACH_KEY, contactId, params] as const,
 };
 
-function toQuery(filters: ContactsFilters): Record<string, unknown> {
-  const q: Record<string, unknown> = {
-    limit: filters.limit,
-    offset: filters.offset,
-  };
+// Per-page size for the contacts list. 100 = the backend's max ``limit``
+// (main.py enforces 1..100), so the operator reaches all 374 alumni in at
+// most ceil(374/100)=4 pages of Load More instead of being stuck at 50.
+const CONTACTS_PAGE_SIZE = 100;
+
+/**
+ * Filter params WITHOUT limit/offset — those vary per page and must NOT be
+ * part of the cache key, or every page would key to a different query.
+ */
+function toFilterQuery(filters: ContactsFilters): Record<string, unknown> {
+  const q: Record<string, unknown> = {};
   if (filters.source_type.length) q.source_type = filters.source_type;
   if (filters.search.trim()) q.search = filters.search.trim();
   if (filters.include_archived) q.include_archived = true;
   return q;
 }
 
+/**
+ * Paginated contacts list (fix/contacts-pagination).
+ *
+ * Previously a single ``useQuery`` capped at limit=50, with no Load More —
+ * so 324 of 374 seeded alumni were unreachable (and the backend caps limit
+ * at 100, so a single fetch can never return all 374). This is now an
+ * ``useInfiniteQuery`` that pages by offset; the page renders the flattened
+ * accumulation plus a Load More button driven by ``hasNextPage``.
+ *
+ * Returns the raw infinite-query object plus convenience ``items`` (flattened
+ * across loaded pages) and ``total`` (server-reported full count).
+ */
 export function useContacts(filters: ContactsFilters) {
-  const query = toQuery(filters);
-  return useQuery({
-    queryKey: contactsKeys.list(query),
-    queryFn: async () => {
+  const filterQuery = toFilterQuery(filters);
+  const query = useInfiniteQuery({
+    queryKey: contactsKeys.list(filterQuery),
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) => {
       const { data, error } = await api.GET('/contacts', {
-        params: { query: query as never },
+        params: {
+          query: {
+            ...filterQuery,
+            limit: CONTACTS_PAGE_SIZE,
+            offset: pageParam,
+          } as never,
+        },
       });
       if (error) throw error;
       return data as unknown as ContactsListResponse;
     },
+    // Next offset = how many we've loaded so far; undefined once we've
+    // loaded ``total`` rows (Load More then disables).
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((n, page) => n + page.items.length, 0);
+      return loaded < lastPage.total ? loaded : undefined;
+    },
     refetchOnWindowFocus: false,
     staleTime: 30_000,
   });
+
+  const items = query.data?.pages.flatMap((page) => page.items) ?? [];
+  const total = query.data?.pages[0]?.total ?? 0;
+  return { ...query, items, total };
 }
 
 // ── PR #52 — detail query + CRUD + outreach mutations ──────────────────────
