@@ -508,6 +508,8 @@ async def test_postings_response_shape(db_session: Any) -> None:
         "source",
         "first_seen_at",
         "score",
+        # Slice 2b: calibrated 0-100 semantic similarity (null until recalibrated).
+        "similarity_score",
         # Added in PR #31 — always present, nested fields null for untouched postings.
         "state",
     }

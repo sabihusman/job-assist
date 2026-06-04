@@ -139,6 +139,19 @@ describe('HardRulesSection — PR #43 controls', () => {
     expect(screen.getByText('Off')).toBeInTheDocument();
   });
 
+  // Regression: an API that predates the similarity_weight response field
+  // serves a profile without it. The control must default to Off and the
+  // page must still render — never crash on `undefined.toFixed()`.
+  test('renders without crashing when the API omits similarity_weight', () => {
+    const legacy = profile();
+    delete (legacy as Partial<OperatorProfileRead>).similarity_weight;
+    wrap(<HardRulesSection profile={legacy} />);
+    expect(screen.getByLabelText('Semantic weight')).toBeInTheDocument();
+    // Both the ceiling readout ("No ceiling") and the semantic readout
+    // ("Off") render — proving the section mounted fully past the slider.
+    expect(screen.getByText('Off')).toBeInTheDocument();
+  });
+
   test('changing the semantic weight and saving sends similarity_weight', async () => {
     const user = userEvent.setup();
     mockMutate.mockClear();

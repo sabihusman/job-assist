@@ -57,7 +57,11 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
     defaultValues: {
       applicant_cap: profile.applicant_cap,
       per_company_cap: profile.per_company_cap,
-      similarity_weight: profile.similarity_weight,
+      // Coalesce to 0 (= off) so the numeric field + displayFormat always
+      // bind to a real number. A profile served by an API that predates the
+      // similarity_weight response field would otherwise feed `undefined`
+      // into `n.toFixed(1)` and crash the entire Settings page render.
+      similarity_weight: profile.similarity_weight ?? 0,
       salary_floor_usd: profile.salary_floor_usd,
       // PR #43: backend stores null when unset; surface that as 0 in the
       // form so the numeric input has a real value to bind to.
@@ -127,9 +131,10 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
   }
   if (formState.dirtyFields.similarity_weight) {
     const wNow = watch('similarity_weight');
+    const wFrom = profile.similarity_weight ?? 0;
     changes.push({
       label: 'Semantic weight',
-      from: profile.similarity_weight === 0 ? 'Off' : profile.similarity_weight.toFixed(1),
+      from: wFrom === 0 ? 'Off' : wFrom.toFixed(1),
       to: wNow === 0 ? 'Off' : wNow.toFixed(1),
     });
   }
