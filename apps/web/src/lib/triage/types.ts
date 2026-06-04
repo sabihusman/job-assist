@@ -140,6 +140,19 @@ export type PostingActionRow = {
   created_at: string;
 };
 
+// feat/application-resume: the resume attached to THIS application (metadata
+// only — the file bytes stream from GET /postings/{id}/resume). null when
+// nothing is attached yet.
+export type ApplicationResumeMeta = {
+  has_file: boolean;
+  file_name: string | null;
+  content_type: string | null;
+  resume_text: string | null;
+  angle: string | null;
+  label: string | null;
+  updated_at: string | null;
+};
+
 export type PostingDetail = PostingListItem & {
   description_markdown: string | null;
   // Gemini-generated operator-focused summary (PR #41/#42). NULL until
@@ -150,6 +163,7 @@ export type PostingDetail = PostingListItem & {
   last_seen_at: string | null;
   closed_at: string | null;
   state_history: PostingActionRow[];
+  resume: ApplicationResumeMeta | null;
 };
 
 export type PostingsListResponse = {

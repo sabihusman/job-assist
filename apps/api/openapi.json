@@ -1800,6 +1800,140 @@
         }
       }
     },
+    "/postings/{posting_id}/resume": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Upsert Application Resume",
+        "description": "Attach/replace THIS application's resume. UPSERT by job_posting_id.\n\nTwo modes, dispatched on Content-Type:\n  * ``application/json`` body ``{resume_text?, angle?, label?}`` \u2014 paste.\n  * any other Content-Type \u2014 raw file bytes (``.docx``/``.pdf``);\n    ``?filename=`` is required, ``?angle=``/``?label=`` optional.\n\n404 if the posting doesn't exist; 422 on bad input; 413 if the file\nexceeds the size cap.",
+        "operationId": "upsert_application_resume_postings__posting_id__resume_post",
+        "parameters": [
+          {
+            "name": "posting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Posting Id"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Filename"
+            }
+          },
+          {
+            "name": "angle",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Angle"
+            }
+          },
+          {
+            "name": "label",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Label"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Upsert Application Resume Postings  Posting Id  Resume Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Download Application Resume",
+        "description": "Stream the attached resume file (Content-Disposition: attachment).\n\n404 if the posting has no attached FILE (a paste-only resume has no blob).\nRouted through the /api/be proxy on the frontend, so the auth token stays\nserver-side \u2014 same pattern as the xlsx export.",
+        "operationId": "download_application_resume_postings__posting_id__resume_get",
+        "parameters": [
+          {
+            "name": "posting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Posting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/companies": {
       "get": {
         "tags": [
