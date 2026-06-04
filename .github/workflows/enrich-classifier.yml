@@ -52,6 +52,9 @@ jobs:
     timeout-minutes: 15
     env:
       API_URL: ${{ secrets.API_URL }}
+      # feat/api-auth: gated route needs the bearer token (/health pre-check
+      # stays header-less). Empty until provisioned — harmless in warn mode.
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
     steps:
       - name: Verify API is up
         run: curl -fsS --max-time 10 "$API_URL/health"
@@ -65,6 +68,7 @@ jobs:
           # them (unlike the other enrich-* crons).
           status=$(curl -sS --max-time 540 \
             -o /tmp/reclassify.json -w "%{http_code}" \
+            -H "Authorization: Bearer $API_AUTH_TOKEN" \
             -X POST "$API_URL/admin/reclassify/sweep" \
             -H "Content-Type: application/json" \
             -d '{"limit": 50, "only_unclassified": true}')
