@@ -2846,6 +2846,21 @@ async def get_stats_funnel(
     return await get_funnel(db, s, u)
 
 
+@app.get("/stats/ingest", tags=["public"])
+async def get_stats_ingest(db: DbSession, days: int = 14) -> dict[str, Any]:
+    """Ingest health for the Stats panel (feat/ingest-visibility): daily
+    SUM(postings_new) over the last ``days`` (1-30), per-source last run status,
+    and success/fail totals — a read layer over the existing ``ingest_run``
+    audit table so the operator can SEE whether ingestion is landing postings.
+    Pure SELECTs; no writes.
+    """
+    from job_assist.services.ingest_stats import ingest_daily_stats
+
+    if days < 1 or days > 30:
+        raise HTTPException(status_code=422, detail="days must be 1..30")
+    return await ingest_daily_stats(db, days=days)
+
+
 # ── Admin — cron status ────────────────────────────────────────────────────────
 
 
@@ -2853,6 +2868,24 @@ async def get_stats_funnel(
 async def cron_status() -> dict[str, str]:
     """Cron health-check endpoint.  Returns ok when the API is reachable."""
     return {"status": "ok"}
+
+
+@app.get("/admin/ingest/runs", tags=["admin"])
+async def list_ingest_runs(
+    db: DbSession,
+    since: Annotated[datetime | None, Query()] = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Recent ``ingest_run`` rows, newest first (the audit-log view) — started/
+    finished, source, status, fetched/new/updated counts, and error_message.
+    Optional ``?since=`` floor. Pure SELECT; no writes.
+    """
+    from job_assist.services.ingest_stats import recent_runs
+
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=422, detail="limit must be 1..200")
+    items = await recent_runs(db, since=since, limit=limit)
+    return {"total": len(items), "items": items}
 
 
 # ── Broad ingestion (Slice 2: handle discovery + bounded trial) ──────────────

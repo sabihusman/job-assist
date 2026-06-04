@@ -3,6 +3,7 @@
 import { useMemo } from 'react';
 
 import { AppShell } from '@/components/chrome/AppShell';
+import { IngestPanel } from '@/components/stats/IngestPanel';
 import { KPICard } from '@/components/stats/KPICard';
 import { type FunnelRow, OutcomeFunnel } from '@/components/stats/OutcomeFunnel';
 import { useAllOutcomes, useAppliedPostings } from '@/lib/api/applied';
@@ -121,6 +122,9 @@ export default function StatsPage() {
 
             {/* Outcome funnel */}
             <OutcomeFunnel rows={funnelRows} />
+
+            {/* Ingest health (feat/ingest-visibility) — self-fetches /stats/ingest. */}
+            <IngestPanel />
           </>
         )}
       </div>
