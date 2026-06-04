@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'vitest';
 
-import { encodeFilters, parseFilters, toggleInArray } from '@/lib/triage/filters';
+import {
+  encodeFilters,
+  parseFilters,
+  resolveRoleFamilies,
+  toggleInArray,
+} from '@/lib/triage/filters';
 
 describe('parseFilters', () => {
   test('defaults state to [triage] when no state param is set', () => {
@@ -68,6 +73,23 @@ describe('parseFilters', () => {
     const f = parseFilters(new URLSearchParams('sort=best_fit_semantic'));
     expect(f.sort).toBe('best_fit_semantic');
   });
+
+  // ── pm_only (feat/pm-po-only-filter) ──────────────────────────────────
+
+  test('pm_only defaults ON when the param is absent', () => {
+    const f = parseFilters(new URLSearchParams(''));
+    expect(f.pm_only).toBe(true);
+  });
+
+  test('pm_only=false turns the gate off', () => {
+    const f = parseFilters(new URLSearchParams('pm_only=false'));
+    expect(f.pm_only).toBe(false);
+  });
+
+  test('any non-false pm_only value is treated as on', () => {
+    const f = parseFilters(new URLSearchParams('pm_only=true'));
+    expect(f.pm_only).toBe(true);
+  });
 });
 
 describe('encodeFilters', () => {
@@ -98,6 +120,42 @@ describe('encodeFilters', () => {
   test('PR #49: emits non-default sort', () => {
     const params = encodeFilters({ sort: 'tier' });
     expect(params.get('sort')).toBe('tier');
+  });
+
+  test('pm_only: omits the param when on (the default)', () => {
+    const params = encodeFilters({ pm_only: true });
+    expect(params.has('pm_only')).toBe(false);
+  });
+
+  test('pm_only: emits pm_only=false when toggled off', () => {
+    const params = encodeFilters({ pm_only: false });
+    expect(params.get('pm_only')).toBe('false');
+  });
+});
+
+describe('resolveRoleFamilies', () => {
+  test('default-on pm_only with no chips → PM + PO', () => {
+    expect(resolveRoleFamilies({ role_family: [], pm_only: true })).toEqual([
+      'product_management',
+      'product_owner',
+    ]);
+  });
+
+  test('gate off with no chips → all families (empty)', () => {
+    expect(resolveRoleFamilies({ role_family: [], pm_only: false })).toEqual([]);
+  });
+
+  test('explicit family chips override the gate', () => {
+    expect(resolveRoleFamilies({ role_family: ['product_marketing'], pm_only: true })).toEqual([
+      'product_marketing',
+    ]);
+  });
+
+  test('missing pm_only is treated as on', () => {
+    expect(resolveRoleFamilies({ role_family: [] })).toEqual([
+      'product_management',
+      'product_owner',
+    ]);
   });
 });
 

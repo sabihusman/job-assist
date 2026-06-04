@@ -29,6 +29,9 @@ export const DEFAULT_FILTERS: TriageFilters = {
   include_snoozed_past_only: false,
   target_company_id: null,
   sort: DEFAULT_SORT,
+  // feat/pm-po-only-filter: default-on. Restricts the view to PM + PO
+  // unless toggled off or overridden by explicit family chips.
+  pm_only: true,
   // PR #70 / Bestiary 5.13: bumped from 20 → 100 (API cap). With ~716
   // pending postings, the legacy 20-row default left the operator
   // unable to reach 96% of postings without explicit Load More clicks.
@@ -105,9 +108,31 @@ export function parseFilters(params: {
     include_snoozed_past_only: params.get('include_snoozed_past_only') === 'true',
     target_company_id: params.get('target_company_id'),
     sort,
+    // feat/pm-po-only-filter: default ON. Absent param → true; the only way
+    // to broaden to all families is an explicit ``pm_only=false`` (or
+    // picking specific family chips), so the default stays reversible.
+    pm_only: params.get('pm_only') !== 'false',
     limit: Number.parseInt(params.get('limit') ?? '100', 10) || 100,
     offset: Number.parseInt(params.get('offset') ?? '0', 10) || 0,
   };
+}
+
+// feat/pm-po-only-filter: the families the default-on gate resolves to.
+export const PM_PO_FAMILIES: readonly RoleFamilyWire[] = ['product_management', 'product_owner'];
+
+/**
+ * Resolve the role_family set to actually send to the backend.
+ *
+ * Single source of truth shared by the list query (lib/api/hooks.ts) and
+ * the xlsx export href (components/triage/ExportButton.tsx) so both apply
+ * the PM/PO-only default identically. Explicit family chips always win;
+ * otherwise the ``pm_only`` default restricts to PM + PO; with the gate
+ * off and no chips, returns ``[]`` (all families).
+ */
+export function resolveRoleFamilies(filters: Partial<TriageFilters>): RoleFamilyWire[] {
+  if (filters.role_family && filters.role_family.length > 0) return filters.role_family;
+  if (filters.pm_only ?? true) return [...PM_PO_FAMILIES];
+  return [];
 }
 
 /** Encode a TriageFilters back into a URLSearchParams. */
@@ -123,6 +148,9 @@ export function encodeFilters(filters: Partial<TriageFilters>): URLSearchParams 
   // PR #49: omit the default sort to keep clean URLs. ``?sort=newest``
   // and a missing param mean the same thing.
   if (filters.sort && filters.sort !== DEFAULT_SORT) p.set('sort', filters.sort);
+  // feat/pm-po-only-filter: pm_only defaults ON, so only emit it when the
+  // operator has toggled it OFF (``pm_only=false``). Absent == on.
+  if (filters.pm_only === false) p.set('pm_only', 'false');
   return p;
 }
 
