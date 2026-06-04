@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import {
+  PIPELINE_BOARD_STAGES,
   PIPELINE_STAGES,
   type PipelineStage,
   STAGE_LABELS,
@@ -10,33 +11,49 @@ import {
   stageOf,
 } from '@/lib/applied/stages';
 
+describe('feat/still-alive labels + board stages', () => {
+  test('the applied column is labelled "Still Alive"', () => {
+    expect(STAGE_LABELS.applied).toBe('Still Alive');
+  });
+
+  test('PIPELINE_BOARD_STAGES excludes ghosted but the stage still exists globally', () => {
+    expect(PIPELINE_BOARD_STAGES).not.toContain('ghosted');
+    expect(PIPELINE_BOARD_STAGES).toHaveLength(PIPELINE_STAGES.length - 1);
+    // the ghosted stage itself is preserved (Applied page uses it)
+    expect(PIPELINE_STAGES).toContain('ghosted');
+    expect(STAGE_LABELS.ghosted).toBe('Ghosted');
+  });
+});
+
 describe('sanitizeColumnOrder', () => {
-  test('a partial order is preserved then completed', () => {
+  test('a partial order is preserved then completed (board stages, no ghosted)', () => {
     const out = sanitizeColumnOrder(['rejected', 'applied']);
     expect(out[0]).toBe('rejected');
     expect(out[1]).toBe('applied');
-    expect(out).toHaveLength(PIPELINE_STAGES.length);
-    expect(new Set(out).size).toBe(PIPELINE_STAGES.length);
+    expect(out).toHaveLength(PIPELINE_BOARD_STAGES.length);
+    expect(new Set(out).size).toBe(PIPELINE_BOARD_STAGES.length);
+    expect(out).not.toContain('ghosted');
   });
 
-  test('drops unknown keys and appends missing stages', () => {
-    const out = sanitizeColumnOrder(['offer', 'bogus', 'applied', null, undefined]);
+  test('drops unknown keys (incl. ghosted) and appends missing board stages', () => {
+    const out = sanitizeColumnOrder(['offer', 'bogus', 'applied', 'ghosted', null, undefined]);
     expect(out.slice(0, 2)).toEqual(['offer', 'applied']);
-    expect(out).toHaveLength(PIPELINE_STAGES.length);
-    expect(out).toContain('ghosted'); // a missing stage got appended
+    expect(out).toHaveLength(PIPELINE_BOARD_STAGES.length);
+    expect(out).toContain('recruiter'); // a missing board stage got appended
+    expect(out).not.toContain('ghosted'); // dropped — not a board stage
     expect(out).not.toContain('bogus' as unknown as PipelineStage);
   });
 
   test('drops duplicates', () => {
     const out = sanitizeColumnOrder(['applied', 'applied', 'rejected']);
     expect(out.filter((s) => s === 'applied')).toHaveLength(1);
-    expect(out).toHaveLength(PIPELINE_STAGES.length);
+    expect(out).toHaveLength(PIPELINE_BOARD_STAGES.length);
   });
 
-  test('null / undefined / empty yields the canonical order', () => {
-    expect(sanitizeColumnOrder(null)).toEqual([...PIPELINE_STAGES]);
-    expect(sanitizeColumnOrder(undefined)).toEqual([...PIPELINE_STAGES]);
-    expect(sanitizeColumnOrder([])).toEqual([...PIPELINE_STAGES]);
+  test('null / undefined / empty yields the canonical board order', () => {
+    expect(sanitizeColumnOrder(null)).toEqual([...PIPELINE_BOARD_STAGES]);
+    expect(sanitizeColumnOrder(undefined)).toEqual([...PIPELINE_BOARD_STAGES]);
+    expect(sanitizeColumnOrder([])).toEqual([...PIPELINE_BOARD_STAGES]);
   });
 });
 

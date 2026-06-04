@@ -30,6 +30,7 @@ function stageSequence(container: HTMLElement): string[] {
 
 describe('PipelineBoard reorder is presentational only', () => {
   test('renders columns in the provided order', () => {
+    // The real board order (feat/still-alive: no ghosted column).
     const order: PipelineStage[] = [
       'rejected',
       'applied',
@@ -38,10 +39,10 @@ describe('PipelineBoard reorder is presentational only', () => {
       'video',
       'onsite',
       'offer',
-      'ghosted',
     ];
     const { container } = render(<PipelineBoard buckets={buckets()} order={order} />);
     expect(stageSequence(container)).toEqual(order);
+    expect(stageSequence(container)).not.toContain('ghosted');
   });
 
   test('reordering changes only render order, NOT which column a card is in', () => {
@@ -62,7 +63,7 @@ describe('PipelineBoard reorder is presentational only', () => {
       within(screen.getByRole('region', { name: /rejected/i })).getByText('RejCo'),
     ).toBeInTheDocument();
     expect(
-      within(screen.getByRole('region', { name: /applied/i })).getByText('AppCo'),
+      within(screen.getByRole('region', { name: /still alive/i })).getByText('AppCo'),
     ).toBeInTheDocument();
     b.unmount();
   });

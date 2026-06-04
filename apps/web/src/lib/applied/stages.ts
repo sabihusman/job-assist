@@ -34,8 +34,22 @@ export const PIPELINE_STAGES: readonly PipelineStage[] = [
   'ghosted',
 ] as const;
 
+/**
+ * The columns the Pipeline board actually renders (feat/still-alive). `ghosted`
+ * is excluded: it was only ever populated by the old applied-postings ghost
+ * heuristic (deleted in #129), so `bucketOutcomes` never assigns it — and the
+ * operator's "Still Alive" definition is age-independent, so ghosting is moot.
+ * The `ghosted` stage itself still exists for the Applied page (AppliedList).
+ */
+export const PIPELINE_BOARD_STAGES: readonly PipelineStage[] = PIPELINE_STAGES.filter(
+  (s) => s !== 'ghosted',
+);
+
 export const STAGE_LABELS: Record<PipelineStage, string> = {
-  applied: 'Applied',
+  // feat/still-alive: the `applied` column = threads whose latest event is an
+  // application_confirmation (submitted, no response, no rejection — age-
+  // independent). The operator calls this "Still Alive".
+  applied: 'Still Alive',
   recruiter: 'Recruiter screen',
   phone: 'Phone interview',
   video: 'Video interview',
@@ -47,16 +61,17 @@ export const STAGE_LABELS: Record<PipelineStage, string> = {
 
 /**
  * Sanitize a persisted Pipeline column order against the canonical
- * PIPELINE_STAGES (feat/pipeline-reorder): drop unknown / duplicate keys and
- * append any missing stages in their canonical position. Guarantees a complete,
- * valid permutation so a stale localStorage value (or a future stage
- * addition/removal) degrades gracefully instead of dropping or doubling a
- * column.
+ * PIPELINE_BOARD_STAGES (feat/pipeline-reorder): drop unknown / duplicate keys
+ * and append any missing stages in their canonical position. Guarantees a
+ * complete, valid permutation so a stale localStorage value degrades gracefully
+ * instead of dropping or doubling a column. Because the canonical set is the
+ * board stages (no `ghosted`), a pre-existing persisted order that still
+ * contains `ghosted` has it dropped automatically (feat/still-alive).
  */
 export function sanitizeColumnOrder(
   order: readonly (string | null | undefined)[] | null | undefined,
 ): PipelineStage[] {
-  const valid = new Set<string>(PIPELINE_STAGES);
+  const valid = new Set<string>(PIPELINE_BOARD_STAGES);
   const seen = new Set<PipelineStage>();
   const out: PipelineStage[] = [];
   for (const s of order ?? []) {
@@ -65,7 +80,7 @@ export function sanitizeColumnOrder(
       seen.add(s as PipelineStage);
     }
   }
-  for (const s of PIPELINE_STAGES) {
+  for (const s of PIPELINE_BOARD_STAGES) {
     if (!seen.has(s)) out.push(s);
   }
   return out;

@@ -29,8 +29,14 @@ export function PipelineColumn({
 }) {
   // Stages display in the spec's casing (e.g. "Recruiter screen") —
   // map to short uppercase headers per UI_SPEC.md (RECRUITER, PHONE, …).
+  // feat/still-alive: the `applied` column reads "STILL ALIVE" (two words, so
+  // the default first-word truncation would wrongly show just "STILL").
   const headerLabel =
-    stage === 'recruiter' ? 'RECRUITER' : (STAGE_LABELS[stage].split(' ')[0] ?? '').toUpperCase();
+    stage === 'applied'
+      ? 'STILL ALIVE'
+      : stage === 'recruiter'
+        ? 'RECRUITER'
+        : (STAGE_LABELS[stage].split(' ')[0] ?? '').toUpperCase();
 
   return (
     <section
