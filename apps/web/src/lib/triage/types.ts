@@ -55,13 +55,17 @@ export type StateFilter =
 // operator-facing labels live on SortDropdown.tsx.
 // PR #57: ``best_fit`` reads job_posting.fit_score (PR #56's heuristic
 // 0-100). NULL scores sink to the bottom via ORDER BY NULLS LAST.
+// Slice 2b: ``best_fit_semantic`` blends fit_score with the calibrated
+// similarity_score behind operator_profile.similarity_weight (0 = off →
+// identical to best_fit).
 export type SortKey =
   | 'newest'
   | 'oldest'
   | 'salary_high_to_low'
   | 'tier'
   | 'recently_posted'
-  | 'best_fit';
+  | 'best_fit'
+  | 'best_fit_semantic';
 
 export const DEFAULT_SORT: SortKey = 'newest';
 
@@ -115,6 +119,8 @@ export type PostingListItem = {
   source: SourceEmbedded;
   first_seen_at: string;
   score: number | null;
+  // Slice 2b: calibrated 0-100 semantic similarity (null until recalibrated).
+  similarity_score?: number | null;
   state: StateEmbedded;
 };
 

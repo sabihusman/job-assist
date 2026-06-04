@@ -20,6 +20,8 @@ describe('SortDropdown', () => {
       { value: 'recently_posted', text: 'Recently posted' },
       // PR #57: "Best fit" reads fit_score DESC NULLS LAST.
       { value: 'best_fit', text: 'Best fit' },
+      // Slice 2b: heuristic + semantic blend behind similarity_weight.
+      { value: 'best_fit_semantic', text: 'Best fit (semantic)' },
     ]);
   });
 

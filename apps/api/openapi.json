@@ -1375,7 +1375,8 @@
                 "salary_high_to_low",
                 "tier",
                 "recently_posted",
-                "best_fit"
+                "best_fit",
+                "best_fit_semantic"
               ],
               "type": "string",
               "default": "newest",
@@ -1607,7 +1608,8 @@
                 "salary_high_to_low",
                 "tier",
                 "recently_posted",
-                "best_fit"
+                "best_fit",
+                "best_fit_semantic"
               ],
               "type": "string",
               "default": "newest",

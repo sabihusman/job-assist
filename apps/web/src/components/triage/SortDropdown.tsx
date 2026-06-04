@@ -26,6 +26,9 @@ const SORT_OPTIONS: readonly { wire: SortKey; label: string }[] = [
   // postings sink to the bottom — operator scrolls until the score
   // drops below their personal threshold (no explicit filter yet).
   { wire: 'best_fit', label: 'Best fit' },
+  // Slice 2b: blends fit_score with calibrated similarity behind the operator's
+  // Semantic weight (Settings); at weight 0 this is identical to Best fit.
+  { wire: 'best_fit_semantic', label: 'Best fit (semantic)' },
 ] as const;
 
 export function SortDropdown({

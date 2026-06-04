@@ -341,6 +341,25 @@ def build_view_parts(spec: PostingsViewSpec) -> PostingsQueryParts:
         order_clauses = [TargetCompany.tier.asc().nulls_last(), JobPosting.id.asc()]
     elif spec.sort == "recently_posted":
         order_clauses = [JobPosting.posted_at.desc().nulls_last(), JobPosting.id.asc()]
+    elif spec.sort == "best_fit_semantic":
+        # Slice 2b: blend the heuristic fit_score with the calibrated semantic
+        # similarity_score behind the operator's similarity_weight (0 = off).
+        # ``w`` is resolved inline from the singleton profile — same scalar-
+        # subquery pattern as per_company_cap above — COALESCE'd to 0.0 when the
+        # row is unseeded. COALESCE(similarity_score, fit_score) makes un-embedded
+        # rows fall back to the heuristic, so at ANY w they rank exactly as
+        # best_fit; at w=0 the whole expression collapses to fit_score, making
+        # this byte-identical to best_fit. fit_score / score_posting are untouched.
+        w = func.coalesce(
+            select(OperatorProfile.similarity_weight)
+            .where(OperatorProfile.id == 1)
+            .scalar_subquery(),
+            0.0,
+        )
+        blended = (1 - w) * JobPosting.fit_score + w * func.coalesce(
+            JobPosting.similarity_score, JobPosting.fit_score
+        )
+        order_clauses = [blended.desc().nulls_last(), JobPosting.id.asc()]
     else:  # "best_fit"
         order_clauses = [JobPosting.fit_score.desc().nulls_last(), JobPosting.id.asc()]
 

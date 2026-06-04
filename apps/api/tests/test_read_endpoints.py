@@ -119,6 +119,8 @@ def _posting(
     closed: bool = False,
     hard_rule_failed: str | None = None,
     first_seen_at: datetime | None = None,
+    fit_score: int | None = None,
+    similarity_score: int | None = None,
 ) -> JobPosting:
     now = first_seen_at or datetime.now(tz=UTC)
     suffix = uuid.uuid4().hex[:10]
@@ -140,6 +142,8 @@ def _posting(
         team=team,
         closed_at=now if closed else None,
         hard_rule_failed=hard_rule_failed,
+        fit_score=fit_score,
+        similarity_score=similarity_score,
     )
 
 
@@ -1339,3 +1343,121 @@ async def test_outcomes_job_related_filter_excludes_noise(db_session: Any) -> No
     assert fj["total"] == 2
     kinds = {it["stage"] for it in fj["items"]}
     assert kinds == {"application_confirmation", "rejection_post_screen"}
+
+
+# ── Slice 2b: best_fit_semantic blend ────────────────────────────────────────
+
+
+async def _set_similarity_weight(db_session: Any, w: float) -> None:
+    from sqlalchemy import select
+
+    from job_assist.db.models import OperatorProfile
+
+    prof = (
+        await db_session.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
+    ).scalar_one_or_none()
+    if prof is None:
+        db_session.add(
+            OperatorProfile(id=1, looking_for_text="", role_keywords=[], similarity_weight=w)
+        )
+    else:
+        prof.similarity_weight = w
+    await db_session.commit()
+
+
+async def _seed_blend_postings(db_session: Any) -> tuple[str, str, str]:
+    """A: high fit / low sim, B: low fit / high sim, C: un-embedded (sim NULL)."""
+    c = _company(name="BlendCo")
+    db_session.add(c)
+    await db_session.flush()
+    a = _posting(target_company_id=c.id, fit_score=90, similarity_score=10)
+    b = _posting(target_company_id=c.id, fit_score=50, similarity_score=95)
+    cc = _posting(target_company_id=c.id, fit_score=70, similarity_score=None)
+    db_session.add_all([a, b, cc])
+    await db_session.flush()
+    db_session.add_all(
+        [
+            _posting_source(job_posting_id=a.id),
+            _posting_source(job_posting_id=b.id),
+            _posting_source(job_posting_id=cc.id),
+        ]
+    )
+    await db_session.commit()
+    return str(a.id), str(b.id), str(cc.id)
+
+
+def _ids(resp: Any) -> list[str]:
+    return [it["id"] for it in resp.json()["items"]]
+
+
+async def _order(db_session: Any, sort: str) -> list[str]:
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp = await ac.get(f"/postings?sort={sort}&per_company_cap=0")
+    finally:
+        await _drop_override()
+    return _ids(resp)
+
+
+@_NEEDS_DB
+async def test_best_fit_semantic_w0_byte_identical_to_best_fit(db_session: Any) -> None:
+    await _set_similarity_weight(db_session, 0.0)
+    a, b, cc = await _seed_blend_postings(db_session)
+    bf = await _order(db_session, "best_fit")
+    bfs = await _order(db_session, "best_fit_semantic")
+    assert bf == bfs  # at w=0 the blend collapses to fit_score
+    assert bf == [a, cc, b]  # fit DESC: 90, 70, 50
+
+
+@_NEEDS_DB
+async def test_best_fit_semantic_w1_high_sim_low_fit_rises(db_session: Any) -> None:
+    await _set_similarity_weight(db_session, 1.0)
+    a, b, cc = await _seed_blend_postings(db_session)
+    # w=1 → order by COALESCE(sim, fit): B=95, C=70(fallback), A=10
+    assert await _order(db_session, "best_fit_semantic") == [b, cc, a]
+
+
+@_NEEDS_DB
+async def test_best_fit_semantic_monotonic_in_w(db_session: Any) -> None:
+    _a, b, _cc = await _seed_blend_postings(db_session)
+    positions = []
+    for w in (0.0, 0.5, 1.0):
+        await _set_similarity_weight(db_session, w)
+        positions.append((await _order(db_session, "best_fit_semantic")).index(b))
+    # B (low fit, high sim) rises monotonically as w grows: last → first.
+    assert positions[0] > positions[1] >= positions[2]
+
+
+@_NEEDS_DB
+async def test_best_fit_semantic_unembedded_falls_back_to_fit(db_session: Any) -> None:
+    await _set_similarity_weight(db_session, 1.0)
+    _a, _b, cc = await _seed_blend_postings(db_session)
+    # C (sim NULL) ranks by its fit_score (70) — NOT dropped to NULLS LAST.
+    assert (await _order(db_session, "best_fit_semantic")).index(cc) == 1
+
+
+@_NEEDS_DB
+async def test_best_fit_semantic_reversible(db_session: Any) -> None:
+    await _seed_blend_postings(db_session)
+    await _set_similarity_weight(db_session, 0.0)
+    o_before = await _order(db_session, "best_fit_semantic")
+    await _set_similarity_weight(db_session, 0.5)
+    await _order(db_session, "best_fit_semantic")
+    await _set_similarity_weight(db_session, 0.0)
+    o_after = await _order(db_session, "best_fit_semantic")
+    assert o_before == o_after  # 0 → 0.5 → 0 returns to the identical order
+
+
+@_NEEDS_DB
+async def test_postings_surfaces_similarity_score(db_session: Any) -> None:
+    a, _b, cc = await _seed_blend_postings(db_session)
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp = await ac.get("/postings?per_company_cap=0")
+    finally:
+        await _drop_override()
+    by_id = {it["id"]: it for it in resp.json()["items"]}
+    assert by_id[a]["similarity_score"] == 10
+    assert by_id[cc]["similarity_score"] is None  # un-embedded surfaces as null

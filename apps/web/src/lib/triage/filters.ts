@@ -64,6 +64,8 @@ const VALID_SORT = new Set<SortKey>([
   'recently_posted',
   // PR #57: index-backed sort by fit_score DESC NULLS LAST.
   'best_fit',
+  // Slice 2b: heuristic + semantic blend behind similarity_weight (0 = off).
+  'best_fit_semantic',
 ]);
 
 function intsFrom(values: string[]): number[] {
