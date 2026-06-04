@@ -34,5 +34,25 @@
     "role_filter": null,
     "domain": null,
     "notes": null
+  },
+  {
+    "name": "ExampleWorkdayCo",
+    "tier": 2,
+    "ats": "workday",
+    "ats_handle": "examplewd",
+    "adapter_config": { "wd_number": "wd5", "site": "Example_Careers" },
+    "role_filter": null,
+    "domain": null,
+    "notes": "Workday tenants REQUIRE adapter_config {wd_number, site}. ats_handle is the tenant. URL: https://{ats_handle}.{wd_number}.myworkdayjobs.com/wday/cxs/{ats_handle}/{site}/jobs. A wrong shard = a silent dead board, so verify against the real careers URL."
+  },
+  {
+    "name": "ExampleIcimsCo",
+    "tier": 2,
+    "ats": "icims",
+    "ats_handle": "exampleicims",
+    "adapter_config": { "careers_url": "https://jobs-example.icims.com" },
+    "role_filter": null,
+    "domain": null,
+    "notes": "iCIMS adapter_config is optional — only set careers_url when the board is NOT at the default https://careers-{ats_handle}.icims.com."
   }
 ]

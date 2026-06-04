@@ -35,7 +35,20 @@ from job_assist.db.models import TargetCompany
 
 # Allowed TargetCompany fields the seed file may set. Anything else is
 # silently dropped so an over-eager JSON entry can't tamper with id/timestamps.
-_SEED_FIELDS = {"name", "tier", "ats", "ats_handle", "role_filter", "domain", "notes"}
+# feat/dm-employer-ingestion: ``adapter_config`` was MISSING here, so Workday
+# tenants (which require {wd_number, site}) and iCIMS non-default URLs were
+# silently dropped on seed — the reason curated Workday rows (Capital One,
+# John Hancock) sit at null handles and never crawl.
+_SEED_FIELDS = {
+    "name",
+    "tier",
+    "ats",
+    "ats_handle",
+    "adapter_config",
+    "role_filter",
+    "domain",
+    "notes",
+}
 
 
 def _project_row(row: dict[str, Any]) -> dict[str, Any]:
