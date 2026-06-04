@@ -2073,6 +2073,52 @@
         }
       }
     },
+    "/stats/ingest": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Get Stats Ingest",
+        "description": "Ingest health for the Stats panel (feat/ingest-visibility): daily\nSUM(postings_new) over the last ``days`` (1-30), per-source last run status,\nand success/fail totals \u2014 a read layer over the existing ``ingest_run``\naudit table so the operator can SEE whether ingestion is landing postings.\nPure SELECTs; no writes.",
+        "operationId": "get_stats_ingest_stats_ingest_get",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 14,
+              "title": "Days"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Stats Ingest Stats Ingest Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/cron-status": {
       "get": {
         "summary": "Cron Status",
@@ -2089,6 +2135,69 @@
                   },
                   "type": "object",
                   "title": "Response Cron Status Admin Cron Status Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/ingest/runs": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "List Ingest Runs",
+        "description": "Recent ``ingest_run`` rows, newest first (the audit-log view) \u2014 started/\nfinished, source, status, fetched/new/updated counts, and error_message.\nOptional ``?since=`` floor. Pure SELECT; no writes.",
+        "operationId": "list_ingest_runs_admin_ingest_runs_get",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Ingest Runs Admin Ingest Runs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
