@@ -1463,3 +1463,116 @@ async def test_postings_surfaces_similarity_score(db_session: Any) -> None:
     by_id = {it["id"]: it for it in resp.json()["items"]}
     assert by_id[a]["similarity_score"] == 10
     assert by_id[cc]["similarity_score"] is None  # un-embedded surfaces as null
+
+
+# ── triage export / list parity (fix/triage-export-state-lateral) ────────────
+
+
+def _export_job_titles(xlsx_bytes: bytes) -> list[str]:
+    """Return the raw_title column values from the export's 'Jobs' sheet.
+
+    Reads through the actual xlsx the endpoint produced — the bug lived in
+    the export's SQL row query, so the test must parse the export output,
+    not re-run a list query.
+    """
+    import io
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(xlsx_bytes), read_only=True)
+    jobs = wb["Jobs"]
+    rows = list(jobs.iter_rows(values_only=True))
+    if not rows:
+        return []
+    header = [str(c) if c is not None else "" for c in rows[0]]
+    # The Jobs sheet has a 'Role' column carrying the posting's raw_title.
+    role_idx = next((i for i, h in enumerate(header) if h.strip().lower() == "role"), None)
+    if role_idx is None:
+        # Fall back to scanning every cell so the test still asserts presence.
+        return [str(c) for row in rows[1:] for c in row if c is not None]
+    return [str(row[role_idx]) for row in rows[1:] if row[role_idx] is not None]
+
+
+@_NEEDS_DB
+async def test_triage_export_includes_unactioned_rows(db_session: Any) -> None:
+    """Regression: a ``state=triage`` export must return the un-actioned
+    postings, not 0.
+
+    The export's row query references the ``recent_pa`` state LATERAL via the
+    triage WHERE predicate. If that lateral isn't OUTER-joined onto the row
+    SELECT, it folds in as an implicit INNER lateral that drops every
+    un-actioned posting (the lateral yields no row when no action exists) —
+    exactly the rows ``triage`` (``pa_action_type IS NULL``) selects. The
+    export then came back empty while ``list_postings`` (which outer-joins)
+    returned the same rows. Exercise the EXPORT path specifically.
+    """
+    from job_assist.db.models import PostingAction
+
+    company = _company(name="ExportCo", tier=1)
+    db_session.add(company)
+    await db_session.flush()
+
+    # Two un-actioned (triage) postings + one acted-on (leaves triage).
+    triage_a = _posting(target_company_id=company.id, title="Triage Role A", fit_score=90)
+    triage_b = _posting(target_company_id=company.id, title="Triage Role B", fit_score=80)
+    actioned = _posting(target_company_id=company.id, title="Actioned Role", fit_score=70)
+    for jp in (triage_a, triage_b, actioned):
+        db_session.add(jp)
+        await db_session.flush()
+        db_session.add(_posting_source(job_posting_id=jp.id))
+    db_session.add(PostingAction(job_posting_id=actioned.id, action_type="interested"))
+    await db_session.commit()
+
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            # cap off so both same-company triage rows survive the per-company cap.
+            resp = await ac.get("/postings/export.xlsx?state=triage&per_company_cap=0")
+    finally:
+        await _drop_override()
+
+    assert resp.status_code == 200
+    titles = _export_job_titles(resp.content)
+    # The pre-fix bug returned ZERO rows here.
+    assert len(titles) == 2, f"expected 2 un-actioned triage rows, got {len(titles)}: {titles}"
+    # The Jobs sheet emits normalized_title (lowercased) — match accordingly.
+    joined = " ".join(titles).lower()
+    assert "triage role a" in joined
+    assert "triage role b" in joined
+    # The acted-on posting must NOT leak into the triage export.
+    assert "actioned role" not in joined
+
+
+@_NEEDS_DB
+async def test_actioned_state_export_still_filters(db_session: Any) -> None:
+    """Control for the triage fix: a non-triage state export (``interested``)
+    returns exactly the acted-on rows and excludes un-actioned ones — proving
+    the added outer-join didn't loosen the state filter into a pass-through.
+    """
+    from job_assist.db.models import PostingAction
+
+    company = _company(name="ActionedCo", tier=1)
+    db_session.add(company)
+    await db_session.flush()
+
+    triage_only = _posting(target_company_id=company.id, title="Untouched Role", fit_score=90)
+    interested = _posting(target_company_id=company.id, title="Interested Role", fit_score=80)
+    for jp in (triage_only, interested):
+        db_session.add(jp)
+        await db_session.flush()
+        db_session.add(_posting_source(job_posting_id=jp.id))
+    db_session.add(PostingAction(job_posting_id=interested.id, action_type="interested"))
+    await db_session.commit()
+
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp = await ac.get("/postings/export.xlsx?state=interested&per_company_cap=0")
+    finally:
+        await _drop_override()
+
+    assert resp.status_code == 200
+    titles = _export_job_titles(resp.content)
+    joined = " ".join(titles).lower()
+    assert "interested role" in joined
+    assert "untouched role" not in joined

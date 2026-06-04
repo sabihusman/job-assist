@@ -2349,6 +2349,17 @@ async def export_postings_xlsx(
         .order_by(*order_clauses)
         .limit(EXPORT_ROW_CAP)
     )
+    # The state-filter WHERE clauses (built by build_view_parts) reference the
+    # recent_pa LATERAL. list_postings OUTER-joins it onto its row query so an
+    # un-actioned posting survives with pa_action_type=NULL — exactly what the
+    # ``triage`` predicate (``pa_action_type IS NULL OR = 'reset'``) selects.
+    # Without this join, referencing recent_pa columns folds it in as an
+    # IMPLICIT INNER lateral, which drops every un-actioned posting before the
+    # predicate runs — so a ``state=triage`` export returned 0 rows even though
+    # the matched-before-cap count (which DOES outer-join) reported hundreds.
+    # Gate on needs_state_lateral so the no-state export keeps its trivial plan.
+    if parts.needs_state_lateral:
+        rows_stmt = rows_stmt.outerjoin(recent_pa, true())
     for clause in where_clauses:
         rows_stmt = rows_stmt.where(clause)
     if capped_ids is not None:
