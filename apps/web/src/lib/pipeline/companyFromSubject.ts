@@ -37,6 +37,37 @@ export function companyFromSubject(subject: string | null | undefined): string |
   return candidate ? cleanCompany(candidate) : null;
 }
 
+// Role tokens we recognise in a subject segment. Best-effort only — the data
+// check found the role recoverable from the subject ~23% of the time, so this
+// is allowed to return null often. The caller OMITs the role when null (never
+// promises it).
+const ROLE_KEYWORDS =
+  /\b(product manager|product management|product owner|program manager|project manager|engineer|engineering|analyst|designer|director|architect|scientist|developer|specialist|consultant|associate|lead|manager|pm)\b/i;
+
+// Skip segments that are apply-confirmation boilerplate (so we don't mistake
+// "Thank you for applying to …" for a role).
+const _BOILERPLATE =
+  /^(thank you|thanks|your application|application (received|to|for)|we('| ha)ve received|re:)/i;
+
+/**
+ * Best-effort role from an ATS subject. Splits on separators ("-", "|", ":",
+ * ",") and returns the first non-boilerplate, role-keyword-bearing segment
+ * (e.g. "Covr Financial Technologies - Jr. Product Manager" -> "Jr. Product
+ * Manager"). Returns null when no role is present so the UI omits it.
+ */
+export function roleFromSubject(subject: string | null | undefined): string | null {
+  if (!subject) return null;
+  const segments = subject
+    .split(/\s*[-–—|:,]\s*/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const seg of segments) {
+    if (seg.length > 60 || _BOILERPLATE.test(seg)) continue;
+    if (ROLE_KEYWORDS.test(seg)) return seg;
+  }
+  return null;
+}
+
 function cleanCompany(raw: string): string | null {
   let c = raw.trim();
 

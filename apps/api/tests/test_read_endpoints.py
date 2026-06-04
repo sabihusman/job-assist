@@ -1149,6 +1149,7 @@ def _outcome(
     subject: str = "x",
     from_domain: str = "example.com",
     email_thread_id: str | None = None,
+    raw_snippet: str | None = None,
 ) -> OutcomeEvent:
     return OutcomeEvent(
         job_posting_id=job_posting_id,
@@ -1162,6 +1163,7 @@ def _outcome(
         outcome_type=outcome_type,
         classifier_version="gemini-flash-lite-v1",
         classifier_confidence=0.9,
+        raw_snippet=raw_snippet,
     )
 
 
@@ -1249,6 +1251,7 @@ async def test_outcomes_response_shape(db_session: Any) -> None:
         "subject",
         "from_domain",
         "email_thread_id",
+        "raw_snippet",
     }
     assert sample["stage"] == "application_confirmation"
     assert sample["confidence"] == pytest.approx(0.9)
@@ -1272,6 +1275,7 @@ async def test_outcomes_carry_label_fields_for_linked_and_unlinked(db_session: A
                 outcome_type="application_confirmation",
                 subject="Thank you for applying to Solv Health",
                 from_domain="greenhouse.io",
+                raw_snippet="Thanks for applying to the Senior PM role at Solv Health…",
             ),
             _outcome(
                 received_at=base + timedelta(hours=1),
@@ -1298,10 +1302,13 @@ async def test_outcomes_carry_label_fields_for_linked_and_unlinked(db_session: A
 
     assert linked["company_name"] == "Solv Health"
     assert linked["from_domain"] == "greenhouse.io"
+    # feat/pipeline-detail: the ~200-char snippet flows through for the panel.
+    assert linked["raw_snippet"] == "Thanks for applying to the Senior PM role at Solv Health…"
     # Unlinked still carries subject + from_domain so the client can label it.
     assert unlinked["company_name"] is None
     assert unlinked["subject"] == "Thank you for applying to Uphold!"
     assert unlinked["from_domain"] == "ashbyhq.com"
+    assert unlinked["raw_snippet"] is None
 
 
 @_NEEDS_DB

@@ -1,19 +1,27 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 import { AppShell } from '@/components/chrome/AppShell';
 import { PipelineBoard } from '@/components/pipeline/PipelineBoard';
+import { PipelineDetailPanel } from '@/components/pipeline/PipelineDetailPanel';
 import { usePipelineData } from '@/lib/api/pipeline';
-import { PIPELINE_STAGES } from '@/lib/applied/stages';
+import { PIPELINE_STAGES, sanitizeColumnOrder } from '@/lib/applied/stages';
+import { useUiStore } from '@/lib/stores/ui';
 
 /**
- * Pipeline page (PR #32c). Two-request bucketing pattern: fetch all
- * applied postings + all outcomes in parallel via react-query, then
- * memo-derive the 8-column bucket structure client-side.
+ * Pipeline page. Outcome-driven kanban (feat/pipeline-outcome-cards): buckets
+ * are derived from the cached outcomes. feat/pipeline-detail: clicking a card
+ * opens the PipelineDetailPanel. feat/pipeline-reorder: column order is a
+ * persisted UI pref, sanitized on read so a stale value degrades gracefully.
  */
 export default function PipelinePage() {
   const { buckets, isLoading, isError, error, refetch } = usePipelineData();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const rawOrder = useUiStore((s) => s.pipelineColumnOrder);
+  const movePipelineColumn = useUiStore((s) => s.movePipelineColumn);
+  const order = useMemo(() => sanitizeColumnOrder(rawOrder), [rawOrder]);
 
   const allEmpty = useMemo(() => PIPELINE_STAGES.every((s) => buckets[s].length === 0), [buckets]);
 
@@ -26,7 +34,17 @@ export default function PipelinePage() {
       ) : allEmpty ? (
         <EmptyState />
       ) : (
-        <PipelineBoard buckets={buckets} />
+        <div className="flex">
+          <div className="min-w-0 flex-1">
+            <PipelineBoard
+              buckets={buckets}
+              order={order}
+              onSelect={setSelectedId}
+              onMove={movePipelineColumn}
+            />
+          </div>
+          <PipelineDetailPanel selectedId={selectedId} onClose={() => setSelectedId(null)} />
+        </div>
       )}
     </AppShell>
   );

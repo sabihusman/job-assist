@@ -3,6 +3,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+import { PIPELINE_STAGES, type PipelineStage, sanitizeColumnOrder } from '@/lib/applied/stages';
+
 /**
  * UI-shell state: things the chrome cares about but pages don't.
  *
@@ -25,6 +27,13 @@ type UiState = {
    */
   sidebarMobileOpen: boolean;
   paletteOpen: boolean;
+  /**
+   * Pipeline kanban column order (feat/pipeline-reorder). Persisted, like
+   * sidebarCollapsed — a personal visual preference, NOT a server-side ranking
+   * tunable. Always read through `sanitizeColumnOrder` so a stale value can't
+   * drop or double a column.
+   */
+  pipelineColumnOrder: PipelineStage[];
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
   openSidebarMobile: () => void;
@@ -33,6 +42,9 @@ type UiState = {
   openPalette: () => void;
   closePalette: () => void;
   setPaletteOpen: (open: boolean) => void;
+  /** Move a column one slot earlier ('up') or later ('down') in the order. */
+  movePipelineColumn: (stage: PipelineStage, dir: 'up' | 'down') => void;
+  resetPipelineColumnOrder: () => void;
 };
 
 export const useUiStore = create<UiState>()(
@@ -41,6 +53,7 @@ export const useUiStore = create<UiState>()(
       sidebarCollapsed: false,
       sidebarMobileOpen: false,
       paletteOpen: false,
+      pipelineColumnOrder: [...PIPELINE_STAGES],
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
       openSidebarMobile: () => set({ sidebarMobileOpen: true }),
@@ -49,14 +62,29 @@ export const useUiStore = create<UiState>()(
       openPalette: () => set({ paletteOpen: true }),
       closePalette: () => set({ paletteOpen: false }),
       setPaletteOpen: (open) => set({ paletteOpen: open }),
+      movePipelineColumn: (stage, dir) =>
+        set((s) => {
+          const order = sanitizeColumnOrder(s.pipelineColumnOrder);
+          const i = order.indexOf(stage);
+          if (i < 0) return {};
+          const j = dir === 'up' ? i - 1 : i + 1;
+          if (j < 0 || j >= order.length) return {};
+          const next = [...order];
+          [next[i], next[j]] = [next[j], next[i]];
+          return { pipelineColumnOrder: next };
+        }),
+      resetPipelineColumnOrder: () => set({ pipelineColumnOrder: [...PIPELINE_STAGES] }),
     }),
     {
       name: 'job-assist:ui',
-      // Persist only the desktop sidebar state; palette + mobile drawer are
-      // volatile. The mobile drawer should always rehydrate closed —
-      // persisting "drawer was open on the last visit" would create a
+      // Persist the desktop sidebar state + the Pipeline column order; palette +
+      // mobile drawer are volatile. The mobile drawer should always rehydrate
+      // closed — persisting "drawer was open on the last visit" would create a
       // confusing first paint.
-      partialize: (state) => ({ sidebarCollapsed: state.sidebarCollapsed }),
+      partialize: (state) => ({
+        sidebarCollapsed: state.sidebarCollapsed,
+        pipelineColumnOrder: state.pipelineColumnOrder,
+      }),
     },
   ),
 );

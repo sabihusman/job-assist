@@ -3,16 +3,31 @@ import { familyLabel } from '@/lib/triage/family-labels';
 import { cn } from '@/lib/utils';
 
 /**
- * Compact kanban card. Display-only — no click handler in v1 per
- * UI_SPEC.md port-time decision (see strip #8). Smaller padding and
- * typography than TriageCard.
+ * Compact kanban card. Clickable (feat/pipeline-detail) — selecting it opens
+ * the PipelineDetailPanel. Smaller padding and typography than TriageCard.
  */
-export function PipelineCard({ card }: { card: ApplicationCard }) {
+export function PipelineCard({ card, onSelect }: { card: ApplicationCard; onSelect?: () => void }) {
   const tier = card.tier;
+  const interactive = onSelect != null;
   return (
     <li
       data-card-id={card.id}
-      className="flex flex-col gap-1 rounded-md border border-border bg-card p-2.5 shadow-card"
+      {...(interactive && {
+        role: 'button',
+        tabIndex: 0,
+        onClick: onSelect,
+        onKeyDown: (e: React.KeyboardEvent) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onSelect();
+          }
+        },
+      })}
+      className={cn(
+        'flex flex-col gap-1 rounded-md border border-border bg-card p-2.5 shadow-card',
+        interactive &&
+          'cursor-pointer hover:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+      )}
     >
       {typeof tier === 'number' && <TierBadge tier={tier} />}
       <span className="truncate text-[13px] font-semibold">{card.companyName}</span>
