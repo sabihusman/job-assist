@@ -104,6 +104,50 @@ async def test_enforce_without_configured_token_fails_open(restore_auth_settings
     assert await _get(_GATED_PATH) == 200
 
 
+# ── /admin/auth-status diagnostic ─────────────────────────────────────────────
+
+
+async def _get_json(path: str, headers: dict[str, str] | None = None) -> tuple[int, dict]:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(path, headers=headers or {})
+    body = resp.json() if resp.status_code == 200 else {}
+    return resp.status_code, body
+
+
+async def test_auth_status_reports_configured_in_warn_mode(restore_auth_settings: None) -> None:
+    settings.api_auth_token = _TOKEN
+    settings.auth_enforce = False
+    # Reachable WITHOUT a token in warn mode; reports the token IS configured.
+    status, body = await _get_json("/admin/auth-status")
+    assert status == 200
+    assert body == {"token_configured": True, "enforce": False}
+
+
+async def test_auth_status_reports_unconfigured(restore_auth_settings: None) -> None:
+    settings.api_auth_token = ""
+    settings.auth_enforce = False
+    status, body = await _get_json("/admin/auth-status")
+    assert status == 200
+    assert body["token_configured"] is False
+
+
+async def test_auth_status_never_returns_the_token_value(restore_auth_settings: None) -> None:
+    settings.api_auth_token = _TOKEN
+    settings.auth_enforce = False
+    _status, body = await _get_json("/admin/auth-status")
+    # Bool-only contract — the secret must never appear in the payload.
+    assert _TOKEN not in str(body)
+    assert set(body.keys()) == {"token_configured", "enforce"}
+
+
+async def test_auth_status_is_gated_under_enforce(restore_auth_settings: None) -> None:
+    settings.api_auth_token = _TOKEN
+    settings.auth_enforce = True
+    # Not allowlisted — under enforce it needs the token like any other route.
+    assert await _get("/admin/auth-status") == 401
+    assert await _get("/admin/auth-status", _bearer(_TOKEN)) == 200
+
+
 # ── CORS preflight (OPTIONS) is never gated ───────────────────────────────────
 
 
