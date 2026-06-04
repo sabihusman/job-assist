@@ -41,6 +41,9 @@ jobs:
         id: cron-status
         env:
           API_URL: ${{ secrets.API_URL }}
+          # feat/api-auth: /admin/cron-status is a gated route — forward the
+          # bearer token. Empty until provisioned — harmless in warn mode.
+          API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
         run: |
           YESTERDAY=$(date -u -d "yesterday" +%Y-%m-%d 2>/dev/null || date -u -v-1d +%Y-%m-%d)
           echo "date=$YESTERDAY" >> "$GITHUB_OUTPUT"
@@ -54,7 +57,7 @@ jobs:
 
           # This endpoint is built in Week 1-2. Until then, HTTP 404 is expected
           # and treated as "endpoint not yet built" — not a failure.
-          RESPONSE=$(curl -s -w "\n%{http_code}" "${API_URL}/admin/cron-status?date=${YESTERDAY}" || echo -e "\n000")
+          RESPONSE=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer ${API_AUTH_TOKEN}" "${API_URL}/admin/cron-status?date=${YESTERDAY}" || echo -e "\n000")
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           BODY=$(echo "$RESPONSE" | head -n -1)
 

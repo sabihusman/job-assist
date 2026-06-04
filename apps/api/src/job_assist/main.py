@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 import uuid
@@ -11,10 +12,12 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 
 import structlog
-from fastapi import Depends, FastAPI, HTTPException, Query, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import Text, and_, cast, true
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.middleware.base import RequestResponseEndpoint
 
 from job_assist.config import settings
 from job_assist.db.session import get_db
@@ -84,6 +87,70 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Auth gate (feat/api-auth) ───────────────────────────────────────────────
+# A single shared bearer token gates EVERY route except /health. The app is
+# single-operator; this closes the world-readable exposure of PII + history +
+# mutating /admin/* endpoints. The frontend sends the token via a Next.js
+# server-side proxy (never the browser); the GitHub Actions crons send it via
+# the API_AUTH_TOKEN secret.
+#
+# Rollout safety: defaults to WARN-ONLY (``AUTH_ENFORCE`` unset/false) — it
+# LOGS missing/invalid tokens but lets requests through, so every client can be
+# wired to send the token before enforcement. Flip ``AUTH_ENFORCE=true`` only
+# after the warn-logs confirm all clients authenticate.
+
+# Only /health stays open: Railway's healthcheck, the startup schema guard, and
+# the crons' pre-check curl it. Everything else — including /openapi.json,
+# /docs, /redoc, and / — is gated (the frontend ships a committed openapi
+# snapshot, so it needs no runtime access to the live schema).
+_AUTH_ALLOWLIST = frozenset({"/health"})
+
+
+def _extract_bearer(authorization: str) -> str:
+    """Return the token from an ``Authorization: Bearer <token>`` header, or ''."""
+    prefix = "bearer "
+    if authorization[: len(prefix)].lower() == prefix:
+        return authorization[len(prefix) :].strip()
+    return ""
+
+
+@app.middleware("http")
+async def auth_guard(request: Request, call_next: RequestResponseEndpoint) -> Response:
+    """Gate every route except /health behind the shared bearer token.
+
+    WARN mode (default): log missing/invalid, allow through. ENFORCE mode
+    (``auth_enforce``): 401 on missing/invalid. If the token is UNCONFIGURED
+    (empty env var), fail OPEN with a critical log rather than brick the app —
+    the rollout provisions the token before flipping enforce.
+    """
+    path = request.url.path
+    # CORS preflight carries no Authorization header — let the CORS middleware
+    # answer OPTIONS. /health is the one always-open route.
+    if request.method == "OPTIONS" or path in _AUTH_ALLOWLIST:
+        return await call_next(request)
+
+    expected = settings.api_auth_token
+    provided = _extract_bearer(request.headers.get("authorization", ""))
+    valid = bool(expected) and hmac.compare_digest(provided, expected)
+
+    if not valid:
+        if not expected:
+            # Misconfiguration: enforce requested but no token set. Fail OPEN
+            # (loud) so a bad deploy can't silently brick every client.
+            logger.critical("auth.unconfigured", method=request.method, path=path)
+        else:
+            logger.warning(
+                "auth.missing_or_invalid",
+                method=request.method,
+                path=path,
+                enforce=settings.auth_enforce,
+            )
+        if settings.auth_enforce and expected:
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+
+    return await call_next(request)
+
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 

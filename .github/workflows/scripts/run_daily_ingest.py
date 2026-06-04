@@ -32,6 +32,12 @@ def main() -> int:
         print("FATAL: API_URL env var is unset", file=sys.stderr)
         return 2
 
+    # feat/api-auth: per-board /admin/ingest/{ats}/{handle} is a gated route, so
+    # forward the bearer token. Empty until the secret is provisioned — harmless
+    # in the API's warn-only mode (the header is just "Bearer ").
+    auth_token = os.environ.get("API_AUTH_TOKEN", "")
+    auth_args = ["-H", f"Authorization: Bearer {auth_token}"]
+
     try:
         plan: list[dict[str, str]] = json.load(sys.stdin)
     except json.JSONDecodeError as exc:
@@ -62,6 +68,7 @@ def main() -> int:
                     str(INGEST_TIMEOUT_S),
                     "-X",
                     "POST",
+                    *auth_args,
                     url,
                 ],
                 capture_output=True,
