@@ -107,6 +107,30 @@ export function FilterRow({
             })
           }
         />
+        {/* feat/pm-po-only-filter: default-on PM/PO gate. Reversible (NOT a
+            hard exclude) because the role_family classifier is unreliable —
+            the operator toggles OFF to audit what it's hiding. Explicit
+            FAMILY chips override it. */}
+        <div className="flex shrink-0 snap-start items-center gap-2 md:flex-wrap">
+          <span className="font-mono text-xs uppercase tracking-wide text-muted-foreground">
+            ROLE
+          </span>
+          <button
+            type="button"
+            onClick={() => pushFilters({ ...filters, pm_only: !filters.pm_only })}
+            data-selected={filters.pm_only}
+            aria-pressed={filters.pm_only}
+            title="Show only Product Management + Product Owner roles. Toggle off to see every family."
+            className={cn(
+              'shrink-0 rounded px-2 py-0.5 text-sm ring-1 ring-inset transition-colors',
+              filters.pm_only
+                ? 'bg-accent text-foreground ring-border-strong'
+                : 'bg-surface text-muted-foreground ring-border hover:text-foreground',
+            )}
+          >
+            PM/PO only
+          </button>
+        </div>
       </div>
 
       {/* PR #49: SortDropdown is right-aligned alongside the count label.

@@ -79,6 +79,10 @@ function TriagePageInner() {
   const appliedQuery = useTriagePostings({
     ...filters,
     state: ['applied'],
+    // feat/pm-po-only-filter: the applied count is a historical fact, not a
+    // triage view — don't let the PM/PO-only default narrow it (preserves
+    // the pre-gate behavior of this subtitle count).
+    pm_only: false,
     limit: 1,
     offset: 0,
   });

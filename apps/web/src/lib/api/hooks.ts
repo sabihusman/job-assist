@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { api } from '@/lib/api/client';
 import { MutationError, extractDetail } from '@/lib/api/mutation-error';
+import { resolveRoleFamilies } from '@/lib/triage/filters';
 import type {
   ActionReason,
   ActionType,
@@ -53,7 +54,11 @@ function toQuery(filters: TriageFilters): Record<string, unknown> {
   if (filters.tier.length) q.tier = filters.tier;
   if (filters.ats.length) q.ats = filters.ats;
   if (filters.remote_type.length) q.remote_type = filters.remote_type;
-  if (filters.role_family.length) q.role_family = filters.role_family;
+  // feat/pm-po-only-filter: resolve the PM/PO-only default into the
+  // role_family the backend filters on (explicit chips override). pm_only
+  // itself is a frontend concept — never sent as a raw param.
+  const families = resolveRoleFamilies(filters);
+  if (families.length) q.role_family = families;
   if (filters.state.length) q.state = filters.state;
   if (filters.include_snoozed_past_only) q.include_snoozed_past_only = true;
   if (filters.target_company_id) q.target_company_id = filters.target_company_id;

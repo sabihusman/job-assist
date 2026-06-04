@@ -23,15 +23,36 @@ describe('ExportButton', () => {
     render(<ExportButton />);
     const a = screen.getByTestId('triage-export-button') as HTMLAnchorElement;
     expect(a.tagName).toBe('A');
-    expect(a.getAttribute('href')).toBe('http://api.test/postings/export.xlsx');
+    // feat/pm-po-only-filter: bare params → PM/PO-only default is applied so
+    // the export == the gated list view.
+    expect(a.getAttribute('href')).toBe(
+      'http://api.test/postings/export.xlsx?role_family=product_management&role_family=product_owner',
+    );
   });
 
-  test('forwards the current search params verbatim', () => {
+  test('forwards the current search params + applies the PM/PO-only default', () => {
     setParams('tier=1&tier=2&sort=best_fit&state=triage');
     render(<ExportButton />);
     const a = screen.getByTestId('triage-export-button') as HTMLAnchorElement;
     expect(a.getAttribute('href')).toBe(
-      'http://api.test/postings/export.xlsx?tier=1&tier=2&sort=best_fit&state=triage',
+      'http://api.test/postings/export.xlsx?tier=1&tier=2&sort=best_fit&state=triage&role_family=product_management&role_family=product_owner',
+    );
+  });
+
+  test('pm_only=false (gate off) exports all families — no role_family injected', () => {
+    setParams('pm_only=false&state=triage');
+    render(<ExportButton />);
+    const a = screen.getByTestId('triage-export-button') as HTMLAnchorElement;
+    // pm_only is a frontend concept — it is dropped, and nothing is injected.
+    expect(a.getAttribute('href')).toBe('http://api.test/postings/export.xlsx?state=triage');
+  });
+
+  test('explicit role_family overrides the default — left untouched', () => {
+    setParams('role_family=product_marketing&state=triage');
+    render(<ExportButton />);
+    const a = screen.getByTestId('triage-export-button') as HTMLAnchorElement;
+    expect(a.getAttribute('href')).toBe(
+      'http://api.test/postings/export.xlsx?role_family=product_marketing&state=triage',
     );
   });
 

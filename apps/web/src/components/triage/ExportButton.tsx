@@ -3,6 +3,7 @@
 import { useSearchParams } from 'next/navigation';
 
 import { API_BASE_URL } from '@/lib/api/client';
+import { PM_PO_FAMILIES } from '@/lib/triage/filters';
 
 /**
  * "Export view (top 40)" button on the Triage page (feat/triage-export-xlsx).
@@ -16,7 +17,17 @@ import { API_BASE_URL } from '@/lib/api/client';
  */
 export function ExportButton() {
   const searchParams = useSearchParams();
-  const query = searchParams.toString();
+  // feat/pm-po-only-filter: mirror the list view's PM/PO-only default so the
+  // export == what's shown. The list resolves pm_only into role_family in
+  // hooks.ts; here we do the same on the raw params (this button forwards the
+  // URL verbatim). pm_only is a frontend concept — translate then drop it.
+  const params = new URLSearchParams(searchParams.toString());
+  const pmOnly = params.get('pm_only') !== 'false';
+  if (pmOnly && !params.has('role_family')) {
+    for (const fam of PM_PO_FAMILIES) params.append('role_family', fam);
+  }
+  params.delete('pm_only');
+  const query = params.toString();
   const href = `${API_BASE_URL}/postings/export.xlsx${query ? `?${query}` : ''}`;
   return (
     <a
