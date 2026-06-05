@@ -48,6 +48,7 @@ class HardRuleConfig:
             "Des Moines",
             "NYC",
             "New York",
+            "Boston",
             "Austin",
             "San Francisco",
             "Bay Area",
