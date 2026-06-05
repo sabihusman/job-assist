@@ -29,7 +29,12 @@ from job_assist.schemas.embeddings import (
 )
 from job_assist.schemas.operator_profile import OperatorProfileUpdate
 from job_assist.schemas.outreach import OutreachMessageCreate
-from job_assist.schemas.public import DEFAULT_SORT, PostingStateRequest, SortKey
+from job_assist.schemas.public import (
+    DEFAULT_SORT,
+    ApplicationStatusUpdate,
+    PostingStateRequest,
+    SortKey,
+)
 from job_assist.schemas.reclassify import ReclassifySweepRequest, ReclassifySweepResponse
 from job_assist.schemas.resume_version import ResumeVersionCreate
 from job_assist.schemas.score import ScoreSweepRequest, ScoreSweepResponse
@@ -2082,19 +2087,28 @@ def _state_block(
     reason: Any,
     snooze_until: Any,
     created_at: Any,
+    resolved_status: Any = None,
+    gmail_rejection: Any = None,
 ) -> dict[str, Any]:
     """Serialise the LATERAL state row (or NULLs) into a StateEmbedded dict.
 
-    All four columns are NULL together when no posting_action row exists
-    for the posting. We surface that as ``current=None`` (still in
+    The first four columns are NULL together when no posting_action row
+    exists for the posting. We surface that as ``current=None`` (still in
     triage) rather than omitting the field, so the frontend can rely on
     the key always being present.
+
+    ``resolved_status`` (feat/manual-application-status) is the computed
+    lifecycle status driving the Applied / Rejected tabs; ``gmail_rejection``
+    is an informational flag (a company-level Gmail rejection exists) that
+    the UI shows as a hint but never acts on.
     """
     return {
         "current": _enum_value(action_type),
         "reason": _enum_value(reason),
         "snooze_until": snooze_until.isoformat() if snooze_until else None,
         "current_at": created_at.isoformat() if created_at else None,
+        "resolved_status": resolved_status if resolved_status else None,
+        "gmail_rejection_hint": bool(gmail_rejection),
     }
 
 
@@ -2153,7 +2167,12 @@ async def list_postings(
     from sqlalchemy.orm import aliased
 
     from job_assist.db.models import JobPosting, PostingAction, PostingSource, TargetCompany
-    from job_assist.services.postings_query import PostingsViewSpec, build_view_parts
+    from job_assist.services.postings_query import (
+        PostingsViewSpec,
+        build_view_parts,
+        gmail_rejection_exists,
+        resolved_status_expr,
+    )
     from job_assist.services.scoring import display_tier
 
     if limit < 1 or limit > 100:
@@ -2237,6 +2256,10 @@ async def list_postings(
             recent_pa.c.pa_reason,
             recent_pa.c.pa_snooze_until,
             recent_pa.c.pa_created_at,
+            # feat/manual-application-status: resolved lifecycle status +
+            # informational Gmail-rejection flag for the row's StateEmbedded.
+            resolved_status_expr(recent_pa).label("resolved_status"),
+            gmail_rejection_exists().label("gmail_rejection"),
         )
         .select_from(base_join)
         .outerjoin(recent_ps, true())
@@ -2262,6 +2285,8 @@ async def list_postings(
         pa_reason,
         pa_snooze_until,
         pa_created_at,
+        resolved_status,
+        gmail_rejection,
     ) in rows:
         salary_block: dict[str, Any] | None = None
         if any(x is not None for x in (jp.salary_min, jp.salary_max, jp.salary_currency)):
@@ -2308,7 +2333,14 @@ async def list_postings(
                 # corpus is recalibrated). Surfaced so the UI can show it
                 # alongside fit_score for the best_fit_semantic sort.
                 "similarity_score": jp.similarity_score,
-                "state": _state_block(pa_action_type, pa_reason, pa_snooze_until, pa_created_at),
+                "state": _state_block(
+                    pa_action_type,
+                    pa_reason,
+                    pa_snooze_until,
+                    pa_created_at,
+                    resolved_status,
+                    gmail_rejection,
+                ),
             }
         )
 
@@ -2503,6 +2535,7 @@ async def get_posting(
         TargetCompany,
     )
     from job_assist.services.posting_actions import latest_action_lateral
+    from job_assist.services.postings_query import gmail_rejection_exists, resolved_status_expr
     from job_assist.services.scoring import display_tier
 
     ps_alias = aliased(PostingSource)
@@ -2526,6 +2559,8 @@ async def get_posting(
             recent_pa.c.pa_reason,
             recent_pa.c.pa_snooze_until,
             recent_pa.c.pa_created_at,
+            resolved_status_expr(recent_pa).label("resolved_status"),
+            gmail_rejection_exists().label("gmail_rejection"),
         )
         .select_from(JobPosting.__table__)
         .outerjoin(
@@ -2559,6 +2594,8 @@ async def get_posting(
         pa_reason,
         pa_snooze_until,
         pa_created_at,
+        resolved_status,
+        gmail_rejection,
     ) = row
 
     # Full append-only audit trail, chronological ASC. Separate query so
@@ -2646,7 +2683,14 @@ async def get_posting(
         "score": jp.fit_score,
         # Slice 2b: calibrated semantic similarity (NULL until recalibrated).
         "similarity_score": jp.similarity_score,
-        "state": _state_block(pa_action_type, pa_reason, pa_snooze_until, pa_created_at),
+        "state": _state_block(
+            pa_action_type,
+            pa_reason,
+            pa_snooze_until,
+            pa_created_at,
+            resolved_status,
+            gmail_rejection,
+        ),
         "description_markdown": jp.jd_text or None,
         "jd_summary_markdown": jp.jd_summary_markdown,
         "division": division_block,
@@ -2697,6 +2741,69 @@ async def post_posting_state(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return _state_block(row.action_type, row.reason, row.snooze_until, row.created_at)
+
+
+# ── Manual application status (feat/manual-application-status Phase 1) ────────
+# Revives the dormant application_state table: one row per posting holding the
+# operator's manual lifecycle stage (applied → interview → offer →
+# accepted/rejected). UPSERT by job_posting_id, mirroring the resume upsert.
+# Drives the Applied / Rejected tabs via resolved_status (postings_query.py):
+# marking accepted/rejected drops the card out of Applied; rejected lands it in
+# Rejected. Authoritative over the Gmail signal (which stays an informational
+# hint). Phase 2 (the 14-day applied badge) will read applied_at.
+
+
+@app.put("/postings/{posting_id}/status", tags=["public"])
+async def put_application_status(
+    posting_id: uuid.UUID,
+    payload: ApplicationStatusUpdate,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Set the operator's manual lifecycle status for a posting.
+
+    UPSERT on ``application_state`` by ``job_posting_id`` (SELECT-or-create,
+    same shape as the resume upsert). ``applied_at`` is stamped the FIRST time
+    any status is recorded — every lifecycle stage implies an application was
+    submitted — and never overwritten thereafter, so it anchors Phase 2's
+    14-day badge. ``updated_at`` auto-bumps via the column's ``onupdate``.
+
+    Error mapping:
+      - status outside the five lifecycle stages → 422 (Pydantic; DB CHECK is
+        the backstop)
+      - unknown ``posting_id``                   → 404
+    """
+    from sqlalchemy import select
+    from sqlalchemy.sql import func as sa_func
+
+    from job_assist.db.models import ApplicationState, JobPosting
+
+    posting = (
+        await db.execute(select(JobPosting.id).where(JobPosting.id == posting_id))
+    ).scalar_one_or_none()
+    if posting is None:
+        raise HTTPException(status_code=404, detail=f"posting {posting_id} not found")
+
+    row = (
+        await db.execute(
+            select(ApplicationState).where(ApplicationState.job_posting_id == posting_id)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = ApplicationState(job_posting_id=posting_id)
+        db.add(row)
+
+    row.status = payload.status
+    if row.applied_at is None:
+        row.applied_at = sa_func.now()
+
+    await db.commit()
+    await db.refresh(row)
+    return {
+        "job_posting_id": str(row.job_posting_id),
+        "status": row.status,
+        "applied_at": row.applied_at.isoformat() if row.applied_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
 
 
 # ── Application resume (feat/application-resume Phase 1) ──────────────────────

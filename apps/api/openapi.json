@@ -1800,6 +1800,62 @@
         }
       }
     },
+    "/postings/{posting_id}/status": {
+      "put": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Put Application Status",
+        "description": "Set the operator's manual lifecycle status for a posting.\n\nUPSERT on ``application_state`` by ``job_posting_id`` (SELECT-or-create,\nsame shape as the resume upsert). ``applied_at`` is stamped the FIRST time\nany status is recorded \u2014 every lifecycle stage implies an application was\nsubmitted \u2014 and never overwritten thereafter, so it anchors Phase 2's\n14-day badge. ``updated_at`` auto-bumps via the column's ``onupdate``.\n\nError mapping:\n  - status outside the five lifecycle stages \u2192 422 (Pydantic; DB CHECK is\n    the backstop)\n  - unknown ``posting_id``                   \u2192 404",
+        "operationId": "put_application_status_postings__posting_id__status_put",
+        "parameters": [
+          {
+            "name": "posting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Posting Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplicationStatusUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Put Application Status Postings  Posting Id  Status Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/postings/{posting_id}/resume": {
       "post": {
         "tags": [
@@ -3058,6 +3114,27 @@
         ],
         "title": "ActionType",
         "description": "Operator's action on a job posting (PR #31).\n\nStored as plain TEXT in posting_action.action_type (CHECK-constrained),\nnot a PG enum \u2014 keeps the vocabulary evolvable without schema migrations."
+      },
+      "ApplicationStatusUpdate": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "applied",
+              "interview",
+              "offer",
+              "accepted",
+              "rejected"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "ApplicationStatusUpdate",
+        "description": "Body for ``PUT /postings/{id}/status`` (feat/manual-application-status).\n\nThe manual lifecycle stage. Pydantic rejects any value outside the five\nlifecycle stages at the boundary with a 422; the DB CHECK constraint\n(ck_application_state_status) is the backstop."
       },
       "ContactCreate": {
         "properties": {

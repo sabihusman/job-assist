@@ -99,11 +99,25 @@ export type SourceEmbedded = {
   url: string | null;
 };
 
+// feat/manual-application-status: the manual lifecycle stage. Mirrors
+// APPLICATION_STATUS_VALUES on the Python ORM model + the ResolvedStatus
+// Literal in apps/api/schemas/public.py. The Python side is canonical.
+export type ResolvedStatus = 'applied' | 'interview' | 'offer' | 'accepted' | 'rejected';
+
 export type StateEmbedded = {
   current: ActionType | null;
   reason: ActionReason | null;
   snooze_until: string | null;
   current_at: string | null;
+  // feat/manual-application-status: COALESCE(manual application_state.status,
+  // computed company-level state). Drives the Applied / Rejected tabs. null
+  // when the posting is neither manually statused nor in the applied/rejected
+  // funnel. Optional in the type (always sent by the API, like
+  // similarity_score) so existing inline fixtures stay valid.
+  resolved_status?: ResolvedStatus | null;
+  // Informational only — a company-level Gmail rejection exists. The UI shows
+  // it as a hint; it does NOT move the card (the manual status is authoritative).
+  gmail_rejection_hint?: boolean;
 };
 
 // ── List + detail items ──────────────────────────────────────────────────
