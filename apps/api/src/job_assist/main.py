@@ -387,6 +387,31 @@ async def trigger_ingest(
     }
 
 
+@app.post("/admin/ingest/fantastic", tags=["admin"])
+async def trigger_fantastic_ingest(db: DbSession) -> dict[str, Any]:
+    """Ingest the curated Workday/iCIMS employers via the Fantastic.jobs Apify
+    actor (feat/fantastic-jobs-ingest).
+
+    Those boards block Railway's datacenter egress IP, so the free Workday/iCIMS
+    adapters fetch 0 — Apify's infra crawls them instead. The PM/PO title filter
+    is applied at the API call (a few jobs/employer = pennies/day). Scoped to
+    curated workday/icims rows ONLY; greenhouse/lever/ashby stay on the free
+    adapters. Each employer is its own ingest_run; returns per-employer counts.
+
+    503 when ``APIFY_API_TOKEN`` is unset (server-side only — Railway env +
+    GitHub secret; never client-exposed).
+    """
+    from job_assist.services.fantastic_ingest import ingest_curated_via_fantastic
+
+    token = settings.apify_api_token
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail="APIFY_API_TOKEN is not configured (server-side Apify credential).",
+        )
+    return await ingest_curated_via_fantastic(db, token)
+
+
 @app.post("/admin/postings/mark-stale", tags=["admin"])
 async def mark_stale_postings_endpoint(
     db: DbSession,

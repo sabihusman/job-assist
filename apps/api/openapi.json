@@ -152,6 +152,30 @@
         }
       }
     },
+    "/admin/ingest/fantastic": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Trigger Fantastic Ingest",
+        "description": "Ingest the curated Workday/iCIMS employers via the Fantastic.jobs Apify\nactor (feat/fantastic-jobs-ingest).\n\nThose boards block Railway's datacenter egress IP, so the free Workday/iCIMS\nadapters fetch 0 \u2014 Apify's infra crawls them instead. The PM/PO title filter\nis applied at the API call (a few jobs/employer = pennies/day). Scoped to\ncurated workday/icims rows ONLY; greenhouse/lever/ashby stay on the free\nadapters. Each employer is its own ingest_run; returns per-employer counts.\n\n503 when ``APIFY_API_TOKEN`` is unset (server-side only \u2014 Railway env +\nGitHub secret; never client-exposed).",
+        "operationId": "trigger_fantastic_ingest_admin_ingest_fantastic_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Trigger Fantastic Ingest Admin Ingest Fantastic Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/postings/mark-stale": {
       "post": {
         "tags": [

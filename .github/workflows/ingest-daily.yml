@@ -60,6 +60,19 @@ jobs:
           echo "Plan size: ${{ steps.plan.outputs.count }} companies"
           python3 .github/workflows/scripts/run_daily_ingest.py < /tmp/ingest_plan.json
 
+      # feat/fantastic-jobs-ingest: the curated Workday/iCIMS employers block
+      # Railway's egress IP (the free adapters fetch 0), so source them via the
+      # Fantastic.jobs Apify actor instead — PM/PO-title-filtered at the API,
+      # ~pennies/day. The server uses its own APIFY_API_TOKEN (Railway env); this
+      # call only needs the standard bearer auth. Runs BEFORE mark-stale so the
+      # Apify-sourced postings get last_seen_at refreshed first.
+      - name: Ingest curated Workday/iCIMS via Fantastic.jobs (Apify)
+        run: |
+          resp=$(curl -fsS --max-time 300 -X POST \
+            -H "Authorization: Bearer $API_AUTH_TOKEN" \
+            "$API_URL/admin/ingest/fantastic")
+          echo "$resp" | python3 -m json.tool
+
       # Mark postings stale AFTER the board loop, so every still-live posting
       # has had its last_seen_at refreshed this run first. Postings not seen
       # in 7+ days get closed_at set and drop out of the default Triage view
