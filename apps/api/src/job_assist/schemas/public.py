@@ -230,6 +230,11 @@ class CompanyListItem(BaseModel):
     ats_set: list[str]
     active_postings: int
     total_postings: int
+    # feat/manual-source-flag: True when this company's ATS (Workday/iCIMS)
+    # blocks automated ingest from the deployment's egress IP — a hand-search
+    # channel. The endpoint also returns ats/ats_handle/notes/source (see
+    # main.py.list_companies); this schema is documentation-only.
+    manual_source: bool = False
 
 
 class OutcomeListItem(BaseModel):

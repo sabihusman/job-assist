@@ -215,6 +215,15 @@ async def auth_status() -> dict[str, bool]:
 # strip-philosophy "no base-class refactor" rule.
 _INGESTABLE_ATS = ("greenhouse", "lever", "ashby", "workday", "icims")
 
+# feat/manual-source-flag: ATSes whose boards block Railway's datacenter egress
+# IP (Workday CXS + iCIMS return 0 to automated ingest while serving full
+# results to a browser/residential IP — verified, see fix/datacenter-egress-
+# headers). These employers are a HAND-SEARCH channel: the Companies tab marks
+# them "check the board directly" instead of letting them read as a silent
+# fetched=0 / broken row. Derived (not a column) — the block is per-ATS, not
+# per-company, so it can't drift.
+_MANUAL_SOURCE_ATS = frozenset({"workday", "icims"})
+
 
 @app.get("/admin/ingest/plan")
 async def get_ingest_plan(db: DbSession) -> list[dict[str, str]]:
@@ -3144,6 +3153,7 @@ async def list_companies(
 
     items: list[dict[str, Any]] = []
     for tc, total_count, active_count, ats_arr, applied_count, last_applied in rows:
+        ats_value = tc.ats.value if tc.ats is not None and hasattr(tc.ats, "value") else tc.ats
         items.append(
             {
                 "id": str(tc.id),
@@ -3154,6 +3164,10 @@ async def list_companies(
                 "ats_set": sorted(str(x) for x in (ats_arr or []) if x),
                 "active_postings": int(active_count or 0),
                 "total_postings": int(total_count or 0),
+                # feat/manual-source-flag: True when this company's ATS blocks
+                # automated ingest from Railway (Workday/iCIMS). The Companies
+                # tab shows a "check directly" badge instead of a silent 0.
+                "manual_source": ats_value in _MANUAL_SOURCE_ATS,
                 # PR #71: surface fields needed for the Companies page
                 # paused-state badge. ``ats_handle`` is NULL when the
                 # operator has soft-paused a company (PR #65 Atlassian
@@ -3164,9 +3178,7 @@ async def list_companies(
                 # but the test helper instantiates TargetCompany with a
                 # plain string and SQLAlchemy doesn't always coerce
                 # pre-commit. Handle both shapes.
-                "ats": (
-                    tc.ats.value if tc.ats is not None and hasattr(tc.ats, "value") else tc.ats
-                ),
+                "ats": ats_value,
                 "ats_handle": tc.ats_handle,
                 "notes": tc.notes,
                 # feat/applied-company-tracking: provenance + application activity.

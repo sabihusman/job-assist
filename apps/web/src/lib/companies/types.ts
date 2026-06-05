@@ -32,6 +32,10 @@ export type CompanyListItem = {
   source?: 'curated' | 'broad' | 'applied' | string;
   application_count?: number;
   last_applied_at?: string | null;
+  // feat/manual-source-flag: True when this company's ATS (Workday/iCIMS)
+  // blocks automated ingest from the deployment's egress IP — a hand-search
+  // channel. Optional so older payloads still typecheck.
+  manual_source?: boolean;
 };
 
 export type CompaniesListResponse = {

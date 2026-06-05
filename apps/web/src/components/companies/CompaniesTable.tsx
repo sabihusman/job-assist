@@ -87,11 +87,19 @@ export function CompaniesTable({
             <Td>
               <div className="flex flex-wrap items-center gap-1">
                 {c.ats_set.length === 0 ? (
-                  <span className="text-muted-foreground">—</span>
+                  // feat/manual-source-flag: a manual-source company (Workday/
+                  // iCIMS) legitimately has no surfaced postings — show its
+                  // configured ATS so the row isn't a bare em-dash.
+                  c.manual_source && c.ats ? (
+                    <AtsBadge ats={c.ats} />
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )
                 ) : (
                   c.ats_set.map((ats) => <AtsBadge key={ats} ats={ats} />)
                 )}
                 {isPaused(c) && <PausedBadge title={c.notes ?? 'Paused'} />}
+                {c.manual_source && <ManualSourceBadge />}
               </div>
             </Td>
             <Td align="right" mono>
@@ -197,6 +205,23 @@ function AppliedBadge() {
       className="inline-flex rounded bg-positive/15 px-1.5 py-0 font-mono text-[10px] font-medium uppercase tracking-wide text-positive ring-1 ring-inset ring-positive/30"
     >
       Applied
+    </span>
+  );
+}
+
+function ManualSourceBadge() {
+  // feat/manual-source-flag: Workday/iCIMS boards block automated ingest from
+  // the deployment's egress IP (return 0 to the crawler while live to a
+  // browser). Flag the row as a hand-search channel so a legitimate 0 doesn't
+  // read as broken. aria-label (not just title) so it's not hover-only.
+  const label = 'Check the board directly — blocks automated ingest';
+  return (
+    <span
+      title={label}
+      aria-label={label}
+      className="inline-flex rounded bg-pending/15 px-1.5 py-0 font-mono text-[10px] font-medium uppercase tracking-wide text-pending ring-1 ring-inset ring-pending/30"
+    >
+      Manual
     </span>
   );
 }

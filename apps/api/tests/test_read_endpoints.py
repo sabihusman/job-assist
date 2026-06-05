@@ -286,6 +286,34 @@ async def test_postings_offset_pagination(db_session: Any) -> None:
 
 
 @_NEEDS_DB
+async def test_companies_manual_source_flag(db_session: Any) -> None:
+    """feat/manual-source-flag: Workday/iCIMS companies are flagged
+    ``manual_source`` (their boards block automated ingest from the
+    deployment IP); greenhouse/lever/ashby are not."""
+    db_session.add_all(
+        [
+            _company(name="WorkdayCo", ats="workday"),
+            _company(name="IcimsCo", ats="icims"),
+            _company(name="GreenhouseCo", ats="greenhouse"),
+        ]
+    )
+    await db_session.commit()
+
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp = await ac.get("/companies?limit=100")
+    finally:
+        await _drop_override()
+
+    assert resp.status_code == 200
+    flags = {item["name"]: item["manual_source"] for item in resp.json()["items"]}
+    assert flags["WorkdayCo"] is True
+    assert flags["IcimsCo"] is True
+    assert flags["GreenhouseCo"] is False
+
+
+@_NEEDS_DB
 async def test_postings_filter_by_tier(db_session: Any) -> None:
     c1 = _company(name="T1Co", tier=1)
     c2 = _company(name="T3Co", tier=3)

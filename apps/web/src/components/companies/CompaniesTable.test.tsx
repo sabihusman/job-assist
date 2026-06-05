@@ -74,6 +74,34 @@ describe('CompaniesTable', () => {
     expect(screen.getByText('3')).toBeInTheDocument();
   });
 
+  test('manual-source company shows a "Manual" hand-search badge + its ATS', () => {
+    const manual: CompanyListItem = {
+      id: 'c-9',
+      name: 'Athene',
+      domain: null,
+      description: null,
+      tier: 2,
+      ats_set: [], // blocked board surfaces 0 postings
+      active_postings: 0,
+      total_postings: 0,
+      ats: 'workday',
+      ats_handle: 'athene',
+      notes: null,
+      manual_source: true,
+    };
+    render(<CompaniesTable companies={[manual]} />);
+    const badge = screen.getByText('Manual');
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveAttribute('aria-label', expect.stringMatching(/blocks automated ingest/i));
+    // The configured ATS still shows even though ats_set is empty.
+    expect(screen.getByText('workday')).toBeInTheDocument();
+  });
+
+  test('non-manual company shows no Manual badge', () => {
+    render(<CompaniesTable companies={COMPANIES} />);
+    expect(screen.queryByText('Manual')).not.toBeInTheDocument();
+  });
+
   test('empty ats_set renders an em-dash', () => {
     render(<CompaniesTable companies={COMPANIES} />);
     // Beta Co has no ATS and no applied postings, so both the ATS and
