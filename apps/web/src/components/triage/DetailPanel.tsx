@@ -8,6 +8,7 @@ import { CompanyAvatar } from '@/components/shared/CompanyAvatar';
 import { MarkdownRenderer } from '@/components/shared/MarkdownRenderer';
 import { ReasonPicker } from '@/components/triage/ReasonPicker';
 import { ResumeAttach } from '@/components/triage/ResumeAttach';
+import { ScoreBlock } from '@/components/triage/ScoreBlock';
 import { StatusButtons } from '@/components/triage/StatusButtons';
 import type { TriageCardAction } from '@/components/triage/TriageCard';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
@@ -162,22 +163,34 @@ function DetailContentBody({
 
       {/* Scroll region */}
       <div className="flex-1 overflow-y-auto px-6 py-6">
-        {/* Hero */}
+        {/* Hero — score-forward: large score block + role title on top,
+            company / tier / family beneath. */}
         <div className="flex items-start gap-4">
-          <CompanyAvatar name={company.name} size={56} />
-          <div className="flex flex-col gap-1">
-            <h3 className="text-[16px] font-semibold">{company.name}</h3>
-            <span className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
-              {posting.role.family ? familyLabel(posting.role.family) : 'Role'}
-            </span>
+          <ScoreBlock score={posting.score} size="lg" showLabel className="rounded-md" />
+          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <h2 className="text-lg font-semibold leading-snug">{posting.role.title}</h2>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px]">
+              <span className="inline-flex min-w-0 items-center gap-1.5">
+                <CompanyAvatar name={company.name} size={32} />
+                <span className="truncate font-medium text-foreground/90">{company.name}</span>
+              </span>
+              <span className="inline-flex items-center gap-1 font-mono text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+                <span
+                  aria-hidden="true"
+                  className={cn('h-2 w-2 shrink-0 rounded-full', `bg-tier-${tier}`)}
+                />
+                T{tier}
+              </span>
+              <span className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
+                {posting.role.family ? familyLabel(posting.role.family) : 'Role'}
+              </span>
+            </div>
           </div>
         </div>
 
         {company.description && (
           <p className="mt-4 text-[14px] text-foreground/80">{company.description}</p>
         )}
-
-        <h2 className="mt-6 text-[14px] font-semibold">{posting.role.title}</h2>
 
         {/* Key/value grid */}
         <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-3 text-[12px]">

@@ -46,6 +46,16 @@
     --tier-2: 52% 0.16 245;
     --tier-3: 50% 0.18 295;
     --tier-4: 55% 0.015 255;
+    /* Score bands (score-forward restyle). The big score block reads its
+       background from these; the dim treatment (score ≤ 40) is applied in
+       the component, not here. high ≥85 (vivid green) / mid 41–84 (warm
+       sand) / low ≤40 (gray). -fg is the on-band text color. */
+    --score-high: 64% 0.17 150;
+    --score-high-fg: 99% 0 0;
+    --score-mid: 83% 0.085 80;
+    --score-mid-fg: 34% 0.05 70;
+    --score-low: 90% 0.004 95;
+    --score-low-fg: 50% 0.01 255;
     --ats-greenhouse: 50% 0.14 150;
     --ats-lever: 60% 0.17 50;
     --ats-ashby: 50% 0.16 285;
@@ -86,6 +96,13 @@
     --tier-2: 74% 0.14 230;
     --tier-3: 74% 0.14 290;
     --tier-4: 66% 0.04 250;
+    /* Score bands — dark. Brighter band fills, dark on-band text. */
+    --score-high: 70% 0.16 150;
+    --score-high-fg: 14.5% 0 0;
+    --score-mid: 72% 0.1 78;
+    --score-mid-fg: 16% 0.03 70;
+    --score-low: 30% 0 0;
+    --score-low-fg: 68% 0 0;
     --ats-greenhouse: 70% 0.15 150;
     --ats-lever: 72% 0.14 50;
     --ats-ashby: 72% 0.14 280;
