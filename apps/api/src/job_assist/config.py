@@ -101,6 +101,14 @@ class Settings(BaseSettings):
     # Aggregator
     jsearch_api_key: str = Field(default="")
 
+    # Fantastic.jobs / Apify (feat/fantastic-jobs-ingest) — sources the curated
+    # Workday/iCIMS employers whose boards block Railway's datacenter egress IP
+    # (Apify's infra crawls them instead). Server-side ONLY (Railway env +
+    # GitHub secret); never NEXT_PUBLIC_*. Empty = integration disabled: the
+    # /admin/ingest/fantastic endpoint 503s loudly rather than calling Apify
+    # with a "Bearer " (empty) token.
+    apify_api_token: str = Field(default="")
+
     # Observability
     sentry_dsn: str = Field(default="")
 
