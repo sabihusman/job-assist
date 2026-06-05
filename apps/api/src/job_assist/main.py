@@ -32,6 +32,7 @@ from job_assist.schemas.outreach import OutreachMessageCreate
 from job_assist.schemas.public import (
     DEFAULT_SORT,
     ApplicationStatusUpdate,
+    BulkPostingStateRequest,
     PostingStateRequest,
     SortKey,
 )
@@ -2741,6 +2742,92 @@ async def post_posting_state(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return _state_block(row.action_type, row.reason, row.snooze_until, row.created_at)
+
+
+# ── Bulk triage actions (feat/bulk-triage-actions) ───────────────────────────
+# The default triage queue floods with non-PM noise (T3 broad-ingest), and
+# per-posting passing is the only clear-out today. This applies ONE action to
+# many postings in a single transaction. Bulk "Pass" (not_interested) is the
+# main use; bulk "Reset" makes it reversible (reset is an append-only,
+# no-side-effect action). Same record-action validation as the per-posting
+# endpoint, run once for the shared (action_type, reason) tuple.
+
+# Backstop so a runaway/over-eager client can't enqueue an unbounded write.
+_BULK_STATE_MAX_IDS = 500
+
+
+@app.post("/postings/bulk-state", tags=["public"])
+async def post_bulk_posting_state(
+    payload: BulkPostingStateRequest,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Record one action against many postings in a single transaction.
+
+    The cross-field rules (reason required iff not_interested; reason null
+    otherwise; snooze_until only with snoozed) are identical for every id, so
+    they're validated ONCE up-front — a bulk Pass without a reason 422s before
+    any write. Unknown / duplicate ids don't abort the batch: the existing ones
+    are written and the misses are reported per-id.
+
+    Body: ``{ids, action_type, reason?, snooze_until?, notes?}``.
+    Returns: ``{succeeded, failed, failures: [{posting_id, error}]}``.
+
+    Bulk-undo is the same endpoint with ``action_type='reset'`` (no reason).
+    """
+    from sqlalchemy import select
+
+    from job_assist.db.models import JobPosting, PostingAction
+    from job_assist.services.posting_actions import _validate
+
+    if not payload.ids:
+        raise HTTPException(status_code=422, detail="ids must not be empty")
+    if len(payload.ids) > _BULK_STATE_MAX_IDS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"too many ids (max {_BULK_STATE_MAX_IDS} per bulk action)",
+        )
+
+    # Validate the shared action/reason/snooze rule set once (same for all ids).
+    try:
+        _validate(payload.action_type, payload.reason, payload.snooze_until)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # One existence query for the whole batch (clean per-id 404 reporting
+    # instead of an opaque FK IntegrityError aborting the transaction).
+    existing = set(
+        (await db.execute(select(JobPosting.id).where(JobPosting.id.in_(payload.ids))))
+        .scalars()
+        .all()
+    )
+
+    reason_value = payload.reason.value if payload.reason else None
+    action_value = payload.action_type.value
+    succeeded = 0
+    failures: list[dict[str, str]] = []
+    seen: set[uuid.UUID] = set()
+    for pid in payload.ids:
+        if pid in seen:
+            continue  # idempotent within a batch — dedupe repeated ids
+        seen.add(pid)
+        if pid not in existing:
+            failures.append({"posting_id": str(pid), "error": "job_posting not found"})
+            continue
+        db.add(
+            PostingAction(
+                job_posting_id=pid,
+                action_type=action_value,
+                reason=reason_value,
+                snooze_until=payload.snooze_until,
+                notes=payload.notes,
+            )
+        )
+        succeeded += 1
+
+    # Single commit: the valid rows land atomically.
+    await db.commit()
+
+    return {"succeeded": succeeded, "failed": len(failures), "failures": failures}
 
 
 # ── Manual application status (feat/manual-application-status Phase 1) ────────

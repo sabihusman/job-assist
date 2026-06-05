@@ -1800,6 +1800,50 @@
         }
       }
     },
+    "/postings/bulk-state": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Post Bulk Posting State",
+        "description": "Record one action against many postings in a single transaction.\n\nThe cross-field rules (reason required iff not_interested; reason null\notherwise; snooze_until only with snoozed) are identical for every id, so\nthey're validated ONCE up-front \u2014 a bulk Pass without a reason 422s before\nany write. Unknown / duplicate ids don't abort the batch: the existing ones\nare written and the misses are reported per-id.\n\nBody: ``{ids, action_type, reason?, snooze_until?, notes?}``.\nReturns: ``{succeeded, failed, failures: [{posting_id, error}]}``.\n\nBulk-undo is the same endpoint with ``action_type='reset'`` (no reason).",
+        "operationId": "post_bulk_posting_state_postings_bulk_state_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkPostingStateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Post Bulk Posting State Postings Bulk State Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/postings/{posting_id}/status": {
       "put": {
         "tags": [
@@ -3135,6 +3179,61 @@
         ],
         "title": "ApplicationStatusUpdate",
         "description": "Body for ``PUT /postings/{id}/status`` (feat/manual-application-status).\n\nThe manual lifecycle stage. Pydantic rejects any value outside the five\nlifecycle stages at the boundary with a 422; the DB CHECK constraint\n(ck_application_state_status) is the backstop."
+      },
+      "BulkPostingStateRequest": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Ids"
+          },
+          "action_type": {
+            "$ref": "#/components/schemas/ActionType"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActionReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "snooze_until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snooze Until"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ids",
+          "action_type"
+        ],
+        "title": "BulkPostingStateRequest",
+        "description": "Body for ``POST /postings/bulk-state`` (feat/bulk-triage-actions).\n\nApplies ONE action to many postings in a single transaction. The\naction/reason/snooze cross-field rules are identical for every id, so the\nservice validates them once. ``not_interested`` REQUIRES a ``reason`` (the\nDB CHECK ck_posting_action_reason_required_for_not_interested) \u2014 a bulk\n\"Pass\" must supply one. ``reset`` (bulk-undo) takes no reason."
       },
       "ContactCreate": {
         "properties": {

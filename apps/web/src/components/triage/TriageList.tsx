@@ -19,9 +19,11 @@ export function TriageList({
   postings,
   selectedIndex,
   reasonPickerCardId,
+  selectedIds,
   onSelect,
   onToggleReason,
   onAction,
+  onToggleSelect,
 }: {
   postings: readonly PostingListItem[];
   selectedIndex: number | null;
@@ -29,10 +31,15 @@ export function TriageList({
    *  ``null`` = no picker open. Threaded down so the page-level keyboard
    *  handler can flip it on the ``2`` chord. */
   reasonPickerCardId: string | null;
+  /** feat/bulk-triage-actions: the set of checkbox-selected posting ids.
+   *  Undefined disables the per-card checkbox entirely. */
+  selectedIds?: Set<string>;
   onSelect: (index: number) => void;
   /** PR #47: toggle the reason picker open/closed for one card. */
   onToggleReason: (postingId: string) => void;
   onAction: (postingId: string, action: TriageCardAction) => void;
+  /** feat/bulk-triage-actions: toggle one posting's checkbox membership. */
+  onToggleSelect?: (postingId: string) => void;
 }) {
   const containerRef = useRef<HTMLUListElement>(null);
 
@@ -55,9 +62,11 @@ export function TriageList({
             posting={posting}
             isSelected={selectedIndex === index}
             reasonOpen={reasonPickerCardId === posting.id}
+            isChecked={selectedIds?.has(posting.id) ?? false}
             onSelect={() => onSelect(index)}
             onToggleReason={() => onToggleReason(posting.id)}
             onAction={(action) => onAction(posting.id, action)}
+            onToggleCheck={onToggleSelect ? () => onToggleSelect(posting.id) : undefined}
           />
         </li>
       ))}
