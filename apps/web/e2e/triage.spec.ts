@@ -325,21 +325,32 @@ test('PR #57: ?sort=best_fit reflects in dropdown on load', async ({ page }) => 
   await expect(select).toHaveValue('best_fit');
 });
 
-test('PR #57: score badge renders for non-NULL scores with aria-label', async ({ page }) => {
+test('PR #57: score block renders the numeric score for non-NULL postings', async ({ page }) => {
   await page.goto('/');
-  // Alpha (score 88) and Beta (score 65) both render a badge.
-  // The aria-label is the canonical assertion — exact text + screen-reader friendly.
-  await expect(page.getByLabel('Fit score: 88 out of 100')).toBeVisible();
-  await expect(page.getByLabel('Fit score: 65 out of 100')).toBeVisible();
+  // Score-forward restyle: the score is the card's left ScoreBlock. Scope to
+  // each card's <article> so the detail-panel ScoreBlock (same aria-label for
+  // the auto-selected card) doesn't collide. The card block shows just the
+  // number (the "fit score" caption is detail-only).
+  const alphaCard = page.locator('article', { has: page.getByLabel(/Open detail for Alpha Co/) });
+  const betaCard = page.locator('article', { has: page.getByLabel(/Open detail for Beta Co/) });
+  await expect(alphaCard.getByTestId('score-block')).toHaveText('88');
+  await expect(alphaCard.getByTestId('score-block')).toHaveAttribute('data-band', 'high');
+  await expect(betaCard.getByTestId('score-block')).toHaveText('65');
+  await expect(betaCard.getByTestId('score-block')).toHaveAttribute('data-band', 'mid');
 });
 
-test('PR #57: NULL-score postings do NOT render the badge', async ({ page }) => {
+test('PR #57: NULL-score postings render a neutral score block (em-dash, no number)', async ({
+  page,
+}) => {
   await page.goto('/');
   await expect(page.getByLabel(/Open detail for Gamma Co/)).toBeVisible();
-  // Gamma's score is null in the fixture. There must be exactly 2 badges
-  // (Alpha + Beta) — Gamma's row contributes none.
-  const badges = page.getByTestId('fit-score-badge');
-  await expect(badges).toHaveCount(2);
+  // Score-forward restyle: unlike the old badge (which rendered nothing for
+  // NULL), the ScoreBlock always renders — a NULL score shows a neutral
+  // em-dash, never a misleading 0.
+  const gammaCard = page.locator('article', { has: page.getByLabel(/Open detail for Gamma Co/) });
+  const block = gammaCard.getByTestId('score-block');
+  await expect(block).toHaveText('—');
+  await expect(block).toHaveAttribute('data-band', 'none');
 });
 
 // ── PR #58: wire-shape contract + structured-error toast ───────────────────
@@ -408,10 +419,9 @@ test.skip('PR #58: pass-action wire body uses action_type (not kind)', async ({ 
   // raw wire request, so the assertion below is on the literal bytes
   // we sent — no dependence on the mock or the toast.
   const [request] = await Promise.all([
-    page.waitForRequest(
-      (req) => STATE_POST_RE.test(req.url()) && req.method() === 'POST',
-      { timeout: 5000 },
-    ),
+    page.waitForRequest((req) => STATE_POST_RE.test(req.url()) && req.method() === 'POST', {
+      timeout: 5000,
+    }),
     alphaCard.getByRole('button', { name: /Interested/ }).click(),
   ]);
 

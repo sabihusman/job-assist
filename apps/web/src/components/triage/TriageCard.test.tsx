@@ -185,24 +185,31 @@ describe('avatar hue helper', () => {
 
 // ── PR 2 UX overhaul: row reshuffle + status pill ─────────────────────
 
-describe('TriageCard PR 2 layout', () => {
-  test('FitScoreBadge with a numeric score renders on row 1, not the meta row', () => {
+describe('TriageCard score-forward layout', () => {
+  test('the score renders in the dedicated left ScoreBlock, not the meta row', () => {
     const posting = makePosting({ score: 91 });
     render(<ControlledTriageCard posting={posting} isSelected={false} onAction={() => {}} />);
-    // The badge surfaces an aria-label "Fit score 91" via FitScoreBadge.
-    // PR 2 contract: it must NOT live in the same flex cluster as the
-    // location row — assert it's a sibling of the company name.
-    const badge = screen.getByLabelText(/fit score/i);
-    const companyName = screen.getByText('TestCo');
-    // Walk up to a shared ancestor that holds both — they should share
-    // an immediate flex row at the top of the card (the row 1 wrapper).
-    const row1 = companyName.closest('div')?.parentElement;
-    expect(row1).not.toBeNull();
-    expect(row1).toContainElement(badge);
-    // The location row should NOT contain the badge anymore.
-    const locationText = screen.getByText('San Francisco, CA');
-    const locationRow = locationText.closest('div');
-    expect(locationRow).not.toContainElement(badge);
+    // Score-forward restyle: the score is the dominant left rail (ScoreBlock),
+    // surfacing an aria-label "Fit score: 91 out of 100" and the band via
+    // data-band. It must NOT live inside the location/meta row.
+    const block = screen.getByTestId('score-block');
+    expect(block).toHaveTextContent('91');
+    expect(block.getAttribute('data-band')).toBe('high'); // 91 ≥ 85
+    expect(block.getAttribute('aria-label')).toMatch(/fit score/i);
+    // The location row should not contain the score block.
+    const locationRow = screen.getByText('San Francisco, CA').closest('div');
+    expect(locationRow).not.toContainElement(block);
+  });
+
+  test('low scores (≤40) dim the card body', () => {
+    const posting = makePosting({ score: 32 });
+    render(<ControlledTriageCard posting={posting} isSelected={false} onAction={() => {}} />);
+    // The score block stays full-strength (gray band) so the number is legible…
+    const block = screen.getByTestId('score-block');
+    expect(block.getAttribute('data-band')).toBe('low');
+    // …but the body button is muted so a wall of 40s reads as dismissible.
+    const body = screen.getByRole('button', { name: /open detail for/i });
+    expect(body.className).toMatch(/opacity-60/);
   });
 
   test('status pill renders only when posting.state.current is set', () => {

@@ -74,6 +74,14 @@ const config: Config = {
         'tier-2': oklchVar('tier-2'),
         'tier-3': oklchVar('tier-3'),
         'tier-4': oklchVar('tier-4'),
+        // Score bands (score-forward restyle) — the big score block fill +
+        // its on-band foreground. Banded by our real fit score.
+        'score-high': oklchVar('score-high'),
+        'score-high-fg': oklchVar('score-high-fg'),
+        'score-mid': oklchVar('score-mid'),
+        'score-mid-fg': oklchVar('score-mid-fg'),
+        'score-low': oklchVar('score-low'),
+        'score-low-fg': oklchVar('score-low-fg'),
         'ats-greenhouse': oklchVar('ats-greenhouse'),
         'ats-lever': oklchVar('ats-lever'),
         'ats-ashby': oklchVar('ats-ashby'),

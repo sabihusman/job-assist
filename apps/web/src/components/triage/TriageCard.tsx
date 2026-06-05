@@ -1,11 +1,11 @@
 'use client';
 
-import { Clock, MapPin } from 'lucide-react';
+import { Building2, Clock, DollarSign, MapPin } from 'lucide-react';
 
 import { ActionButton } from '@/components/shared/ActionButton';
-import { CompanyAvatar } from '@/components/shared/CompanyAvatar';
-import { FitScoreBadge } from '@/components/triage/FitScoreBadge';
 import { ReasonPicker } from '@/components/triage/ReasonPicker';
+import { ScoreBlock, isDimScore } from '@/components/triage/ScoreBlock';
+import { familyLabel } from '@/lib/triage/family-labels';
 import type { ActionReason, ActionType, PostingListItem } from '@/lib/triage/types';
 import { cn } from '@/lib/utils';
 
@@ -67,165 +67,183 @@ export function TriageCard({
   const tier = company.tier ?? 4;
   const tierColorClass = tierStripClass(tier);
   const remote = posting.remote_type ?? null;
+  // Score-forward restyle: ≤40 reads as dismissible — mute the body so a
+  // wall of low scores recedes at a glance. The score block itself stays
+  // full-strength (gray band) so the number is still legible.
+  const dim = isDimScore(posting.score);
 
   return (
-    <article
-      data-selected={isSelected}
-      className={cn(
-        'group relative flex gap-3 rounded-md border bg-card px-4 py-3 shadow-card transition-colors',
-        isSelected
-          ? 'border-border-strong bg-accent/40'
-          : 'border-border hover:border-border-strong hover:bg-accent/30',
-      )}
-    >
-      {/* Tier strip — selected card overrides to primary teal. */}
-      <span
-        aria-hidden="true"
-        data-testid="tier-strip"
+    <div className="group relative">
+      <article
+        data-selected={isSelected}
         className={cn(
-          'absolute left-0 top-3 h-[calc(100%-1.5rem)] w-0.5 rounded-r',
-          isSelected ? 'bg-primary' : tierColorClass,
+          'flex items-stretch overflow-hidden rounded-md border bg-card shadow-card transition-colors',
+          isSelected
+            ? 'border-border-strong ring-1 ring-primary'
+            : 'border-border hover:border-border-strong hover:bg-accent/20',
         )}
-      />
-
-      {/* feat/bulk-triage-actions: per-card multi-select checkbox. stopPropagation
-          keeps a checkbox click from also triggering the card-select button. */}
-      {onToggleCheck && (
-        <input
-          type="checkbox"
-          checked={isChecked}
-          aria-label={`Select ${company.name} — ${role.title}`}
-          onChange={onToggleCheck}
-          onClick={(e) => e.stopPropagation()}
-          className="mt-1.5 h-4 w-4 shrink-0 cursor-pointer accent-primary"
-        />
-      )}
-
-      {/* Card body — clicking selects, but the action column is excluded
-          via stopPropagation in its own buttons. */}
-      <button
-        type="button"
-        onClick={onSelect}
-        className="flex min-w-0 flex-1 items-start gap-3 text-left"
-        aria-label={`Open detail for ${company.name} — ${role.title}`}
       >
-        <CompanyAvatar name={company.name} size={32} />
+        {/* Tier strip — a thin tier-colored left edge; selected overrides to
+          primary teal. (Also the regression anchor for the tier test.) */}
+        <span
+          aria-hidden="true"
+          data-testid="tier-strip"
+          className={cn('w-0.5 shrink-0', isSelected ? 'bg-primary' : tierColorClass)}
+        />
 
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          {/* PR 2: Row 1 reshuffled — company + identity badges on the
-              left, score badge + status pill pushed to the right. Score
-              on Row 1 was the primary density change from the audit
-              (was on the meta row, lost among location/salary). The
-              ``min-w-0`` on the left cluster + ``shrink-0`` on the
-              right cluster guarantees the score never gets clipped
-              even at very narrow viewports. */}
+        {/* feat/bulk-triage-actions: per-card multi-select checkbox. stopPropagation
+          keeps a checkbox click from also triggering the card-select button. */}
+        {onToggleCheck && (
+          <div className="flex shrink-0 items-start pl-3 pt-3">
+            <input
+              type="checkbox"
+              checked={isChecked}
+              aria-label={`Select ${company.name} — ${role.title}`}
+              onChange={onToggleCheck}
+              onClick={(e) => e.stopPropagation()}
+              className="h-4 w-4 cursor-pointer accent-primary"
+            />
+          </div>
+        )}
+
+        {/* SCORE BLOCK — the dominant left rail (score-forward restyle). */}
+        <ScoreBlock score={posting.score} size="md" className="self-stretch" />
+
+        {/* Card body — clicking selects, but the action column is excluded
+          via stopPropagation in its own buttons. */}
+        <button
+          type="button"
+          onClick={onSelect}
+          className={cn(
+            'flex min-w-0 flex-1 flex-col gap-1 px-4 py-3 text-left',
+            dim && 'opacity-60',
+          )}
+          aria-label={`Open detail for ${company.name} — ${role.title}`}
+        >
+          {/* Line 1 — role title (truncated; full title on hover via title=)
+            with the status pill pinned right. */}
           <div className="flex items-center gap-2">
-            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-              <span className="truncate text-md font-semibold">{company.name}</span>
-              <TierBadge tier={tier} />
-              <AtsBadge ats={posting.source.ats} />
-              <span className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground">
-                <Clock className="h-3 w-3" aria-hidden="true" />
-                {timeAgo(posting.first_seen_at)}
-              </span>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <FitScoreBadge score={posting.score} />
-              {posting.state.current && <StatusPill state={posting.state.current} />}
-            </div>
+            <span className="min-w-0 flex-1 truncate text-base font-semibold" title={role.title}>
+              {role.title}
+            </span>
+            {posting.state.current && <StatusPill state={posting.state.current} />}
           </div>
 
-          {/* Row 2 — company tagline, falls back to description excerpt. */}
-          {company.description && (
-            <span className="truncate text-xs text-muted-foreground">{company.description}</span>
-          )}
-
-          {/* Row 3 — role title (truncated; full title surfaces on hover
-              via the title= attribute so operators can disambiguate
-              without opening the detail panel). */}
-          <span className="truncate text-base font-semibold" title={role.title}>
-            {role.title}
-          </span>
-
-          {/* Row 4 — meta (Score moved up to Row 1, so this row is
-              now Location · Salary · Remote only). */}
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-muted-foreground">
-            {posting.location_raw && (
-              <span className="inline-flex min-w-0 items-center gap-1">
-                <MapPin className="h-3 w-3 shrink-0" aria-hidden="true" />
-                <span className="truncate">{posting.location_raw}</span>
-              </span>
-            )}
-            {posting.location_raw && posting.salary && (
-              <span aria-hidden="true" className="shrink-0">
-                ·
-              </span>
-            )}
-            {posting.salary && <SalaryChip salary={posting.salary} />}
+          {/* Line 2 — tier dot+label and family tag. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <TierBadge tier={tier} />
+            <FamilyTag family={role.family} />
             {remote && <RemoteBadge remote={String(remote)} />}
           </div>
-        </div>
-      </button>
 
-      {/* Action column */}
-      <div
-        className="flex items-start gap-1.5"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-        role="toolbar"
-        aria-label="Actions"
-      >
-        <ActionButton
-          variant="interested"
-          size="compact"
-          onClick={() => onAction({ kind: 'interested' })}
-        />
-        <ActionButton variant="pass" size="compact" onClick={handlePassAction} />
-        <ActionButton
-          variant="applied"
-          size="compact"
-          onClick={() => onAction({ kind: 'applied' })}
-        />
-        <ActionButton
-          variant="snooze"
-          size="compact"
-          onClick={() => onAction({ kind: 'snoozed' })}
-        />
-      </div>
+          {/* Line 3 — metadata: company / location / salary / first-seen /
+            source, each icon+label (mono on the numeric ones). */}
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-sm text-muted-foreground">
+            <Meta icon={Building2}>
+              <span className="truncate">{company.name}</span>
+            </Meta>
+            {posting.location_raw && (
+              <Meta icon={MapPin}>
+                <span className="truncate">{posting.location_raw}</span>
+              </Meta>
+            )}
+            {posting.salary && (
+              <Meta icon={DollarSign}>
+                <SalaryChip salary={posting.salary} />
+              </Meta>
+            )}
+            <Meta icon={Clock}>
+              <span className="font-mono text-xs">{timeAgo(posting.first_seen_at)}</span>
+            </Meta>
+            <AtsBadge ats={posting.source.ats} />
+          </div>
+        </button>
+
+        {/* Action column — hover-reveals (kept in the DOM + focusable so
+          keyboard and tests still reach it). */}
+        <div
+          className="flex items-start gap-1.5 px-3 py-3 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100"
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+          role="toolbar"
+          aria-label="Actions"
+        >
+          <ActionButton
+            variant="interested"
+            size="compact"
+            onClick={() => onAction({ kind: 'interested' })}
+          />
+          <ActionButton variant="pass" size="compact" onClick={handlePassAction} />
+          <ActionButton
+            variant="applied"
+            size="compact"
+            onClick={() => onAction({ kind: 'applied' })}
+          />
+          <ActionButton
+            variant="snooze"
+            size="compact"
+            onClick={() => onAction({ kind: 'snoozed' })}
+          />
+        </div>
+      </article>
 
       {/* Inline reason picker — only rendered when expanded so its
           keyboard listener doesn't compete with the page-level one
           (the page-level hook is also paused via ``enabled=false``
-          when ``reasonOpen`` is true; this is belt-and-suspenders). */}
+          when ``reasonOpen`` is true; this is belt-and-suspenders).
+          Lives OUTSIDE the ``overflow-hidden`` article so it isn't
+          clipped, anchored to this relative wrapper. */}
       {reasonOpen && (
-        <div className="absolute inset-x-4 bottom-2 top-auto translate-y-full rounded-md border border-border bg-surface-2 p-3">
+        <div className="absolute inset-x-4 top-full z-20 -mt-1 rounded-md border border-border bg-surface-2 p-3 shadow-card">
           <ReasonPicker onSelect={handlePickReason} onCancel={onToggleReason} />
         </div>
       )}
-    </article>
+    </div>
   );
 }
 
 // ── Sub-presentation pieces ─────────────────────────────────────────────
 
+/** Tier as a colored dot + mono label (score-forward restyle). */
 function TierBadge({ tier }: { tier: number }) {
-  const colorClass =
+  const dotClass =
     (
       {
-        1: 'bg-tier-1/15 text-tier-1 ring-tier-1/30',
-        2: 'bg-tier-2/15 text-tier-2 ring-tier-2/30',
-        3: 'bg-tier-3/15 text-tier-3 ring-tier-3/30',
-        4: 'bg-tier-4/15 text-tier-4 ring-tier-4/30',
+        1: 'bg-tier-1',
+        2: 'bg-tier-2',
+        3: 'bg-tier-3',
+        4: 'bg-tier-4',
       } as const
-    )[tier as 1 | 2 | 3 | 4] ?? 'bg-tier-4/15 text-tier-4 ring-tier-4/30';
+    )[tier as 1 | 2 | 3 | 4] ?? 'bg-tier-4';
   return (
-    <span
-      className={cn(
-        'rounded px-1.5 py-0 font-mono text-[10px] font-medium uppercase tracking-wide ring-1 ring-inset',
-        colorClass,
-      )}
-    >
-      T{tier}
+    <span className="inline-flex items-center gap-1 font-mono text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+      <span aria-hidden="true" className={cn('h-2 w-2 shrink-0 rounded-full', dotClass)} />T{tier}
+    </span>
+  );
+}
+
+/** Role family as a mono uppercase pill. Maps OUR real role_family values. */
+function FamilyTag({ family }: { family: string | null }) {
+  if (!family) return null;
+  return (
+    <span className="rounded bg-muted px-1.5 py-0 font-mono text-2xs font-medium uppercase tracking-wide text-muted-foreground ring-1 ring-inset ring-border">
+      {familyLabel(family)}
+    </span>
+  );
+}
+
+/** A metadata cell: small leading icon + value. */
+function Meta({
+  icon: Icon,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
+  children: React.ReactNode;
+}) {
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1">
+      <Icon className="h-3 w-3 shrink-0" aria-hidden={true} />
+      {children}
     </span>
   );
 }
