@@ -8,6 +8,22 @@ from typing import Any, ClassVar, Protocol
 
 from pydantic import BaseModel
 
+# feat/datacenter-egress-headers: Workday CXS and iCIMS return empty/403 to
+# datacenter clients that send the default ``python-httpx/x.y`` User-Agent —
+# their anti-bot layer keys on it. The plain-JSON ATSes (Greenhouse / Lever /
+# Ashby) don't, which is why only Workday + iCIMS fetched 0 from Railway while
+# returning full results to a residential IP. A realistic browser UA + Accept
+# headers is the cheap first attempt to clear a UA-based filter; if the block
+# is IP-based, these alone won't help and a proxy/residential egress is needed.
+BROWSER_HEADERS: dict[str, str] = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/html;q=0.9, */*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
 
 class HandleNotFoundError(Exception):
     """Raised by an adapter when the upstream ATS returns 404 for the

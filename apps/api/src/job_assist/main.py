@@ -2006,7 +2006,12 @@ async def backfill_department_team_endpoint(db: DbSession) -> dict[str, int]:
 # about tightening before public exposure.
 
 
-_ALLOWED_ATS_VALUES = {"greenhouse", "lever", "ashby"}
+# fix/datacenter-egress-headers: derive from _INGESTABLE_ATS so the /postings
+# (+ export) ats filter accepts every ATS a posting_source can actually carry.
+# Previously hardcoded {greenhouse, lever, ashby}; it drifted when the Workday
+# (#33) and iCIMS (#55) adapters shipped, so ?ats=workday / ?ats=icims 422'd —
+# the SOURCE filter chips for those two were dead.
+_ALLOWED_ATS_VALUES = set(_INGESTABLE_ATS)
 _ALLOWED_REMOTE_TYPES = {"remote", "hybrid", "onsite"}
 _ALLOWED_STATE_FILTER_VALUES = {
     "triage",

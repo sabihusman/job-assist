@@ -79,7 +79,12 @@ from tenacity import (
     wait_exponential,
 )
 
-from job_assist.adapters.base import HandleNotFoundError, NormalizedPosting, RawPosting
+from job_assist.adapters.base import (
+    BROWSER_HEADERS,
+    HandleNotFoundError,
+    NormalizedPosting,
+    RawPosting,
+)
 from job_assist.adapters.normalization import (
     _sha256,
     compute_content_hash,
@@ -256,7 +261,11 @@ class WorkdayAdapter:
         self.site: str = str(cfg.get("site") or "External")
         # 60s (not 30s): large tenants paginate many detail fetches; align
         # all adapters on one headroom value. See Bestiary 5.19.
-        self._client = client or httpx.AsyncClient(timeout=60.0, follow_redirects=True)
+        # feat/datacenter-egress-headers: browser-like headers — Workday CXS
+        # returns empty to the default python-httpx UA from datacenter IPs.
+        self._client = client or httpx.AsyncClient(
+            timeout=60.0, follow_redirects=True, headers=BROWSER_HEADERS
+        )
         self._owns_client = client is None
 
     async def __aenter__(self) -> WorkdayAdapter:
