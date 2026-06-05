@@ -12,12 +12,13 @@ adapters and must never be routed through the paid API.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from job_assist.adapters.base import Adapter
 from job_assist.adapters.fantastic_jobs import DEFAULT_LIMIT, FantasticJobsAdapter
 from job_assist.db.models.target_company import TargetCompany
 from job_assist.services.ingestion import IngestionService
@@ -68,7 +69,13 @@ async def ingest_curated_via_fantastic(
             limit=limit,
         )
         async with adapter:
-            run = await service.ingest_source(adapter, tc.ats_handle or tc.name, session)
+            # FantasticJobsAdapter satisfies Adapter structurally; the only
+            # mismatch is ``ats`` is per-INSTANCE here (one class serves both
+            # workday + icims employers) vs the protocol's ClassVar. Runtime is
+            # identical — cast to quiet the variance check.
+            run = await service.ingest_source(
+                cast(Adapter, adapter), tc.ats_handle or tc.name, session
+            )
         results.append(
             {
                 "company": tc.name,
