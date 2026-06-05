@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+import httpx
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -107,13 +108,21 @@ async def ingest_curated_via_fantastic(
     return {"employers": len(results), "results": results}
 
 
-async def probe_fantastic_domain(token: str, *, domain: str, limit: int = 5) -> dict[str, Any]:
-    """Diagnostic: an UNFILTERED Apify pull (no PM/PO title filter) for one
-    employer domain. Does NOT persist — returns the count + sample titles.
+async def probe_fantastic_domain(
+    token: str, *, domain: str, limit: int = 5, title_filter: bool = False
+) -> dict[str, Any]:
+    """Diagnostic: a probe pull for one employer domain. Does NOT persist.
 
-    Tells "no PM/PO roles at this employer" (domain returns jobs unfiltered,
-    but none match the PM/PO filter) from "domain targeting is off" (domain
-    returns 0 even unfiltered) when the filtered ingest returns 0.
+    ``title_filter=False`` (default) drops the PM/PO filter to tell "no PM/PO
+    roles here" (domain returns jobs unfiltered, none match) from "domain
+    targeting is off" (0 even unfiltered). ``title_filter=True`` keeps the
+    filter (a known-valid query) — useful to fetch a real matching record for
+    field inspection.
+
+    On an Apify HTTP error the error is SURFACED (status + body) instead of
+    bubbling to a generic 500. On success it returns the count, sample titles,
+    the first record's ``field_keys`` (to see what fields exist — e.g. a
+    department/taxonomy), and a trimmed ``sample_record``.
     """
     adapter = FantasticJobsAdapter(
         organization=domain,
@@ -121,11 +130,41 @@ async def probe_fantastic_domain(token: str, *, domain: str, limit: int = 5) -> 
         ats="workday",  # irrelevant for the probe (no persist, no IngestRun)
         token=token,
         limit=limit,
-        title_filter=False,
+        title_filter=title_filter,
     )
-    async with adapter:
-        raws = await adapter.fetch_postings("probe")
+    try:
+        async with adapter:
+            raws = await adapter.fetch_postings("probe")
+    except httpx.HTTPStatusError as exc:
+        body = ""
+        try:
+            body = exc.response.text[:600]
+        except Exception:
+            body = "<unreadable>"
+        return {
+            "domain": domain,
+            "title_filter": title_filter,
+            "error": True,
+            "apify_status": exc.response.status_code,
+            "apify_body": body,
+        }
+
     titles = [
         str(r.raw_payload.get("title") or "") for r in raws if isinstance(r.raw_payload, dict)
     ]
-    return {"domain": domain, "count": len(raws), "sample_titles": titles[:limit]}
+    field_keys: list[str] = []
+    sample_record: dict[str, Any] | None = None
+    if raws and isinstance(raws[0].raw_payload, dict):
+        rec = {k: v for k, v in raws[0].raw_payload.items() if k != "organization_url"}
+        field_keys = sorted(rec.keys())
+        if isinstance(rec.get("description_text"), str):
+            rec["description_text"] = rec["description_text"][:120] + "…"
+        sample_record = rec
+    return {
+        "domain": domain,
+        "title_filter": title_filter,
+        "count": len(raws),
+        "sample_titles": titles[:limit],
+        "field_keys": field_keys,
+        "sample_record": sample_record,
+    }
