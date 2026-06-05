@@ -416,12 +416,18 @@ async def trigger_fantastic_ingest(db: DbSession) -> dict[str, Any]:
 # isn't captured by the earlier ``/admin/ingest/{ats}/{handle}`` route — a
 # two-segment ``fantastic/probe`` matches that catch-all as ats='fantastic'.
 @app.post("/admin/ingest/fantastic-probe", tags=["admin"])
-async def probe_fantastic(domain: str, limit: int = 5) -> dict[str, Any]:
-    """Diagnostic: an UNFILTERED Apify pull for one employer ``domain`` (no
-    PM/PO title filter), low ``limit``. Returns count + sample titles and does
-    NOT persist — use to tell "no PM/PO roles at this employer" from "domain
-    targeting is off" when the filtered ingest returns 0. 503 if the token is
-    unset. ``limit`` capped at 50 (cost backstop)."""
+async def probe_fantastic(
+    domain: str, limit: int = 5, title_filter: bool = False
+) -> dict[str, Any]:
+    """Diagnostic Apify pull for one employer ``domain`` — count + sample titles
+    + the first record's ``field_keys``/``sample_record``, NO persist.
+
+    ``title_filter=false`` (default) drops the PM/PO filter to tell "no PM/PO
+    roles here" from "domain targeting off" when the filtered ingest returns 0.
+    ``title_filter=true`` keeps the filter (a known-valid query) to fetch a real
+    matching record for field inspection. An Apify HTTP error is surfaced
+    (status + body), not swallowed into a 500. 503 if the token is unset;
+    ``limit`` capped at 50."""
     from job_assist.services.fantastic_ingest import probe_fantastic_domain
 
     token = settings.apify_api_token
@@ -429,7 +435,9 @@ async def probe_fantastic(domain: str, limit: int = 5) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail="APIFY_API_TOKEN is not configured.")
     if limit < 1 or limit > 50:
         raise HTTPException(status_code=422, detail="limit must be 1..50")
-    return await probe_fantastic_domain(token, domain=domain, limit=limit)
+    return await probe_fantastic_domain(
+        token, domain=domain, limit=limit, title_filter=title_filter
+    )
 
 
 @app.post("/admin/postings/mark-stale", tags=["admin"])

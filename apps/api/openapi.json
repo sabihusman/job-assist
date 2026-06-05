@@ -182,7 +182,7 @@
           "admin"
         ],
         "summary": "Probe Fantastic",
-        "description": "Diagnostic: an UNFILTERED Apify pull for one employer ``domain`` (no\nPM/PO title filter), low ``limit``. Returns count + sample titles and does\nNOT persist \u2014 use to tell \"no PM/PO roles at this employer\" from \"domain\ntargeting is off\" when the filtered ingest returns 0. 503 if the token is\nunset. ``limit`` capped at 50 (cost backstop).",
+        "description": "Diagnostic Apify pull for one employer ``domain`` \u2014 count + sample titles\n+ the first record's ``field_keys``/``sample_record``, NO persist.\n\n``title_filter=false`` (default) drops the PM/PO filter to tell \"no PM/PO\nroles here\" from \"domain targeting off\" when the filtered ingest returns 0.\n``title_filter=true`` keeps the filter (a known-valid query) to fetch a real\nmatching record for field inspection. An Apify HTTP error is surfaced\n(status + body), not swallowed into a 500. 503 if the token is unset;\n``limit`` capped at 50.",
         "operationId": "probe_fantastic_admin_ingest_fantastic_probe_post",
         "parameters": [
           {
@@ -202,6 +202,16 @@
               "type": "integer",
               "default": 5,
               "title": "Limit"
+            }
+          },
+          {
+            "name": "title_filter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Title Filter"
             }
           }
         ],
