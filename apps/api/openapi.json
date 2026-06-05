@@ -176,7 +176,7 @@
         }
       }
     },
-    "/admin/ingest/fantastic/probe": {
+    "/admin/ingest/fantastic-probe": {
       "post": {
         "tags": [
           "admin"
