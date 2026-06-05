@@ -44,7 +44,10 @@ export function Sidebar() {
       <aside
         data-collapsed={collapsed}
         className={cn(
-          'sticky top-0 z-30 hidden h-screen shrink-0 flex-col border-r border-border bg-surface transition-[width] duration-150 md:flex',
+          // Zone separation: the left rail gets a distinct, slightly-recessed
+          // tone (bg-muted) + a stronger right border so the eye reads it as a
+          // separate surface from the lighter bg-background list column.
+          'sticky top-0 z-30 hidden h-screen shrink-0 flex-col border-r border-border-strong bg-muted transition-[width] duration-150 md:flex',
           collapsed ? 'w-[52px]' : 'w-56',
         )}
         aria-label="Primary navigation"
