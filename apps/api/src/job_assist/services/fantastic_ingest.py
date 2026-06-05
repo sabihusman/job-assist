@@ -31,6 +31,21 @@ logger = structlog.get_logger(__name__)
 FANTASTIC_SOURCED_ATS = ("workday", "icims")
 
 
+def apify_domain_for(tc: TargetCompany) -> str | None:
+    """The domain the Apify path should target for this employer.
+
+    Prefers ``adapter_config.apify_domain`` when set, else falls back to the
+    company's ``domain``. This decouples the Apify-indexed domain from the
+    company domain: e.g. John Hancock's jobs are indexed under the parent
+    ``manulife.com`` in the actor's DB, but ``domain`` stays ``johnhancock.com``
+    so Gmail outcome-matching is unaffected. Generalizes to any employer whose
+    Apify-indexed domain differs from their email domain.
+    """
+    cfg = tc.adapter_config if isinstance(tc.adapter_config, dict) else {}
+    override = cfg.get("apify_domain")
+    return str(override) if override else tc.domain
+
+
 async def list_fantastic_targets(session: AsyncSession) -> list[TargetCompany]:
     """Curated Workday/iCIMS employers the Apify path can source.
 
@@ -69,7 +84,7 @@ async def ingest_curated_via_fantastic(
         ats_value = tc.ats.value if hasattr(tc.ats, "value") else str(tc.ats)
         adapter = FantasticJobsAdapter(
             organization=tc.name,
-            domain=tc.domain,
+            domain=apify_domain_for(tc),
             ats=ats_value,
             token=token,
             limit=limit,
