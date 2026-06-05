@@ -13,12 +13,34 @@ from typing import Any
 import pytest
 
 from job_assist.db.models import TargetCompany
-from job_assist.services.fantastic_ingest import list_fantastic_targets
+from job_assist.services.fantastic_ingest import apify_domain_for, list_fantastic_targets
 
 _NEEDS_DB = pytest.mark.skipif(
     not os.getenv("TEST_DATABASE_URL"),
     reason="TEST_DATABASE_URL not set",
 )
+
+
+# ── apify_domain_for (pure — no DB) ──────────────────────────────────────────
+
+
+def test_apify_domain_for_prefers_override() -> None:
+    tc = TargetCompany(
+        name="John Hancock / Manulife US",
+        domain="johnhancock.com",
+        adapter_config={"apify_domain": "manulife.com"},
+    )
+    # Apify targets the parent domain; the company domain stays for Gmail.
+    assert apify_domain_for(tc) == "manulife.com"
+    assert tc.domain == "johnhancock.com"
+
+
+def test_apify_domain_for_falls_back_to_domain() -> None:
+    assert apify_domain_for(TargetCompany(name="A", domain="a.com", adapter_config=None)) == "a.com"
+    assert (
+        apify_domain_for(TargetCompany(name="B", domain="b.com", adapter_config={"site": "x"}))
+        == "b.com"
+    )
 
 
 @_NEEDS_DB
