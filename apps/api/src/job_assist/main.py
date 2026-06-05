@@ -412,7 +412,10 @@ async def trigger_fantastic_ingest(db: DbSession) -> dict[str, Any]:
     return await ingest_curated_via_fantastic(db, token)
 
 
-@app.post("/admin/ingest/fantastic/probe", tags=["admin"])
+# Single-segment path (``fantastic-probe``, not ``fantastic/probe``) so it
+# isn't captured by the earlier ``/admin/ingest/{ats}/{handle}`` route — a
+# two-segment ``fantastic/probe`` matches that catch-all as ats='fantastic'.
+@app.post("/admin/ingest/fantastic-probe", tags=["admin"])
 async def probe_fantastic(domain: str, limit: int = 5) -> dict[str, Any]:
     """Diagnostic: an UNFILTERED Apify pull for one employer ``domain`` (no
     PM/PO title filter), low ``limit``. Returns count + sample titles and does
