@@ -264,6 +264,85 @@ export function useRecordAction() {
   });
 }
 
+// ── POST /postings/bulk-state (feat/bulk-triage-actions) ────────────────
+
+export type BulkRecordActionVars = {
+  postingIds: string[];
+  action_type: ActionType;
+  reason?: ActionReason | null;
+  snooze_until?: string | null;
+  notes?: string | null;
+};
+
+export type BulkActionResult = {
+  succeeded: number;
+  failed: number;
+  failures: { posting_id: string; error: string }[];
+};
+
+/**
+ * Apply one action to many postings in a single request. Mirrors
+ * ``useRecordAction``'s optimistic-removal + rollback + invalidate, but
+ * drops ALL acted-on ids from the cached lists at once. Used by the
+ * BulkActionBar to clear the non-PM noise cohort (bulk Pass) and to undo
+ * it (bulk Reset). Throws a ``MutationError`` on a transport/HTTP failure.
+ */
+export function useBulkRecordAction() {
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (vars: BulkRecordActionVars) => {
+      const { data, error, response } = await api.POST('/postings/bulk-state', {
+        body: {
+          ids: vars.postingIds,
+          action_type: vars.action_type,
+          reason: vars.reason ?? null,
+          snooze_until: vars.snooze_until ?? null,
+          notes: vars.notes ?? null,
+        } as never,
+      });
+      if (error || data === undefined) {
+        throw new MutationError({
+          kind: 'application',
+          status: response?.status ?? null,
+          detail: extractDetail(error),
+          message:
+            extractDetail(error) ?? `Bulk action failed (${response?.status ?? 'no status'})`,
+        });
+      }
+      return data as unknown as BulkActionResult;
+    },
+    onMutate: async (vars) => {
+      await qc.cancelQueries({ queryKey: ['postings'] });
+      const snapshots = qc.getQueriesData<PostingsListResponse>({ queryKey: ['postings'] });
+      const idSet = new Set(vars.postingIds);
+      for (const [key, prev] of snapshots) {
+        if (!prev) continue;
+        if (typeof prev !== 'object' || !('items' in prev) || !Array.isArray(prev.items)) continue;
+        const removed = prev.items.filter((p) => idSet.has(p.id)).length;
+        const next: PostingsListResponse = {
+          ...prev,
+          total: Math.max(0, prev.total - removed),
+          items: prev.items.filter((p) => !idSet.has(p.id)),
+        };
+        qc.setQueryData(key, next);
+      }
+      return { snapshots };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (!ctx?.snapshots) return;
+      for (const [key, prev] of ctx.snapshots) {
+        qc.setQueryData(key, prev);
+      }
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['postings'] });
+      qc.invalidateQueries({ queryKey: ['postings-count'] });
+      qc.invalidateQueries({ queryKey: queryKeys.calibration() });
+    },
+  });
+}
+
 // ── Saved-filter count badges ───────────────────────────────────────────
 
 /**

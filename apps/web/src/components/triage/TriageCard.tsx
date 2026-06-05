@@ -33,16 +33,23 @@ export function TriageCard({
   posting,
   isSelected,
   reasonOpen,
+  isChecked = false,
   onSelect,
   onToggleReason,
   onAction,
+  onToggleCheck,
 }: {
   posting: PostingListItem;
   isSelected: boolean;
   reasonOpen: boolean;
+  // feat/bulk-triage-actions: multi-select checkbox state. The checkbox only
+  // renders when ``onToggleCheck`` is supplied (the triage page wires it; other
+  // surfaces that reuse the card don't).
+  isChecked?: boolean;
   onSelect: () => void;
   onToggleReason: () => void;
   onAction: (action: TriageCardAction) => void;
+  onToggleCheck?: () => void;
 }) {
   const handlePassAction = () => {
     onToggleReason();
@@ -80,6 +87,19 @@ export function TriageCard({
           isSelected ? 'bg-primary' : tierColorClass,
         )}
       />
+
+      {/* feat/bulk-triage-actions: per-card multi-select checkbox. stopPropagation
+          keeps a checkbox click from also triggering the card-select button. */}
+      {onToggleCheck && (
+        <input
+          type="checkbox"
+          checked={isChecked}
+          aria-label={`Select ${company.name} — ${role.title}`}
+          onChange={onToggleCheck}
+          onClick={(e) => e.stopPropagation()}
+          className="mt-1.5 h-4 w-4 shrink-0 cursor-pointer accent-primary"
+        />
+      )}
 
       {/* Card body — clicking selects, but the action column is excluded
           via stopPropagation in its own buttons. */}

@@ -6,17 +6,22 @@ import { toast } from 'sonner';
 
 import { AppShell } from '@/components/chrome/AppShell';
 import { EmptyState } from '@/components/shared/EmptyState';
+import { BulkActionBar } from '@/components/triage/BulkActionBar';
 import { CalibrationCard } from '@/components/triage/CalibrationCard';
 import { DetailPanel } from '@/components/triage/DetailPanel';
 import { FilterRow } from '@/components/triage/FilterRow';
 import type { TriageCardAction } from '@/components/triage/TriageCard';
 import { TriageList } from '@/components/triage/TriageList';
 import { showErrorToast } from '@/lib/api/error-toast';
-import { useRecordAction, useTriagePostings } from '@/lib/api/hooks';
+import { useBulkRecordAction, useRecordAction, useTriagePostings } from '@/lib/api/hooks';
 import { useTriageKeyboard } from '@/lib/keyboard/useTriageKeyboard';
 import { parseFilters } from '@/lib/triage/filters';
 import { computeSubtitle } from '@/lib/triage/subtitle';
-import type { TriageFilters } from '@/lib/triage/types';
+import type { ActionReason, TriageFilters } from '@/lib/triage/types';
+
+// feat/bulk-triage-actions: the junk cohort the "Select ≤ N" shortcut grabs.
+// fit_score ≤ this = the non-PM noise that floods broad-ingest triage.
+const LOW_SCORE_THRESHOLD = 40;
 
 /**
  * Triage page (PR #32b).
@@ -70,6 +75,9 @@ function TriagePageInner() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: filters is the intentional reset trigger
   useEffect(() => {
     setExtraOffset(null);
+    // feat/bulk-triage-actions: a new filter set means a new result window —
+    // drop any stale checkbox selection (ids may no longer be visible).
+    setSelectedIds(new Set());
   }, [filters]);
   const extra = useTriagePostings({ ...filters, offset: extraOffset ?? 0 }, extraOffset !== null);
   // PR #43: fire a second light query to drive the dynamic subtitle's
@@ -86,6 +94,7 @@ function TriagePageInner() {
     offset: 0,
   });
   const recordAction = useRecordAction();
+  const bulkAction = useBulkRecordAction();
 
   const page1Items = data?.items ?? [];
   const items =
@@ -116,6 +125,19 @@ function TriagePageInner() {
   const [reasonPickerCardId, setReasonPickerCardId] = useState<string | null>(null);
   const handleToggleReason = useCallback((postingId: string) => {
     setReasonPickerCardId((prev) => (prev === postingId ? null : postingId));
+  }, []);
+
+  // feat/bulk-triage-actions: checkbox multi-select. A Set of posting ids,
+  // independent of the keyboard ``selectedIndex`` cursor.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+  const toggleSelect = useCallback((postingId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(postingId)) next.delete(postingId);
+      else next.add(postingId);
+      return next;
+    });
   }, []);
 
   // Clear selection when the result set shrinks past the cursor — e.g.
@@ -178,6 +200,62 @@ function TriagePageInner() {
     [recordAction],
   );
 
+  // feat/bulk-triage-actions: how many visible cards are in the junk cohort.
+  const lowScoreCount = items.filter(
+    (p) => p.score !== null && p.score <= LOW_SCORE_THRESHOLD,
+  ).length;
+  const selectLowScore = useCallback(() => {
+    setSelectedIds(
+      new Set(
+        items.filter((p) => p.score !== null && p.score <= LOW_SCORE_THRESHOLD).map((p) => p.id),
+      ),
+    );
+  }, [items]);
+  const selectAllVisible = useCallback(() => {
+    setSelectedIds(new Set(items.map((p) => p.id)));
+  }, [items]);
+
+  // One path for both bulk Pass and bulk Reset. A successful Pass offers an
+  // Undo (bulk Reset on the same ids) so the clear-out is reversible even
+  // after the cards leave the view and the selection clears.
+  const runBulk = useCallback(
+    (actionType: 'not_interested' | 'reset', reason: ActionReason | null, verb: string) => {
+      const ids = [...selectedIds];
+      if (ids.length === 0) return;
+      bulkAction.mutate(
+        { postingIds: ids, action_type: actionType, reason },
+        {
+          onSuccess: (res) => {
+            const skipped = res.failed ? ` (${res.failed} skipped)` : '';
+            toast.success(`✓ ${verb} ${res.succeeded}${skipped}`, {
+              action:
+                actionType === 'not_interested'
+                  ? {
+                      label: 'Undo',
+                      onClick: () =>
+                        bulkAction.mutate({
+                          postingIds: ids,
+                          action_type: 'reset',
+                          reason: null,
+                        }),
+                    }
+                  : undefined,
+            });
+            clearSelection();
+          },
+          onError: (err) =>
+            showErrorToast(err, `Couldn't ${verb.toLowerCase()} the selected roles`),
+        },
+      );
+    },
+    [bulkAction, selectedIds, clearSelection],
+  );
+  const handleBulkPass = useCallback(
+    (reason: ActionReason) => runBulk('not_interested', reason, 'Passed'),
+    [runBulk],
+  );
+  const handleBulkReset = useCallback(() => runBulk('reset', null, 'Reset'), [runBulk]);
+
   useTriageKeyboard(
     {
       onNext: () =>
@@ -233,13 +311,27 @@ function TriagePageInner() {
           onResetFilters={() => router.replace('/?state=triage', { scroll: false })}
           onRetry={() => refetch()}
         >
+          <BulkActionBar
+            selectedCount={selectedIds.size}
+            visibleCount={items.length}
+            lowScoreCount={lowScoreCount}
+            lowScoreThreshold={LOW_SCORE_THRESHOLD}
+            busy={bulkAction.isPending}
+            onSelectLowScore={selectLowScore}
+            onSelectAllVisible={selectAllVisible}
+            onClear={clearSelection}
+            onPass={handleBulkPass}
+            onReset={handleBulkReset}
+          />
           <TriageList
             postings={items}
             selectedIndex={selectedIndex}
             reasonPickerCardId={reasonPickerCardId}
+            selectedIds={selectedIds}
             onSelect={setSelectedIndex}
             onToggleReason={handleToggleReason}
             onAction={handleAction}
+            onToggleSelect={toggleSelect}
           />
           {hasMore && (
             <button

@@ -299,6 +299,23 @@ class ApplicationStatusUpdate(BaseModel):
     status: ResolvedStatus
 
 
+class BulkPostingStateRequest(BaseModel):
+    """Body for ``POST /postings/bulk-state`` (feat/bulk-triage-actions).
+
+    Applies ONE action to many postings in a single transaction. The
+    action/reason/snooze cross-field rules are identical for every id, so the
+    service validates them once. ``not_interested`` REQUIRES a ``reason`` (the
+    DB CHECK ck_posting_action_reason_required_for_not_interested) — a bulk
+    "Pass" must supply one. ``reset`` (bulk-undo) takes no reason.
+    """
+
+    ids: list[uuid.UUID]
+    action_type: ActionType
+    reason: ActionReason | None = None
+    snooze_until: datetime | None = None
+    notes: str | None = None
+
+
 # ── PR #30b — stats response shapes ──────────────────────────────────────────
 
 
