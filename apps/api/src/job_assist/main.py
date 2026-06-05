@@ -412,6 +412,23 @@ async def trigger_fantastic_ingest(db: DbSession) -> dict[str, Any]:
     return await ingest_curated_via_fantastic(db, token)
 
 
+@app.post("/admin/ingest/fantastic/probe", tags=["admin"])
+async def probe_fantastic(domain: str, limit: int = 5) -> dict[str, Any]:
+    """Diagnostic: an UNFILTERED Apify pull for one employer ``domain`` (no
+    PM/PO title filter), low ``limit``. Returns count + sample titles and does
+    NOT persist — use to tell "no PM/PO roles at this employer" from "domain
+    targeting is off" when the filtered ingest returns 0. 503 if the token is
+    unset. ``limit`` capped at 50 (cost backstop)."""
+    from job_assist.services.fantastic_ingest import probe_fantastic_domain
+
+    token = settings.apify_api_token
+    if not token:
+        raise HTTPException(status_code=503, detail="APIFY_API_TOKEN is not configured.")
+    if limit < 1 or limit > 50:
+        raise HTTPException(status_code=422, detail="limit must be 1..50")
+    return await probe_fantastic_domain(token, domain=domain, limit=limit)
+
+
 @app.post("/admin/postings/mark-stale", tags=["admin"])
 async def mark_stale_postings_endpoint(
     db: DbSession,

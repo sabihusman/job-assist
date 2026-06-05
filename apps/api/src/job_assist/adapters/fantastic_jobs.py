@@ -96,17 +96,22 @@ def build_actor_input(
     organization: str,
     domain: str | None,
     limit: int = DEFAULT_LIMIT,
+    include_title_filter: bool = True,
 ) -> dict[str, Any]:
-    """Build the actor input JSON: target one employer + the PM/PO title filter.
+    """Build the actor input JSON: target one employer + (optionally) the PM/PO
+    title filter.
 
     Targets by ``domainFilter`` (exact, most reliable) when a domain is known,
     else falls back to ``organizationSearch`` (token match on the name).
+
+    ``include_title_filter=False`` omits the title filter — used by the
+    diagnostic probe to tell "no PM/PO roles at this employer" from "domain
+    targeting is off" when the filtered ingest returns 0.
     """
-    body: dict[str, Any] = {
-        "titleSearch": TITLE_SEARCH,
-        "titleExclusionSearch": TITLE_EXCLUSION_SEARCH,
-        "limit": limit,
-    }
+    body: dict[str, Any] = {"limit": limit}
+    if include_title_filter:
+        body["titleSearch"] = TITLE_SEARCH
+        body["titleExclusionSearch"] = TITLE_EXCLUSION_SEARCH
     if domain:
         body["domainFilter"] = [domain]
     else:
@@ -282,6 +287,7 @@ class FantasticJobsAdapter:
         ats: str,
         token: str,
         limit: int = DEFAULT_LIMIT,
+        title_filter: bool = True,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.organization = organization
@@ -289,6 +295,7 @@ class FantasticJobsAdapter:
         self.ats = ats  # instance-level — the employer's real ATS (workday/icims)
         self._token = token
         self._limit = limit
+        self._title_filter = title_filter
         # run-sync can take a while (the actor runs end-to-end); generous timeout.
         self._client = client or httpx.AsyncClient(timeout=180.0)
         self._owns_client = client is None
@@ -311,7 +318,10 @@ class FantasticJobsAdapter:
         if not self._token:
             raise RuntimeError("APIFY_API_TOKEN is not configured")
         body = build_actor_input(
-            organization=self.organization, domain=self.domain, limit=self._limit
+            organization=self.organization,
+            domain=self.domain,
+            limit=self._limit,
+            include_title_filter=self._title_filter,
         )
         resp = await self._client.post(
             _RUN_SYNC_URL,

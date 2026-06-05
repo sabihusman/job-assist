@@ -57,6 +57,14 @@ def test_build_actor_input_falls_back_to_org_name() -> None:
     assert "domainFilter" not in body
 
 
+def test_build_actor_input_unfiltered_omits_title_filter() -> None:
+    # The diagnostic probe: domain targeting kept, PM/PO title filter dropped.
+    body = build_actor_input(organization="Athene", domain="athene.com", include_title_filter=False)
+    assert body["domainFilter"] == ["athene.com"]
+    assert "titleSearch" not in body
+    assert "titleExclusionSearch" not in body
+
+
 def test_title_filter_asymmetry_protects_senior_product_owner() -> None:
     # Include captures all five wanted titles (base/associate PM/PO + senior PO).
     assert TITLE_SEARCH == ["Product Manager", "Product Owner"]
