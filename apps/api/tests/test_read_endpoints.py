@@ -186,11 +186,14 @@ async def test_postings_invalid_ats_rejected(db_session: Any) -> None:
     ac = await _client(db_session)
     try:
         async with ac:
-            resp = await ac.get("/postings?ats=workday")
+            # ``taleo`` is a real ATS but not one this app ingests, so it's not
+            # in _ALLOWED_ATS_VALUES. (``workday``/``icims`` ARE valid now —
+            # fix/datacenter-egress-headers added them to the filter allowlist.)
+            resp = await ac.get("/postings?ats=taleo")
     finally:
         await _drop_override()
     assert resp.status_code == 422
-    assert "workday" in resp.text
+    assert "taleo" in resp.text
 
 
 @_NEEDS_DB
