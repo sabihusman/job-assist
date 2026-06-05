@@ -219,13 +219,24 @@ function DetailContentBody({
                   <span className="text-muted-foreground">{posting.division.description}</span>
                 )}
               </div>
-            ) : (
+            ) : posting.role.department || posting.role.team ? (
+              // The role HAS a department/team but no division row yet — division
+              // discovery keys on (company, department, team), so this one is
+              // genuinely awaiting the next enrichment sweep.
               <>
                 <span aria-hidden="true" className="h-2 w-2 rounded-full bg-pending" />
                 <span className="italic text-muted-foreground">
                   Division info pending — will populate after next enrichment run.
                 </span>
               </>
+            ) : (
+              // No department AND no team on the role → division discovery (which
+              // requires one of them) can NEVER create a division for it, so don't
+              // promise an enrichment that structurally can't run. Hits any role
+              // whose ATS didn't surface a department — e.g. Apify-sourced roles.
+              <span className="italic text-muted-foreground">
+                No business division for this role.
+              </span>
             )}
           </div>
         </section>

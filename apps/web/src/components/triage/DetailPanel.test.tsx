@@ -109,10 +109,30 @@ describe('DetailPanel', () => {
     expect(cls).toContain('self-start');
   });
 
-  test('renders the division-pending callout when division is null', () => {
+  test('renders the division-pending callout when division is null but the role has a department', () => {
+    // Default fixture has role.department='Product' → genuinely awaiting the sweep.
     mockState.data = makeDetail({ division: null });
     wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
     expect(panel().getByText(/division info pending/i)).toBeInTheDocument();
+  });
+
+  test('shows "no business division" (NOT pending) when the role has no department or team', () => {
+    // Apify-sourced roles (and any ATS that doesn't surface a department) have
+    // department=null AND team=null → division discovery can never run on them,
+    // so the "will populate" promise must NOT show.
+    mockState.data = makeDetail({
+      division: null,
+      role: {
+        title: 'Apify Role',
+        family: 'product_management',
+        department: null,
+        team: null,
+        seniority: 'pm',
+      },
+    });
+    wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
+    expect(panel().getByText(/no business division for this role/i)).toBeInTheDocument();
+    expect(panel().queryByText(/division info pending/i)).not.toBeInTheDocument();
   });
 
   test('renders the markdown JD', () => {
