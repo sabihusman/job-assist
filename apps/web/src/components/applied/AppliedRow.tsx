@@ -4,6 +4,7 @@ import { ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 
 import { StageBadge } from '@/components/shared/StageBadge';
+import { StatusButtons } from '@/components/triage/StatusButtons';
 import { usePostingOutcomes } from '@/lib/api/applied';
 import { type PipelineStage, STAGE_LABELS, stageOf } from '@/lib/applied/stages';
 import type { PostingListItem } from '@/lib/triage/types';
@@ -74,7 +75,16 @@ export function AppliedRow({
 
       {open && (
         <div className="border-t border-border bg-surface-2/50 px-4 py-3">
-          <h4 className="mb-3 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
+          {/* feat/manual-application-status: lifecycle buttons on the applied
+              card. Marking accepted/rejected removes the card from the Applied
+              list (the query re-filters on resolved_status). */}
+          <StatusButtons
+            postingId={posting.id}
+            current={posting.state.resolved_status ?? null}
+            companyName={posting.company.name}
+            gmailRejectionHint={posting.state.gmail_rejection_hint ?? false}
+          />
+          <h4 className="mb-3 mt-4 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
             Timeline
           </h4>
           {isLoading ? (

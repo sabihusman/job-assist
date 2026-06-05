@@ -8,6 +8,7 @@ import { CompanyAvatar } from '@/components/shared/CompanyAvatar';
 import { MarkdownRenderer } from '@/components/shared/MarkdownRenderer';
 import { ReasonPicker } from '@/components/triage/ReasonPicker';
 import { ResumeAttach } from '@/components/triage/ResumeAttach';
+import { StatusButtons } from '@/components/triage/StatusButtons';
 import type { TriageCardAction } from '@/components/triage/TriageCard';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { usePosting } from '@/lib/api/hooks';
@@ -232,6 +233,16 @@ function DetailContentBody({
         {/* feat/application-resume: per-application resume attach (upload a
             .docx/.pdf or paste text). Replaces the apply-time dropdown. */}
         <ResumeAttach postingId={posting.id} resume={posting.resume} />
+
+        {/* feat/manual-application-status: lifecycle status buttons. Marking
+            accepted/rejected drops the card out of the Applied tab; rejected
+            lands it in Rejected. Gmail rejection shows only as a hint. */}
+        <StatusButtons
+          postingId={posting.id}
+          current={posting.state.resolved_status ?? null}
+          companyName={company.name}
+          gmailRejectionHint={posting.state.gmail_rejection_hint ?? false}
+        />
 
         {/* JD markdown — summary preferred, full description on toggle.
             Keyed on posting.id so the showFullJd state resets whenever

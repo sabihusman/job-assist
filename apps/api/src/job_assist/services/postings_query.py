@@ -32,11 +32,12 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import Text, and_, cast, func, or_, select, true
+from sqlalchemy import Text, and_, case, cast, func, or_, select, true
 from sqlalchemy import false as sa_false
 from sqlalchemy.sql import Select
 
 from job_assist.db.models import (
+    ApplicationState,
     JobPosting,
     OperatorProfile,
     OutcomeEvent,
@@ -54,6 +55,79 @@ _REJECTION_OUTCOME_TYPES = (
     "rejection_post_screen",
     "rejection_post_interview",
 )
+
+# feat/manual-application-status: the Applied tab keeps a card while its
+# resolved status is one of these (applied AND not terminal). ``accepted`` /
+# ``rejected`` fall outside → the card drops out of Applied.
+_APPLIED_TAB_STATUSES = ("applied", "interview", "offer")
+
+
+def gmail_rejection_exists() -> Any:
+    """Correlated EXISTS: a company-level Gmail rejection for this posting.
+
+    Company-level because ``outcome_event.job_posting_id`` is deferred-by-
+    design and uniformly NULL in production (gmail/backfill.py). Defensive
+    against NULL ``target_company_id`` via the explicit IS NOT NULL guard.
+    """
+    return (
+        select(OutcomeEvent.id)
+        .where(JobPosting.target_company_id.is_not(None))
+        .where(OutcomeEvent.target_company_id == JobPosting.target_company_id)
+        .where(OutcomeEvent.outcome_type.in_(_REJECTION_OUTCOME_TYPES))
+        .exists()
+    )
+
+
+def _entered_applied_exists() -> Any:
+    """Correlated EXISTS: a company-level Gmail application_confirmation."""
+    return (
+        select(OutcomeEvent.id)
+        .where(JobPosting.target_company_id.is_not(None))
+        .where(OutcomeEvent.target_company_id == JobPosting.target_company_id)
+        .where(OutcomeEvent.outcome_type == "application_confirmation")
+        .exists()
+    )
+
+
+def manual_status_scalar() -> Any:
+    """Correlated scalar: the operator's manual ``application_state.status``
+    for this posting, or NULL when no row exists."""
+    return (
+        select(ApplicationState.status)
+        .where(ApplicationState.job_posting_id == JobPosting.id)
+        .scalar_subquery()
+    )
+
+
+def resolved_status_expr(recent_pa: Any) -> Any:
+    """resolved_status driving the Applied / Rejected tabs.
+
+    ``COALESCE(manual application_state.status, computed company-level state)``
+    where the computed fallback is::
+
+        CASE WHEN entered_applied THEN 'applied'      -- posting_action=applied OR Gmail confirmation
+             WHEN gmail_rejected  THEN 'rejected'     -- company-level Gmail rejection
+             ELSE NULL END
+
+    Two deliberate ordering choices:
+
+      * Manual status is authoritative (COALESCE puts it first) — once the
+        operator presses a status button, Gmail signal is ignored.
+      * In the computed fallback, ``entered_applied`` is checked BEFORE
+        ``gmail_rejected`` so a company-level Gmail rejection never pulls an
+        applied-but-unresolved card out of Applied. There, the rejection is an
+        informational hint only (the manual button is the sole authoritative
+        mover). Gmail rejection surfaces a card as 'rejected' ONLY for roles
+        the operator never entered into Applied — the untouched-role fallback.
+
+    Needs ``recent_pa`` (the latest_action_lateral) joined onto the statement.
+    """
+    computed = case(
+        (or_(recent_pa.c.pa_action_type == "applied", _entered_applied_exists()), "applied"),
+        (gmail_rejection_exists(), "rejected"),
+        else_=None,
+    )
+    return func.coalesce(cast(manual_status_scalar(), Text), computed)
 
 
 @dataclass(frozen=True)
@@ -197,73 +271,31 @@ def build_view_parts(spec: PostingsViewSpec) -> PostingsQueryParts:
                     )
                 )
             elif s == "rejected":
-                # Bestiary (PR #50): cross-table state. EXISTS folds in
-                # without a join — no LATERAL added.
+                # feat/manual-application-status: the Rejected tab is now
+                # ``resolved_status == 'rejected'`` (see resolved_status_expr).
+                # Manual ``application_state.status='rejected'`` is authoritative;
+                # the company-level Gmail rejection (PR #50) survives as the
+                # fallback for untouched roles — folded into the resolved-status
+                # CASE so an applied-but-unresolved card with a Gmail rejection
+                # stays in Applied (Gmail is a hint there), not here.
                 #
-                # feat/surface-linked-outcomes: re-pointed from
-                # ``OutcomeEvent.job_posting_id == JobPosting.id`` to
-                # ``OutcomeEvent.target_company_id ==
-                # JobPosting.target_company_id``. The job_posting_id
-                # column is deferred-by-design (gmail/backfill.py:9-14)
-                # and uniformly NULL in production, so the old predicate
-                # matched zero rows. Company-level is the link that
-                # actually fires today.
-                #
-                # Asymmetry contract: this predicate runs ONLY when the
-                # operator explicitly asks for ``state=rejected``. The
-                # default Triage view (``state=triage``) does NOT include
-                # any rejection check, so a rejection at one role at a
-                # company never blunt-hides OTHER open roles at the same
-                # company from the default queue. The Rejected view is
-                # the opt-in surface; default Triage is unaffected.
-                #
-                # Defensive: when ``JobPosting.target_company_id IS NULL``
-                # the equality is NULL=… → NULL (untrue) under SQL three-
-                # valued logic, so a NULL posting never matches even if
-                # outcome_event has a row with NULL target. Belt + braces.
-                rejected_exists = (
-                    select(OutcomeEvent.id)
-                    .where(JobPosting.target_company_id.is_not(None))
-                    .where(OutcomeEvent.target_company_id == JobPosting.target_company_id)
-                    .where(OutcomeEvent.outcome_type.in_(_REJECTION_OUTCOME_TYPES))
-                    .exists()
-                )
-                state_clauses.append(rejected_exists)
+                # Asymmetry contract preserved: this predicate runs ONLY when the
+                # operator explicitly asks for ``state=rejected``. Default Triage
+                # never runs a rejection check, so a rejection at one role never
+                # blunt-hides OTHER open roles at the same company.
+                state_clauses.append(resolved_status_expr(recent_pa) == "rejected")
             elif s == "applied":
-                # feat/surface-linked-outcomes: union the operator's
-                # manual ``posting_action.action_type='applied'`` (the
-                # keyboard ``4`` key, per-posting) with the Gmail-derived
-                # ``application_confirmation`` outcome at company level.
-                #
-                # Asymmetry contract (same as rejected): this predicate
-                # runs ONLY when the operator explicitly asks for
-                # ``state=applied`` (the Applied page hook). The default
-                # Triage view is unaffected — an application_confirmation
-                # linked at a company does NOT blunt-hide other open
-                # roles at that company from default Triage. Manual ``4``
-                # remains the only mechanism that hides a posting from
-                # default Triage; Gmail signal only enriches the Applied
-                # page.
-                #
-                # Why company-level for the EXISTS half: outcome_event
-                # rows have ``job_posting_id`` uniformly NULL (deferred-
-                # by-design per gmail/backfill.py:9-14). Company-level is
-                # the only link that fires today. When per-posting outcome
-                # linkage ships later, this can tighten to posting-level
-                # for higher-precision Applied surfacing.
-                applied_at_company_exists = (
-                    select(OutcomeEvent.id)
-                    .where(JobPosting.target_company_id.is_not(None))
-                    .where(OutcomeEvent.target_company_id == JobPosting.target_company_id)
-                    .where(OutcomeEvent.outcome_type == "application_confirmation")
-                    .exists()
-                )
-                state_clauses.append(
-                    or_(
-                        recent_pa.c.pa_action_type == "applied",
-                        applied_at_company_exists,
-                    )
-                )
+                # feat/manual-application-status: the Applied tab is now
+                # ``resolved_status IN (applied, interview, offer)`` — applied
+                # AND not terminal. Entry into Applied is unchanged (manual
+                # posting_action=applied OR company-level Gmail
+                # application_confirmation, both folded into resolved_status);
+                # the manual lifecycle status governs whether a card STAYS or
+                # moves. Marking accepted/rejected drops the card out of Applied
+                # (resolved_status leaves the set) — this solves the removal
+                # problem. Default Triage is unaffected (this predicate only runs
+                # for state=applied).
+                state_clauses.append(resolved_status_expr(recent_pa).in_(_APPLIED_TAB_STATUSES))
             else:
                 state_clauses.append(recent_pa.c.pa_action_type == s)
         where_clauses.append(or_(*state_clauses) if state_clauses else sa_false())
