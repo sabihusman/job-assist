@@ -31,12 +31,17 @@ FANTASTIC_SOURCED_ATS = ("workday", "icims")
 
 
 async def list_fantastic_targets(session: AsyncSession) -> list[TargetCompany]:
-    """Curated Workday/iCIMS employers with a handle (the Apify-sourced set)."""
+    """Curated Workday/iCIMS employers the Apify path can source.
+
+    Requires a DOMAIN (Apify targets by ``domainFilter``), NOT an ats_handle —
+    so Capital One / John Hancock (NULL handle, never given a Workday tenant)
+    are included; the free Workday adapter can't crawl them, but Apify can.
+    """
     rows = await session.execute(
         select(TargetCompany)
         .where(TargetCompany.ats.in_(FANTASTIC_SOURCED_ATS))
         .where(TargetCompany.source == "curated")
-        .where(TargetCompany.ats_handle.is_not(None))
+        .where(TargetCompany.domain.is_not(None))
         .order_by(TargetCompany.name)
     )
     return list(rows.scalars().all())
@@ -73,8 +78,14 @@ async def ingest_curated_via_fantastic(
             # mismatch is ``ats`` is per-INSTANCE here (one class serves both
             # workday + icims employers) vs the protocol's ClassVar. Runtime is
             # identical — cast to quiet the variance check.
+            # Pass target_company=tc so the company link survives a NULL
+            # ats_handle (Capital One / John Hancock) — resolving by handle
+            # would drop the tier/company link for those.
             run = await service.ingest_source(
-                cast(Adapter, adapter), tc.ats_handle or tc.name, session
+                cast(Adapter, adapter),
+                tc.ats_handle or tc.domain or tc.name,
+                session,
+                target_company=tc,
             )
         results.append(
             {
@@ -94,3 +105,27 @@ async def ingest_curated_via_fantastic(
         total_new=sum(r["postings_new"] for r in results),
     )
     return {"employers": len(results), "results": results}
+
+
+async def probe_fantastic_domain(token: str, *, domain: str, limit: int = 5) -> dict[str, Any]:
+    """Diagnostic: an UNFILTERED Apify pull (no PM/PO title filter) for one
+    employer domain. Does NOT persist — returns the count + sample titles.
+
+    Tells "no PM/PO roles at this employer" (domain returns jobs unfiltered,
+    but none match the PM/PO filter) from "domain targeting is off" (domain
+    returns 0 even unfiltered) when the filtered ingest returns 0.
+    """
+    adapter = FantasticJobsAdapter(
+        organization=domain,
+        domain=domain,
+        ats="workday",  # irrelevant for the probe (no persist, no IngestRun)
+        token=token,
+        limit=limit,
+        title_filter=False,
+    )
+    async with adapter:
+        raws = await adapter.fetch_postings("probe")
+    titles = [
+        str(r.raw_payload.get("title") or "") for r in raws if isinstance(r.raw_payload, dict)
+    ]
+    return {"domain": domain, "count": len(raws), "sample_titles": titles[:limit]}

@@ -54,10 +54,17 @@ class IngestionService:
         session: AsyncSession,
         *,
         apply_title_prefilter: bool = False,
+        target_company: TargetCompany | None = None,
     ) -> IngestRun:
         """Ingest all postings for *handle* using *adapter* into *session*.
 
         Args:
+          target_company: When provided, the company link is taken from THIS
+            row instead of being resolved by ``ats_handle == handle``. The
+            Fantastic.jobs/Apify path uses it because those employers are
+            targeted by DOMAIN and may have a NULL ``ats_handle`` (Capital One,
+            John Hancock) — resolving by handle would lose the tier/company link.
+            Native adapters pass ``None`` → unchanged handle-based resolution.
           apply_title_prefilter: When True, postings whose
             ``adapter.peek_title(raw)`` fails the PM keep-list in
             ``adapters/title_filter.should_keep_title`` are dropped
@@ -89,10 +96,13 @@ class IngestionService:
 
         try:
             # ── Resolve canonical company name ────────────────────────────────
-            tc_row = await session.execute(
-                select(TargetCompany).where(TargetCompany.ats_handle == handle)
-            )
-            target_company = tc_row.scalar_one_or_none()
+            # When the caller didn't hand us the company (the native path),
+            # resolve it by ats_handle as before.
+            if target_company is None:
+                tc_row = await session.execute(
+                    select(TargetCompany).where(TargetCompany.ats_handle == handle)
+                )
+                target_company = tc_row.scalar_one_or_none()
             canonical_name: str = (
                 target_company.name if target_company else handle.replace("-", " ").title()
             )

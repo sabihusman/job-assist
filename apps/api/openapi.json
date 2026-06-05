@@ -176,6 +176,61 @@
         }
       }
     },
+    "/admin/ingest/fantastic/probe": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Probe Fantastic",
+        "description": "Diagnostic: an UNFILTERED Apify pull for one employer ``domain`` (no\nPM/PO title filter), low ``limit``. Returns count + sample titles and does\nNOT persist \u2014 use to tell \"no PM/PO roles at this employer\" from \"domain\ntargeting is off\" when the filtered ingest returns 0. 503 if the token is\nunset. ``limit`` capped at 50 (cost backstop).",
+        "operationId": "probe_fantastic_admin_ingest_fantastic_probe_post",
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 5,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Probe Fantastic Admin Ingest Fantastic Probe Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/postings/mark-stale": {
       "post": {
         "tags": [
