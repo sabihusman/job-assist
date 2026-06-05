@@ -115,6 +115,13 @@ class DivisionEmbedded(BaseModel):
     description: str | None
 
 
+# feat/manual-application-status: the manual lifecycle stage. ``None`` ==
+# the operator hasn't set a manual status (still governed by triage / Gmail
+# computed state). Wire vocabulary mirrors APPLICATION_STATUS_VALUES on the
+# ORM model.
+ResolvedStatus = Literal["applied", "interview", "offer", "accepted", "rejected"]
+
+
 class StateEmbedded(BaseModel):
     """Operator's current decision state on a posting (PR #31).
 
@@ -129,6 +136,18 @@ class StateEmbedded(BaseModel):
     reason: ActionReason | None
     snooze_until: datetime | None
     current_at: datetime | None
+    # feat/manual-application-status: the resolved lifecycle status that drives
+    # the Applied / Rejected tabs. resolved_status =
+    # COALESCE(manual application_state.status, computed company-level state).
+    # ``None`` when the posting is neither manually statused nor in the
+    # applied/rejected funnel. The Applied tab = resolved_status IN
+    # (applied, interview, offer); Rejected tab = resolved_status == rejected.
+    resolved_status: ResolvedStatus | None = None
+    # feat/manual-application-status: INFORMATIONAL only — True when a
+    # company-level Gmail rejection exists for this posting's company. The UI
+    # shows it as a hint ("Gmail saw a rejection from {company}"); it does NOT
+    # move the card (the manual status button is authoritative).
+    gmail_rejection_hint: bool = False
 
 
 class PostingActionItem(BaseModel):
@@ -267,6 +286,17 @@ class PostingStateRequest(BaseModel):
     # variant was sent. Only valid with action_type='applied' (the service
     # + DB CHECK enforce this). NULL/omitted = untagged.
     resume_version_id: uuid.UUID | None = None
+
+
+class ApplicationStatusUpdate(BaseModel):
+    """Body for ``PUT /postings/{id}/status`` (feat/manual-application-status).
+
+    The manual lifecycle stage. Pydantic rejects any value outside the five
+    lifecycle stages at the boundary with a 422; the DB CHECK constraint
+    (ck_application_state_status) is the backstop.
+    """
+
+    status: ResolvedStatus
 
 
 # ── PR #30b — stats response shapes ──────────────────────────────────────────
