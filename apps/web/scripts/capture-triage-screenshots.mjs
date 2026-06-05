@@ -153,21 +153,19 @@ async function run() {
     await mock(page);
     await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     await settle(page);
-    await page.screenshot({ path: `${OUT}/triage-list-${theme}.png`, fullPage: false });
 
-    // Scroll the ≤40 cards into view to show the gray low band + dim treatment.
-    if (theme === 'light') {
-      await page.getByText('Associate Product Analyst').scrollIntoViewIfNeeded().catch(() => {});
-      await page.waitForTimeout(400);
-      await page.screenshot({ path: `${OUT}/triage-list-low-scores.png`, fullPage: false });
-      await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
-      await page.waitForTimeout(300);
-    }
+    // EXPANDED-ON-SELECT: the page auto-selects the first card, so the detail
+    // panel is already at its wide (selected) width with content. Capture the
+    // zone separation + wide readable panel.
+    await page.screenshot({ path: `${OUT}/triage-expanded-${theme}.png`, fullPage: false });
 
-    // Open the top card to capture the restyled detail panel header.
-    await page.getByRole('button', { name: /open detail for Stripe/i }).first().click().catch(() => {});
-    await settle(page);
-    await page.screenshot({ path: `${OUT}/triage-detail-${theme}.png`, fullPage: false });
+    // NEUTRAL/COLLAPSED: deselect (close) → the panel animates back to its
+    // narrow resting width and the list reclaims the space. Wait past the
+    // ~300ms width transition before shooting.
+    await page.getByLabel('Close detail panel').click().catch(() => {});
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `${OUT}/triage-neutral-${theme}.png`, fullPage: false });
+
     await ctx.close();
     console.log(`captured ${theme}`);
   }

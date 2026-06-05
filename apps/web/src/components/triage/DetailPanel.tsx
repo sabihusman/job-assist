@@ -69,7 +69,17 @@ export function DetailPanel({
           clicking a card lower in the list rendered the panel above
           the viewport and forced a scroll-back to see details. */}
       <aside
-        className="sticky top-12 hidden h-[calc(100vh-3rem)] w-[460px] shrink-0 flex-col self-start border-l border-border bg-surface lg:flex"
+        data-expanded={selectedId !== null}
+        className={cn(
+          // Zone separation: a distinct frosted surface (bg-muted/60 +
+          // backdrop-blur), a heavier left border, and a soft left shadow so
+          // the panel reads as its own plane floating over the list.
+          'sticky top-12 hidden h-[calc(100vh-3rem)] shrink-0 flex-col self-start border-l-2 border-border-strong bg-muted/60 shadow-[-12px_0_28px_-18px_rgba(0,0,0,0.18)] backdrop-blur-sm lg:flex',
+          // Animated expand-on-select: a neutral resting width that grows when
+          // a role is selected and eases back on close. Honors reduced motion.
+          'transition-[width] duration-300 ease-in-out motion-reduce:transition-none',
+          selectedId !== null ? 'w-[600px]' : 'w-[380px]',
+        )}
         aria-label="Posting details"
       >
         {body}
