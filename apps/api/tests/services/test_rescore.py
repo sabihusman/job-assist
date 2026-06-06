@@ -73,13 +73,43 @@ async def test_rescore_updates_fit_score_version_and_timestamp(db_session: Any) 
     db_session.add(p)
     await db_session.commit()
 
-    rescored = await rescore_open_postings(db_session)
+    rescored, _changed = await rescore_open_postings(db_session)
     assert rescored >= 1
 
     await db_session.refresh(p)
     assert p.fit_score is not None
     assert p.scorer_version == SCORER_VERSION
     assert p.scored_at is not None
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_rescore_chunks_cover_all_rows_with_small_batch(db_session: Any) -> None:
+    """A batch_size smaller than the row count still re-scores EVERY open row
+    (fixed-memory pagination), and reports an accurate (rescored, changed)."""
+    tc = TargetCompany(
+        name=f"Co-{uuid.uuid4().hex[:6]}",
+        tier=1,
+        ats="greenhouse",
+        ats_handle=f"h-{uuid.uuid4().hex[:6]}",
+    )
+    db_session.add(tc)
+    await db_session.flush()
+    postings = [
+        _posting(target_company_id=tc.id, similarity_score=80, fit_score=None) for _ in range(5)
+    ]
+    db_session.add_all(postings)
+    await db_session.commit()
+
+    # batch_size=2 over 5 rows → 3 passes, all 5 covered.
+    rescored, changed = await rescore_open_postings(db_session, batch_size=2)
+    assert rescored == 5  # every open row, despite the small batch
+    assert changed == 5  # all went from NULL fit_score to a number
+
+    for p in postings:
+        await db_session.refresh(p)
+        assert p.fit_score is not None
+        assert p.scorer_version == SCORER_VERSION
 
 
 @_NEEDS_DB
