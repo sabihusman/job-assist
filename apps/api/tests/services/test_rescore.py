@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from sqlalchemy import select
 
 from job_assist.db.models import JobPosting, TargetCompany
 from job_assist.services.rescore import rescore_open_postings
@@ -76,10 +77,14 @@ async def test_rescore_updates_fit_score_version_and_timestamp(db_session: Any) 
     rescored, _changed = await rescore_open_postings(db_session)
     assert rescored >= 1
 
-    await db_session.refresh(p)
-    assert p.fit_score is not None
-    assert p.scorer_version == SCORER_VERSION
-    assert p.scored_at is not None
+    # rescore_open_postings expunges processed rows (fixed-memory pagination),
+    # so re-query fresh rather than refresh the now-detached reference.
+    refreshed = (
+        await db_session.execute(select(JobPosting).where(JobPosting.id == p.id))
+    ).scalar_one()
+    assert refreshed.fit_score is not None
+    assert refreshed.scorer_version == SCORER_VERSION
+    assert refreshed.scored_at is not None
 
 
 @_NEEDS_DB
@@ -102,14 +107,19 @@ async def test_rescore_chunks_cover_all_rows_with_small_batch(db_session: Any) -
     await db_session.commit()
 
     # batch_size=2 over 5 rows → 3 passes, all 5 covered.
+    ids = [p.id for p in postings]
     rescored, changed = await rescore_open_postings(db_session, batch_size=2)
     assert rescored == 5  # every open row, despite the small batch
     assert changed == 5  # all went from NULL fit_score to a number
 
-    for p in postings:
-        await db_session.refresh(p)
-        assert p.fit_score is not None
-        assert p.scorer_version == SCORER_VERSION
+    # Processed rows are expunged — re-query fresh.
+    refreshed = (
+        (await db_session.execute(select(JobPosting).where(JobPosting.id.in_(ids)))).scalars().all()
+    )
+    assert len(refreshed) == 5
+    for r in refreshed:
+        assert r.fit_score is not None
+        assert r.scorer_version == SCORER_VERSION
 
 
 @_NEEDS_DB
