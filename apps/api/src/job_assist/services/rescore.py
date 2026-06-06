@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from job_assist.db.models import JobPosting, OperatorProfile, TargetCompany
 from job_assist.services.scoring import SCORER_VERSION, score_posting
@@ -40,11 +41,17 @@ async def rescore_open_postings(session: AsyncSession) -> int:
 
     # Tier comes from target_company via OUTER JOIN — postings without a matched
     # company get NULL tier (the scorer maps that to a neutral 50).
+    #
+    # defer(jd_embedding): score_posting reads the small ``similarity_score``
+    # int, NOT the 768-float JD vector. Loading every open row's vector here
+    # (1000s of rows, 768 floats each) would balloon memory and time out the
+    # instance — defer it so the re-score stays light.
     rows = (
         await session.execute(
             select(JobPosting, TargetCompany.tier)
             .outerjoin(TargetCompany, JobPosting.target_company_id == TargetCompany.id)
             .where(JobPosting.closed_at.is_(None))
+            .options(defer(JobPosting.jd_embedding))
         )
     ).all()
 

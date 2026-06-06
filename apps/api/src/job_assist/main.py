@@ -1933,6 +1933,7 @@ async def score_sweep_endpoint(
     from datetime import UTC, datetime
 
     from sqlalchemy import case, func, select
+    from sqlalchemy.orm import defer
 
     from job_assist.db.models import JobPosting
     from job_assist.db.models.operator_profile import OperatorProfile
@@ -1952,12 +1953,18 @@ async def score_sweep_endpoint(
     # ── 1. Select candidates ─────────────────────────────────────────────
     # Tier comes from target_company via OUTER JOIN — postings without a
     # matched company get NULL tier, which the scorer maps to 50 (neutral).
+    #
+    # defer(jd_embedding): the scorer reads the small ``similarity_score`` int,
+    # not the 768-float JD vector. Loading the vector for every candidate row
+    # ballooned memory on a fully-embedded corpus and timed the sweep out —
+    # defer it so the sweep stays light.
     stmt = (
         select(JobPosting, TargetCompany.tier)
         .outerjoin(TargetCompany, JobPosting.target_company_id == TargetCompany.id)
         # Skip stale/closed postings (Bestiary 5.18) — no point scoring a
         # removed posting that won't surface in Triage anyway.
         .where(JobPosting.closed_at.is_(None))
+        .options(defer(JobPosting.jd_embedding))
     )
     if payload.only_unscored:
         stmt = stmt.where(JobPosting.fit_score.is_(None))
