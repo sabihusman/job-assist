@@ -78,17 +78,6 @@ def gmail_rejection_exists() -> Any:
     )
 
 
-def _entered_applied_exists() -> Any:
-    """Correlated EXISTS: a company-level Gmail application_confirmation."""
-    return (
-        select(OutcomeEvent.id)
-        .where(JobPosting.target_company_id.is_not(None))
-        .where(OutcomeEvent.target_company_id == JobPosting.target_company_id)
-        .where(OutcomeEvent.outcome_type == "application_confirmation")
-        .exists()
-    )
-
-
 def manual_status_scalar() -> Any:
     """Correlated scalar: the operator's manual ``application_state.status``
     for this posting, or NULL when no row exists."""
@@ -100,31 +89,35 @@ def manual_status_scalar() -> Any:
 
 
 def resolved_status_expr(recent_pa: Any) -> Any:
-    """resolved_status driving the Applied / Rejected tabs.
+    """resolved_status driving the Applied / Rejected tabs — POSTING-SPECIFIC.
 
-    ``COALESCE(manual application_state.status, computed company-level state)``
-    where the computed fallback is::
+    ``COALESCE(manual application_state.status, computed)`` where the computed
+    fallback is::
 
-        CASE WHEN entered_applied THEN 'applied'      -- posting_action=applied OR Gmail confirmation
-             WHEN gmail_rejected  THEN 'rejected'     -- company-level Gmail rejection
+        CASE WHEN recent_pa.pa_action_type == 'applied' THEN 'applied'
              ELSE NULL END
 
-    Two deliberate ordering choices:
+    Company-level Gmail signals are deliberately NOT folded in here. Every
+    ``outcome_event`` has ``job_posting_id IS NULL`` (gmail/backfill.py cannot
+    link an email to a specific posting yet), so a company-level
+    ``application_confirmation`` / rejection EXISTS matches EVERY posting at
+    that company — fanning one confirmation email out across all the company's
+    roles and dragging passed-and never-touched roles (unrelated SWE /
+    data-scientist postings) into Applied/Rejected. That was the bug: a role
+    you pressed Pass on, and roles you never saw, appeared in Applied because
+    the company had a single Gmail application-confirmation.
 
-      * Manual status is authoritative (COALESCE puts it first) — once the
-        operator presses a status button, Gmail signal is ignored.
-      * In the computed fallback, ``entered_applied`` is checked BEFORE
-        ``gmail_rejected`` so a company-level Gmail rejection never pulls an
-        applied-but-unresolved card out of Applied. There, the rejection is an
-        informational hint only (the manual button is the sole authoritative
-        mover). Gmail rejection surfaces a card as 'rejected' ONLY for roles
-        the operator never entered into Applied — the untouched-role fallback.
+    A role now enters Applied/Rejected ONLY via a posting-specific signal: the
+    operator's manual ``application_state`` (the StatusButtons, authoritative
+    via COALESCE) or an explicit ``posting_action='applied'`` on THAT role.
+    Gmail signals survive as INFORMATIONAL hints only — ``gmail_rejection_
+    exists()`` still drives the ``gmail_rejection_hint`` field — never as tab
+    membership.
 
     Needs ``recent_pa`` (the latest_action_lateral) joined onto the statement.
     """
     computed = case(
-        (or_(recent_pa.c.pa_action_type == "applied", _entered_applied_exists()), "applied"),
-        (gmail_rejection_exists(), "rejected"),
+        (recent_pa.c.pa_action_type == "applied", "applied"),
         else_=None,
     )
     return func.coalesce(cast(manual_status_scalar(), Text), computed)

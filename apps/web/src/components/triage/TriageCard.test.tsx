@@ -249,3 +249,54 @@ describe('TriageCard score-forward layout', () => {
     expect(within(toolbar).getAllByRole('button')).toHaveLength(4);
   });
 });
+
+// ── Quick-action → action dispatch mapping (regression lock) ────────────────
+//
+// A user reported "Pass" on the card sending roles to Applied. The card
+// wiring was actually correct (the real bug was a backend query), but a
+// future restyle could cross variant→onClick so the labeled "Pass" button
+// fires `applied`. These tests pin each card quick-action's label/hotkey to
+// the action it dispatches, so the mapping can never silently invert.
+describe('TriageCard quick-action dispatch mapping', () => {
+  const cases = [
+    { label: 'Interested · 1', dataAction: 'interested', kind: 'interested' },
+    { label: 'Applied · 3', dataAction: 'applied', kind: 'applied' },
+    { label: 'Snooze · 4', dataAction: 'snooze', kind: 'snoozed' },
+  ] as const;
+
+  test.each(cases)(
+    '"$label" dispatches { kind: "$kind" } (direct, no picker)',
+    async ({ label, dataAction, kind }) => {
+      const user = userEvent.setup();
+      const onAction = vi.fn();
+      render(
+        <ControlledTriageCard posting={makePosting()} isSelected={false} onAction={onAction} />,
+      );
+      const toolbar = screen.getByRole('toolbar', { name: /actions/i });
+      const btn = within(toolbar).getByLabelText(label);
+      expect(btn.getAttribute('data-action')).toBe(dataAction);
+      await user.click(btn);
+      expect(onAction).toHaveBeenCalledTimes(1);
+      expect(onAction).toHaveBeenCalledWith({ kind });
+    },
+  );
+
+  test('"Pass · 2" opens the reason picker and commits not_interested — NEVER applied', async () => {
+    const user = userEvent.setup();
+    const onAction = vi.fn();
+    render(<ControlledTriageCard posting={makePosting()} isSelected={false} onAction={onAction} />);
+    const toolbar = screen.getByRole('toolbar', { name: /actions/i });
+    const pass = within(toolbar).getByLabelText('Pass · 2');
+    expect(pass.getAttribute('data-action')).toBe('pass');
+
+    await user.click(pass);
+    // Pass alone must NOT dispatch any action — it opens the reason picker.
+    expect(onAction).not.toHaveBeenCalled();
+    expect(screen.getByText(/why not\?/i)).toBeInTheDocument();
+
+    // Picking a reason commits not_interested (with the reason) — not applied.
+    await user.click(screen.getByText('Wrong role'));
+    expect(onAction).toHaveBeenCalledTimes(1);
+    expect(onAction).toHaveBeenCalledWith({ kind: 'not_interested', reason: 'wrong_role' });
+  });
+});

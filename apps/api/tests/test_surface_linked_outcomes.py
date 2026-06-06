@@ -1,28 +1,27 @@
-"""DB-gated tests for the surface re-point (feat/surface-linked-outcomes).
+"""DB-gated tests for Applied/Rejected membership (fix/applied-tab-fanout).
 
-Three load-bearing contracts pinned here:
+Membership is POSTING-SPECIFIC. The earlier "surface-linked-outcomes" design
+unioned in company-level Gmail signals, but every ``outcome_event`` has
+``job_posting_id IS NULL`` (we can't link an email to a posting), so a single
+``application_confirmation`` / rejection email fanned out across EVERY posting
+at the company — dragging passed and never-touched roles (unrelated SWE /
+data-scientist postings) into Applied/Rejected. The contracts now pinned:
 
-  1. ``state=applied`` unions the manual posting_action='applied' signal
-     with the Gmail-derived ``application_confirmation`` outcome at
-     company level. Manual-applied OR company-confirmed both surface on
-     the Applied page.
+  1. ``state=applied`` surfaces a posting ONLY via a posting-specific signal:
+     manual ``application_state`` (StatusButtons) OR ``posting_action='applied'``
+     on THAT role. A company-level ``application_confirmation`` alone does NOT
+     surface the company's other roles.
 
-  2. ``state=rejected`` re-points from the always-NULL job_posting_id
-     to ``target_company_id``. Postings at a company that has a
-     rejection outcome surface on the explicit Rejected view.
+  2. ``state=rejected`` surfaces a posting ONLY via a posting-specific manual
+     ``application_state='rejected'``. A company-level rejection outcome is an
+     informational hint (``gmail_rejection_hint``), never tab membership.
 
-  3. **Critical**: the default Triage view (``state=triage``) is
-     **byte-identical to main**. Neither application_confirmation nor
-     rejection outcomes at a company hide other open postings at that
-     company from the default Best Fit queue. The MeridianLink
-     scenario from the PR brief pins this directly: 4 open PM roles +
-     1 application_confirmation + 1 rejection_post_screen at the same
-     company → all 4 open roles remain in default Triage.
+  3. **Critical (unchanged)**: the default Triage view (``state=triage``) is
+     **byte-identical to main** — company-linked outcomes never modify it. The
+     MeridianLink scenario pins this: 4 open PM roles + 1 application_
+     confirmation + 1 rejection_post_screen → all 4 remain in default Triage.
 
-Tests are DB-gated (need TEST_DATABASE_URL); run on CI's postgres
-service. The state predicates can only be exercised end-to-end against
-real SQL — pure tests on ``build_view_parts`` would only confirm the
-WHERE-clause count, not the runtime semantics.
+Tests are DB-gated (need TEST_DATABASE_URL); run on CI's postgres service.
 """
 
 from __future__ import annotations
@@ -152,12 +151,17 @@ async def test_applied_includes_manual_action(db_session: Any) -> None:
 
 @_NEEDS_DB
 @pytest.mark.asyncio
-async def test_applied_includes_company_confirmed_without_manual_action(
+async def test_applied_excludes_company_confirmed_without_posting_signal(
     db_session: Any,
 ) -> None:
-    """A posting with NO manual action surfaces on Applied when there's
-    an ``application_confirmation`` outcome at its target_company. The
-    Gmail-derived signal is the new half of the union."""
+    """A posting with NO posting-specific signal does NOT surface on Applied
+    just because its company has an ``application_confirmation`` outcome.
+
+    This is the fan-out fix: the company-level Gmail confirmation can't be
+    linked to a specific posting (job_posting_id is NULL), so unioning it in
+    dragged every sibling role — passed and never-touched — into Applied. Only
+    a posting-specific applied signal (manual status / posting_action=applied)
+    counts now."""
     from job_assist.main import app
 
     tc = _company()
@@ -177,7 +181,7 @@ async def test_applied_includes_company_confirmed_without_manual_action(
         items = await _list_postings(client, state="applied")
 
     titles = {item["role"]["title"] for item in items}
-    assert p.normalized_title in titles
+    assert p.normalized_title not in titles
 
 
 @_NEEDS_DB
@@ -207,12 +211,14 @@ async def test_applied_excludes_posting_with_no_signals(db_session: Any) -> None
 
 @_NEEDS_DB
 @pytest.mark.asyncio
-async def test_rejected_surfaces_when_company_has_rejection_outcome(
+async def test_rejected_excludes_company_rejection_without_manual_status(
     db_session: Any,
 ) -> None:
-    """A posting at a company with a linked rejection_* outcome surfaces
-    on the explicit Rejected view. The post-PR predicate joins via
-    target_company_id (re-pointed from the always-NULL job_posting_id)."""
+    """A posting at a company with a linked rejection_* outcome does NOT
+    surface on the explicit Rejected view absent a posting-specific manual
+    status. Same fan-out fix as Applied: the company-level rejection is a
+    hint (``gmail_rejection_hint``), not membership — otherwise one rejection
+    email would tag every role at the company."""
     from job_assist.main import app
 
     tc = _company()
@@ -232,7 +238,7 @@ async def test_rejected_surfaces_when_company_has_rejection_outcome(
         items = await _list_postings(client, state="rejected")
 
     titles = {item["role"]["title"] for item in items}
-    assert p.normalized_title in titles
+    assert p.normalized_title not in titles
 
 
 @_NEEDS_DB
@@ -337,14 +343,14 @@ async def test_meridianlink_scenario_open_roles_remain_in_default_triage(
 
 @_NEEDS_DB
 @pytest.mark.asyncio
-async def test_meridianlink_scenario_applied_view_includes_company_roles(
+async def test_meridianlink_scenario_applied_view_excludes_company_roles(
     db_session: Any,
 ) -> None:
-    """Counterpart to the test above: the same 4 MeridianLink roles
-    DO surface on the explicit Applied view because the company has a
-    linked application_confirmation. The Gmail signal is visible where
-    it's supposed to be (Applied page) and silent where it's supposed to
-    be (default Triage)."""
+    """Counterpart to the test above: the 4 untouched MeridianLink roles do
+    NOT surface on the Applied view from the company's lone application_
+    confirmation. This is the user-reported bug — a single confirmation email
+    fanned a company's whole role list (incl. passed and unrelated SWE roles)
+    into Applied. Membership requires a posting-specific signal now."""
     from job_assist.main import app
 
     tc = _company("MeridianLink-Test")
@@ -363,4 +369,4 @@ async def test_meridianlink_scenario_applied_view_includes_company_roles(
 
     surfaced_titles = {item["role"]["title"] for item in items}
     for title in titles:
-        assert title.lower() in surfaced_titles
+        assert title.lower() not in surfaced_titles
