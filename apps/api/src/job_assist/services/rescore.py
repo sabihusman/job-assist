@@ -42,16 +42,21 @@ async def rescore_open_postings(session: AsyncSession) -> int:
     # Tier comes from target_company via OUTER JOIN — postings without a matched
     # company get NULL tier (the scorer maps that to a neutral 50).
     #
-    # defer(jd_embedding): score_posting reads the small ``similarity_score``
-    # int, NOT the 768-float JD vector. Loading every open row's vector here
-    # (1000s of rows, 768 floats each) would balloon memory and time out the
-    # instance — defer it so the re-score stays light.
+    # Defer the heavy columns the scorer never reads: score_posting needs only
+    # small structured fields + the ``similarity_score`` int. Loading the full
+    # JD text + the 768-float JD vector + the JD summary for every open row
+    # (1000s of rows) balloons instance memory and OOMs the worker — defer them
+    # so the re-score payload stays tiny. Everything else loads (no N+1).
     rows = (
         await session.execute(
             select(JobPosting, TargetCompany.tier)
             .outerjoin(TargetCompany, JobPosting.target_company_id == TargetCompany.id)
             .where(JobPosting.closed_at.is_(None))
-            .options(defer(JobPosting.jd_embedding))
+            .options(
+                defer(JobPosting.jd_text),
+                defer(JobPosting.jd_embedding),
+                defer(JobPosting.jd_summary_markdown),
+            )
         )
     ).all()
 

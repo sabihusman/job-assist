@@ -1954,17 +1954,23 @@ async def score_sweep_endpoint(
     # Tier comes from target_company via OUTER JOIN — postings without a
     # matched company get NULL tier, which the scorer maps to 50 (neutral).
     #
-    # defer(jd_embedding): the scorer reads the small ``similarity_score`` int,
-    # not the 768-float JD vector. Loading the vector for every candidate row
-    # ballooned memory on a fully-embedded corpus and timed the sweep out —
-    # defer it so the sweep stays light.
+    # Defer the heavy columns the scorer never reads (full JD text + 768-float
+    # JD vector + JD summary). The scorer needs only small structured fields +
+    # the ``similarity_score`` int; loading the JD text/vector for every
+    # candidate row ballooned memory on a fully-embedded corpus and OOMed the
+    # worker. Deferring them keeps the sweep light (everything else loads — no
+    # N+1).
     stmt = (
         select(JobPosting, TargetCompany.tier)
         .outerjoin(TargetCompany, JobPosting.target_company_id == TargetCompany.id)
         # Skip stale/closed postings (Bestiary 5.18) — no point scoring a
         # removed posting that won't surface in Triage anyway.
         .where(JobPosting.closed_at.is_(None))
-        .options(defer(JobPosting.jd_embedding))
+        .options(
+            defer(JobPosting.jd_text),
+            defer(JobPosting.jd_embedding),
+            defer(JobPosting.jd_summary_markdown),
+        )
     )
     if payload.only_unscored:
         stmt = stmt.where(JobPosting.fit_score.is_(None))
