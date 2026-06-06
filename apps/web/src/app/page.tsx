@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { AppShell } from '@/components/chrome/AppShell';
@@ -148,12 +148,18 @@ function TriagePageInner() {
     }
   }, [items.length, selectedIndex]);
 
-  // Re-select index 0 when a fresh filter set loads the first time. We
-  // don't always auto-select on data change to avoid yanking focus away
-  // from a card the user is mid-action on.
+  // Auto-select the first row ONCE, when data first arrives, so the operator
+  // lands on a populated detail view and can J/K immediately. A ref latch
+  // (not a ``selectedIndex === null`` re-trigger) so an explicit close/Escape
+  // deselects and STAYS neutral — the detail panel then animates back to its
+  // resting width instead of snapping straight back to row 0.
   const hasData = items.length > 0;
+  const didAutoSelectRef = useRef(false);
   useEffect(() => {
-    if (hasData && selectedIndex === null) setSelectedIndex(0);
+    if (hasData && selectedIndex === null && !didAutoSelectRef.current) {
+      didAutoSelectRef.current = true;
+      setSelectedIndex(0);
+    }
   }, [hasData, selectedIndex]);
 
   // Keyboard
@@ -357,7 +363,9 @@ function TriagePageInner() {
 
 function PageFallback() {
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-4 px-6 py-4">
+    // Matches the loaded view's capped+centered list column so first paint
+    // doesn't jump width when the Suspense boundary resolves.
+    <div className="mx-auto flex w-full min-w-0 max-w-3xl flex-1 flex-col gap-4 px-6 py-4">
       <div className="h-6 w-64 animate-pulse rounded bg-surface-2" />
       <div className="h-20 animate-pulse rounded-md border border-border bg-surface-2" />
       <LoadingSkeleton />
@@ -411,69 +419,76 @@ function MainColumn({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-4 px-6 py-4">
-      {companyFilterActive && (
-        // PR #71: scoped-to-one-company indicator. Clicking the × strips
-        // ``target_company_id`` from the URL and lands back on the full
-        // Triage queue. Generic copy (no company-name lookup) keeps the
-        // scope tight — operator knows what they clicked.
-        <div className="flex items-center gap-2">
-          <span
-            data-testid="company-filter-pill"
-            className="inline-flex h-6 items-center gap-2 rounded-full border border-border bg-accent/40 px-2 font-mono text-[11px] text-foreground"
-          >
-            Filtered to one company
-            <button
-              type="button"
-              aria-label="Clear company filter"
-              onClick={onClearCompanyFilter}
-              className="inline-flex h-4 w-4 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+    // Zone separation: the list column is the lightest plane (bg-background),
+    // distinct from the recessed sidebar and the frosted detail panel.
+    <div className="flex min-w-0 flex-1 flex-col bg-background">
+      {/* Width rebalance: cap + center the list content so cards fit their
+          content (no dead whitespace band stretching to the border) and the
+          reclaimed width goes to the detail panel. */}
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-6 py-4">
+        {companyFilterActive && (
+          // PR #71: scoped-to-one-company indicator. Clicking the × strips
+          // ``target_company_id`` from the URL and lands back on the full
+          // Triage queue. Generic copy (no company-name lookup) keeps the
+          // scope tight — operator knows what they clicked.
+          <div className="flex items-center gap-2">
+            <span
+              data-testid="company-filter-pill"
+              className="inline-flex h-6 items-center gap-2 rounded-full border border-border bg-accent/40 px-2 font-mono text-[11px] text-foreground"
             >
-              ×
-            </button>
-          </span>
-        </div>
-      )}
-      <FilterRow showing={showing} total={total} />
-      <CalibrationCard />
-
-      {error ? (
-        <section className="rounded-md border border-negative/40 bg-negative/5 p-4">
-          <h2 className="text-sm font-semibold text-negative">Couldn&apos;t load postings.</h2>
-          <p className="mt-1 text-[13px] text-muted-foreground">{error}</p>
-          <button
-            type="button"
-            onClick={onRetry}
-            className="mt-3 inline-flex h-8 items-center rounded-md border border-border bg-surface px-3 text-sm hover:bg-accent"
-          >
-            Retry
-          </button>
-        </section>
-      ) : loading ? (
-        <LoadingSkeleton />
-      ) : empty ? (
-        // PR 2: migrated from a local 11-line ad-hoc EmptyState to the
-        // PR #77 shared primitive. Same testId so existing E2E and
-        // unit assertions still find it.
-        <EmptyState
-          testId="empty-state"
-          title="No postings match your filters."
-          description="Try removing some filters or come back tomorrow."
-          action={
-            onResetFilters && (
+              Filtered to one company
               <button
                 type="button"
-                onClick={onResetFilters}
-                className="inline-flex h-8 items-center rounded-md border border-border bg-surface px-3 text-sm hover:bg-accent"
+                aria-label="Clear company filter"
+                onClick={onClearCompanyFilter}
+                className="inline-flex h-4 w-4 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
               >
-                Reset filters
+                ×
               </button>
-            )
-          }
-        />
-      ) : (
-        children
-      )}
+            </span>
+          </div>
+        )}
+        <FilterRow showing={showing} total={total} />
+        <CalibrationCard />
+
+        {error ? (
+          <section className="rounded-md border border-negative/40 bg-negative/5 p-4">
+            <h2 className="text-sm font-semibold text-negative">Couldn&apos;t load postings.</h2>
+            <p className="mt-1 text-[13px] text-muted-foreground">{error}</p>
+            <button
+              type="button"
+              onClick={onRetry}
+              className="mt-3 inline-flex h-8 items-center rounded-md border border-border bg-surface px-3 text-sm hover:bg-accent"
+            >
+              Retry
+            </button>
+          </section>
+        ) : loading ? (
+          <LoadingSkeleton />
+        ) : empty ? (
+          // PR 2: migrated from a local 11-line ad-hoc EmptyState to the
+          // PR #77 shared primitive. Same testId so existing E2E and
+          // unit assertions still find it.
+          <EmptyState
+            testId="empty-state"
+            title="No postings match your filters."
+            description="Try removing some filters or come back tomorrow."
+            action={
+              onResetFilters && (
+                <button
+                  type="button"
+                  onClick={onResetFilters}
+                  className="inline-flex h-8 items-center rounded-md border border-border bg-surface px-3 text-sm hover:bg-accent"
+                >
+                  Reset filters
+                </button>
+              )
+            }
+          />
+        ) : (
+          children
+        )}
+      </div>
     </div>
   );
 }
