@@ -339,6 +339,19 @@ async def sweep_embeddings(session: AsyncSession, limit: int = 100) -> SweepSumm
         except Exception as exc:
             await session.rollback()
             logger.warning("embeddings.recalibrate_failed", extra={"error": str(exc)[:300]})
+        else:
+            # slice 2b: similarity_score just changed, so the scorer's
+            # semantic_fit feature is stale — re-score open postings so
+            # fit_score reflects the new blend without a manual score sweep.
+            # recalibrate_similarity committed above, so a re-score failure
+            # here rolls back only its own work, not the calibration.
+            try:
+                from job_assist.services.rescore import rescore_open_postings
+
+                await rescore_open_postings(session)
+            except Exception as exc:
+                await session.rollback()
+                logger.warning("embeddings.rescore_failed", extra={"error": str(exc)[:300]})
 
     return summary
 

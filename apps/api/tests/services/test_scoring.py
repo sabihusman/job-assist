@@ -30,6 +30,7 @@ from job_assist.services.scoring import (
     score_posting,
     score_role_family,
     score_salary,
+    score_semantic_fit,
     score_seniority,
     score_tier,
 )
@@ -42,10 +43,10 @@ def test_scorer_version_is_non_empty() -> None:
     assert isinstance(SCORER_VERSION, str)
 
 
-def test_scorer_version_is_v1() -> None:
+def test_scorer_version_is_v2_semantic() -> None:
     """If the algorithm changes, bump the version string. This test fires
     when someone forgets the bump."""
-    assert SCORER_VERSION == "v1_heuristic"
+    assert SCORER_VERSION == "v2_semantic"
 
 
 def test_preferred_and_adjacent_families_are_disjoint() -> None:
@@ -439,9 +440,9 @@ def test_score_posting_clamps_to_0_100() -> None:
     assert 0 <= score <= 100
 
 
-def test_score_breakdown_returns_five_features_plus_flag() -> None:
-    """The debug breakdown surfaces the five named numeric features plus
-    the ``disguised_senior`` boolean flag (Slice: career-changer cap)."""
+def test_score_breakdown_returns_six_features_plus_flag() -> None:
+    """The debug breakdown surfaces the six named numeric features plus
+    the ``disguised_senior`` boolean flag (slice 2b adds ``semantic_fit``)."""
     posting = _make_posting()
     profile = _make_profile()
     parts = score_breakdown(posting, profile, tier=1)
@@ -451,32 +452,50 @@ def test_score_breakdown_returns_five_features_plus_flag() -> None:
         "salary",
         "tier",
         "geo",
+        "semantic_fit",
         "disguised_senior",
     }
-    # The five weighted features are 0-100 ints.
+    # The five structured features are 0-100 ints.
     for key in ("role_family", "seniority", "salary", "tier", "geo"):
         assert isinstance(parts[key], int)
         assert 0 <= parts[key] <= 100
+    # semantic_fit is None until the row is embedded + calibrated (the fixture
+    # has no similarity_score), otherwise a 0-100 int.
+    assert parts["semantic_fit"] is None or (
+        isinstance(parts["semantic_fit"], int) and 0 <= int(parts["semantic_fit"]) <= 100
+    )
     # The flag is a bool, not a weighted score.
     assert isinstance(parts["disguised_senior"], bool)
 
 
 def test_score_breakdown_matches_composite_via_weighted_sum() -> None:
-    """The composite must equal round(weighted_sum_of_breakdown). Locks
-    the breakdown function against drift from score_posting."""
+    """The composite must equal the renormalized weighted MEAN of the
+    breakdown over the AVAILABLE features. Locks the breakdown function
+    against drift from score_posting (no cap fires for this clean PM fixture)."""
     posting = _make_posting()
     profile = _make_profile()
     parts = score_breakdown(posting, profile, tier=2)
     composite = score_posting(posting, profile, tier=2)
-    # Weights from the scoring module; this assertion treats them as
-    # an external contract — if the weights change, this test fires.
-    weighted = (
-        parts["role_family"] * 25
-        + parts["seniority"] * 25
-        + parts["salary"] * 15
-        + parts["tier"] * 15
-        + parts["geo"] * 20
-    ) / 100.0
+    # Weights from the scoring module, treated as an external contract — if the
+    # weights change, this test fires. semantic_fit is omitted + renormalized
+    # when absent (no similarity_score on the fixture).
+    weights = {
+        "role_family": 20,
+        "seniority": 20,
+        "salary": 15,
+        "tier": 10,
+        "geo": 15,
+        "semantic_fit": 20,
+    }
+    acc = 0.0
+    total = 0
+    for key, weight in weights.items():
+        value = parts[key]
+        if value is None:
+            continue
+        acc += int(value) * weight
+        total += weight
+    weighted = acc / total if total else 0.0
     assert composite == round(weighted)
 
 
@@ -664,3 +683,87 @@ def test_breakdown_surfaces_disguised_senior_flag() -> None:
     )
     assert score_breakdown(flagged, profile, tier=1)["disguised_senior"] is True
     assert score_breakdown(clean, profile, tier=1)["disguised_senior"] is False
+
+
+# ── semantic_fit feature (slice 2b) ──────────────────────────────────────────
+
+
+def test_score_semantic_fit_passthrough_and_clamp() -> None:
+    """semantic_fit reads the precomputed 0-100 similarity_score; None stays
+    None (absent), out-of-range values clamp into [0, 100]."""
+    assert score_semantic_fit(None) is None
+    assert score_semantic_fit(0) == 0
+    assert score_semantic_fit(50) == 50
+    assert score_semantic_fit(100) == 100
+    # Defensive clamp (similarity_score should already be 0-100).
+    assert score_semantic_fit(150) == 100
+    assert score_semantic_fit(-5) == 0
+
+
+def test_disguised_senior_floor_is_175k() -> None:
+    """The disguised-senior cap fires at a $175k floor (retuned from $180k to
+    match the operator's profile)."""
+    profile = _make_profile()
+    # pm-seniority product_management at $175k floor → flagged + capped at 55.
+    at_floor = _make_posting(
+        role_family=RoleFamily.product_management.value,
+        seniority_level=SeniorityLevel.pm.value,
+        salary_min=175_000,
+        salary_max=210_000,
+        salary_currency="USD",
+    )
+    assert is_disguised_senior(at_floor) is True
+    assert score_posting(at_floor, profile, tier=1) <= 55
+    # Just under the floor → not flagged.
+    below = _make_posting(
+        role_family=RoleFamily.product_management.value,
+        seniority_level=SeniorityLevel.pm.value,
+        salary_min=174_000,
+        salary_max=210_000,
+        salary_currency="USD",
+    )
+    assert is_disguised_senior(below) is False
+
+
+def test_semantic_fit_omitted_when_absent_renormalizes() -> None:
+    """A posting with no similarity_score scores on the structured five,
+    renormalized — semantic_fit contributes nothing (no fake signal)."""
+    profile = _make_profile()
+    posting = _make_posting(similarity_score=None)
+    parts = score_breakdown(posting, profile, tier=2)
+    assert parts["semantic_fit"] is None
+    structured = {"role_family": 20, "seniority": 20, "salary": 15, "tier": 10, "geo": 15}
+    weighted = sum(int(parts[k]) * w for k, w in structured.items()) / sum(structured.values())
+    assert score_posting(posting, profile, tier=2) == round(weighted)
+
+
+def test_semantic_fit_blends_in_and_is_directional() -> None:
+    """When similarity_score is present it joins the composite at 20%. Use a
+    MID-strength PM posting (low tier/geo/salary) so the blend can visibly move
+    the score both above and below the absent baseline — a maxed-out fixture
+    would clamp at 100 and hide the effect."""
+    profile = _make_profile()
+    base: dict[str, Any] = {
+        "role_family": RoleFamily.product_management.value,  # passes the gate
+        "seniority_level": SeniorityLevel.pm.value,
+        "salary_min": 80_000,
+        "salary_max": 100_000,
+        "salary_currency": "USD",
+        "locations_normalized": [{"city": "Nowhere"}],  # geo miss
+    }
+    absent = score_posting(_make_posting(similarity_score=None, **base), profile, tier=4)
+    high = score_posting(_make_posting(similarity_score=100, **base), profile, tier=4)
+    low = score_posting(_make_posting(similarity_score=0, **base), profile, tier=4)
+    assert low < absent < high
+
+
+def test_role_family_gate_still_caps_at_40_despite_high_semantic_fit() -> None:
+    """The hard role_family gate is preserved: a non-PM role with a perfect
+    semantic_fit still can't exceed 40 (slice 2b must not breach the gate)."""
+    profile = _make_profile()
+    non_pm = _make_posting(
+        role_family=RoleFamily.program_management.value,
+        seniority_level=SeniorityLevel.unknown.value,
+        similarity_score=100,
+    )
+    assert score_posting(non_pm, profile, tier=1) <= 40

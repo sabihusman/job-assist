@@ -62,7 +62,7 @@ logger = logging.getLogger(__name__)
 
 # ── Version / model constants ─────────────────────────────────────────────────
 
-CLASSIFIER_VERSION = "gemini-flash-lite-v3"
+CLASSIFIER_VERSION = "gemini-flash-lite-v4"
 _MODEL_NAME = "gemini-2.5-flash-lite"
 
 # Valid enum values — kept in sync with db/enums.py. The defensive parser
@@ -203,16 +203,57 @@ OUTPUT FORMAT — respond ONLY with this JSON, no prose:
 # ── Prompt builder ────────────────────────────────────────────────────────────
 
 
-def build_classify_prompt(title: str, jd_text: str) -> str:
+def build_profile_context(
+    looking_for_text: str | None,
+    role_keywords: list[str] | None,
+) -> str | None:
+    """Build the operator-context block from the profile's free-form targets.
+
+    DISAMBIGUATION context only — it nudges genuinely borderline titles toward
+    the operator's stated domain. It must NOT override the precision-first
+    discriminator or be used to suppress a role into the wrong family
+    (preferences belong in the scorer, where the role_family cap-at-40 already
+    ranks down non-PM families). Returns ``None`` when the profile carries no
+    text/keywords, so the prompt is byte-identical to the no-profile path.
+    """
+    text = (looking_for_text or "").strip()
+    kws = [k.strip() for k in (role_keywords or []) if k and k.strip()]
+    if not text and not kws:
+        return None
+    lines: list[str] = []
+    if text:
+        # Bound the injected text so token cost stays predictable.
+        lines.append(f"Targets: {text[:600]}")
+    if kws:
+        lines.append(f"Keywords: {', '.join(kws)}")
+    return "\n".join(lines)
+
+
+def build_classify_prompt(
+    title: str,
+    jd_text: str,
+    profile_context: str | None = None,
+) -> str:
     """Build the user-turn message for a classify call.
 
-    Kept as a pure function so unit tests can assert the title and
-    JD-text appear in the prompt without needing a Gemini call.
+    Kept as a pure function so unit tests can assert the title, JD-text, and
+    (when present) the operator context appear in the prompt without needing a
+    Gemini call.
     """
     # Truncate JD to keep token cost bounded.  The first 3000 chars
     # carry essentially all the signal needed for family + seniority.
     jd_snippet = (jd_text or "").strip()[:3000]
-    return f"Title: {title.strip()}\n\nJob description:\n{jd_snippet}"
+    base = f"Title: {title.strip()}\n\nJob description:\n{jd_snippet}"
+    if not profile_context:
+        return base
+    # Disambiguation only — never an override or a suppression instruction.
+    return (
+        f"{base}\n\n"
+        "OPERATOR CONTEXT (use ONLY to disambiguate genuinely borderline titles "
+        "toward the operator's domain; do NOT override the discriminator, force "
+        "a PM bucket, or suppress a role into the wrong family — apply the same "
+        f"taxonomy):\n{profile_context}"
+    )
 
 
 # ── Defensive coerce ──────────────────────────────────────────────────────────
@@ -253,6 +294,7 @@ async def classify_posting(
     *,
     api_key: str | None = None,
     model: str | None = None,
+    profile_context: str | None = None,
 ) -> tuple[str, str]:
     """Call Gemini to classify one posting.
 
@@ -276,7 +318,7 @@ async def classify_posting(
         raise RuntimeError("gemini_api_key is unset — cannot classify posting")
 
     used_model = model or _MODEL_NAME
-    user_message = build_classify_prompt(title, jd_text)
+    user_message = build_classify_prompt(title, jd_text, profile_context)
 
     client = genai.Client(api_key=key)
 
