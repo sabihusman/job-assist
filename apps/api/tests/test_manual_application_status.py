@@ -322,10 +322,17 @@ async def test_gmail_rejection_on_applied_card_is_hint_not_mover(db_session: Any
 
 @_NEEDS_DB
 @pytest.mark.asyncio
-async def test_gmail_rejection_fallback_for_untouched_role(db_session: Any) -> None:
+async def test_gmail_rejection_untouched_role_is_hint_only_not_rejected(db_session: Any) -> None:
     """An UNTOUCHED role (no posting_action, no manual status) at a company
-    with a Gmail rejection still surfaces on Rejected — the existing fallback
-    is preserved via the resolved-status computed branch."""
+    with a Gmail rejection does NOT surface on Rejected.
+
+    Company-level Gmail signals can't be linked to a specific posting
+    (outcome_event.job_posting_id is always NULL), so treating them as tab
+    membership fanned them across every role at the company — passed and
+    never-touched roles included. Posting-specific fix: the Gmail rejection
+    is now an INFORMATIONAL hint only (gmail_rejection_hint=True), never a
+    mover. resolved_status stays NULL until the operator manually statuses it.
+    """
     tc = _company()
     db_session.add(tc)
     await db_session.flush()
@@ -339,9 +346,11 @@ async def test_gmail_rejection_fallback_for_untouched_role(db_session: Any) -> N
         async with ac:
             detail = (await ac.get(f"/postings/{p.id}")).json()
             title = detail["role"]["title"]
-            assert detail["state"]["resolved_status"] == "rejected"
+            # Hint surfaces, but membership does NOT.
+            assert detail["state"]["resolved_status"] is None
             assert detail["state"]["gmail_rejection_hint"] is True
-            assert title in await _list_titles(ac, state="rejected")
+            assert title not in await _list_titles(ac, state="rejected")
+            assert title not in await _list_titles(ac, state="applied")
     finally:
         await _drop_override()
 

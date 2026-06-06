@@ -317,32 +317,29 @@ async def test_passed_surfaces_reason_inline(db_session: Any) -> None:
 
 @_NEEDS_DB
 @pytest.mark.asyncio
-async def test_rejected_matches_any_rejection_outcome_type(db_session: Any) -> None:
-    """Postings at a company with ANY rejection_* outcome surface in /rejected.
+async def test_rejected_excludes_untouched_company_rejections(db_session: Any) -> None:
+    """Company-level rejection outcomes do NOT surface untouched postings in
+    /rejected (fix/applied-tab-fanout).
 
-    Three rejection outcome types are valid per the explicit IN list:
-    rejection_pre_screen, rejection_post_screen, rejection_post_interview.
-
-    feat/surface-linked-outcomes: the predicate joins via
-    ``OutcomeEvent.target_company_id == JobPosting.target_company_id``
-    (re-pointed from the always-NULL ``job_posting_id``). Test uses a
-    distinct company per outcome type so each can surface or be excluded
-    independently.
+    ``outcome_event.job_posting_id`` is always NULL, so a company-level
+    rejection (any of the three rejection_* types) would otherwise tag EVERY
+    role at the company — passed and never-touched alike. Membership is now
+    posting-specific (manual ``application_state='rejected'``); the Gmail
+    rejection is an informational hint only. So none of these untouched
+    postings appear.
     """
     co_pre = _company("Co-Pre")
     co_post = _company("Co-Post")
     co_interview = _company("Co-Interview")
-    co_none = _company("Co-NonRejection")
-    db_session.add_all([co_pre, co_post, co_interview, co_none])
+    db_session.add_all([co_pre, co_post, co_interview])
     await db_session.flush()
 
     jp_pre = _posting(target_company_id=co_pre.id)
     jp_post = _posting(target_company_id=co_post.id)
     jp_interview = _posting(target_company_id=co_interview.id)
-    jp_none = _posting(target_company_id=co_none.id)
-    db_session.add_all([jp_pre, jp_post, jp_interview, jp_none])
+    db_session.add_all([jp_pre, jp_post, jp_interview])
     await db_session.flush()
-    for jp in (jp_pre, jp_post, jp_interview, jp_none):
+    for jp in (jp_pre, jp_post, jp_interview):
         db_session.add(_posting_source(job_posting_id=jp.id))
 
     ev_pre = _outcome(job_posting_id=None, outcome_type="rejection_pre_screen")
@@ -351,10 +348,7 @@ async def test_rejected_matches_any_rejection_outcome_type(db_session: Any) -> N
     ev_post.target_company_id = co_post.id
     ev_interview = _outcome(job_posting_id=None, outcome_type="rejection_post_interview")
     ev_interview.target_company_id = co_interview.id
-    # Non-rejection outcome at co_none — its posting must NOT match.
-    ev_none = _outcome(job_posting_id=None, outcome_type="recruiter_screen_invite")
-    ev_none.target_company_id = co_none.id
-    db_session.add_all([ev_pre, ev_post, ev_interview, ev_none])
+    db_session.add_all([ev_pre, ev_post, ev_interview])
     await db_session.commit()
 
     ac = await _client(db_session)
@@ -365,8 +359,8 @@ async def test_rejected_matches_any_rejection_outcome_type(db_session: Any) -> N
         await _drop_override()
 
     assert resp.status_code == 200
-    ids = {item["id"] for item in resp.json()["items"]}
-    assert ids == {str(jp_pre.id), str(jp_post.id), str(jp_interview.id)}
+    # Untouched postings with only company-level Gmail rejections never surface.
+    assert resp.json()["items"] == []
 
 
 @_NEEDS_DB
@@ -413,13 +407,11 @@ async def test_rejected_ignores_non_rejection_outcomes(db_session: Any) -> None:
 
 @_NEEDS_DB
 @pytest.mark.asyncio
-async def test_rejected_returns_each_posting_once(db_session: Any) -> None:
-    """A posting at a company with MULTIPLE rejection events appears
-    exactly once in the response. EXISTS doesn't multiply rows the way
-    a JOIN would.
-
-    feat/surface-linked-outcomes: outcomes link via target_company_id;
-    two rejection events at the same company still yield one posting row.
+async def test_rejected_surfaces_manual_status_once(db_session: Any) -> None:
+    """A posting manually statused 'rejected' surfaces exactly once in
+    /rejected — even when its company also has (now hint-only) rejection
+    events. Membership is the posting-specific manual status; the company
+    Gmail rejections do not add or multiply rows.
     """
     company = _company("Co")
     db_session.add(company)
@@ -429,7 +421,7 @@ async def test_rejected_returns_each_posting_once(db_session: Any) -> None:
     db_session.add(jp)
     await db_session.flush()
     db_session.add(_posting_source(job_posting_id=jp.id))
-    # Two rejection events at the same company.
+    # Company-level rejection events — hint only, must not themselves surface it.
     ev1 = _outcome(job_posting_id=None, outcome_type="rejection_pre_screen")
     ev1.target_company_id = company.id
     ev2 = _outcome(job_posting_id=None, outcome_type="rejection_post_interview")
@@ -440,6 +432,9 @@ async def test_rejected_returns_each_posting_once(db_session: Any) -> None:
     ac = await _client(db_session)
     try:
         async with ac:
+            # Posting-specific manual rejected is the authoritative mover.
+            put = await ac.put(f"/postings/{jp.id}/status", json={"status": "rejected"})
+            assert put.status_code == 200, put.text
             resp = await ac.get("/postings?state=rejected")
     finally:
         await _drop_override()
