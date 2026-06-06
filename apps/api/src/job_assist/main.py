@@ -1704,6 +1704,12 @@ async def update_operator_profile(
         # calibration. Best-effort; never fails the save.
         if changed:
             await recalibrate_similarity(db)
+            # slice 2b: the recalibrated similarity_score feeds the scorer's
+            # semantic_fit feature — re-score open postings so a looking_for_text
+            # edit actually moves fit_score (not just the next embedding sweep).
+            from job_assist.services.rescore import rescore_open_postings
+
+            await rescore_open_postings(db)
     except Exception as exc:
         logging.getLogger("job_assist.main").warning(
             "operator_profile.embed_failed", extra={"error": str(exc)[:300]}
@@ -1746,7 +1752,11 @@ async def reclassify_sweep_endpoint(
     from job_assist.db.models.operator_profile import OperatorProfile
     from job_assist.db.models.target_company import TargetCompany
     from job_assist.schemas.reclassify import ReclassifyDistribution
-    from job_assist.services.classifier import CLASSIFIER_VERSION, classify_posting
+    from job_assist.services.classifier import (
+        CLASSIFIER_VERSION,
+        build_profile_context,
+        classify_posting,
+    )
     from job_assist.services.scoring import SCORER_VERSION, score_posting
 
     # ── 1. Select candidates ──────────────────────────────────────────────
@@ -1775,6 +1785,19 @@ async def reclassify_sweep_endpoint(
     op_row = await db.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
     operator_profile = op_row.scalar_one_or_none()
 
+    # slice 2b: inject the operator's free-form targets + keywords into the
+    # classifier as DISAMBIGUATION context (None when unseeded → prompt
+    # unchanged). The LLM reclassifier is where the profile text matters; the
+    # title-regex ingest pass stays a fast, profile-agnostic first pass.
+    profile_context = (
+        build_profile_context(
+            operator_profile.looking_for_text,
+            operator_profile.role_keywords,
+        )
+        if operator_profile is not None
+        else None
+    )
+
     processed = 0
     changed = 0
     skipped = 0
@@ -1788,6 +1811,7 @@ async def reclassify_sweep_endpoint(
             new_family, new_seniority = await classify_posting(
                 posting.jd_text or "",
                 posting.normalized_title,
+                profile_context=profile_context,
             )
         except Exception as exc:
             logger.warning(

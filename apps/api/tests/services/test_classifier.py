@@ -31,6 +31,7 @@ from job_assist.services.classifier import (
     CLASSIFIER_VERSION,
     _coerce_result,
     build_classify_prompt,
+    build_profile_context,
     classify_posting,
 )
 
@@ -47,10 +48,11 @@ def test_classifier_version_is_llm_era() -> None:
     assert "gemini" in CLASSIFIER_VERSION.lower()
 
 
-def test_classifier_version_is_precision_prompt_v3() -> None:
-    """v3 is the precision-tightened prompt; tracking which rows were
-    classified under it is the whole point of the version bump."""
-    assert "v3" in CLASSIFIER_VERSION
+def test_classifier_version_is_v4_profile_aware() -> None:
+    """v4 injects the operator's looking_for_text/role_keywords as
+    disambiguation context; tracking which rows were classified under it is
+    the whole point of the version bump."""
+    assert "v4" in CLASSIFIER_VERSION
 
 
 # ── _SYSTEM_PROMPT precision criteria (regression guard, Bestiary 5.21) ───────
@@ -119,6 +121,50 @@ def test_build_prompt_strips_title_whitespace() -> None:
     prompt = build_classify_prompt("  Senior PM  ", "jd text")
     assert "Senior PM" in prompt
     assert "  Senior PM  " not in prompt
+
+
+# ── build_profile_context + profile injection (slice 2b) ──────────────────────
+
+
+def test_build_profile_context_none_when_empty() -> None:
+    """No text and no keywords → None, so the prompt is byte-identical to the
+    no-profile path (zero behavior change for an unseeded profile)."""
+    assert build_profile_context(None, None) is None
+    assert build_profile_context("", []) is None
+    assert build_profile_context("   ", ["", "  "]) is None
+
+
+def test_build_profile_context_includes_text_and_keywords() -> None:
+    ctx = build_profile_context("Fintech / AI PM roles", ["fintech", "payments"])
+    assert ctx is not None
+    assert "Fintech / AI PM roles" in ctx
+    assert "fintech" in ctx and "payments" in ctx
+
+
+def test_build_profile_context_truncates_long_text() -> None:
+    ctx = build_profile_context("y" * 2000, None)
+    assert ctx is not None
+    assert "y" * 601 not in ctx
+    assert "y" * 600 in ctx
+
+
+def test_build_prompt_without_profile_context_is_unchanged() -> None:
+    """Backward-compat: omitting profile_context yields the exact prior prompt
+    (no OPERATOR CONTEXT block)."""
+    prompt = build_classify_prompt("PM", "jd text")
+    assert "OPERATOR CONTEXT" not in prompt
+
+
+def test_build_prompt_injects_profile_context_as_disambiguation() -> None:
+    """When present, the operator context is appended as a clearly-scoped
+    disambiguation block — never an override/suppression instruction."""
+    ctx = build_profile_context("Fintech / AI PM roles", ["fintech"])
+    prompt = build_classify_prompt("Product Manager", "jd", profile_context=ctx)
+    assert "OPERATOR CONTEXT" in prompt
+    assert "Fintech / AI PM roles" in prompt
+    # Framing must keep it disambiguation-only.
+    assert "disambiguate" in prompt.lower()
+    assert "do not override" in prompt.lower()
 
 
 # ── _coerce_result — role_family ──────────────────────────────────────────────

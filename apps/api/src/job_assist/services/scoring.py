@@ -1,22 +1,40 @@
-"""Heuristic fit-scoring service (PR #56).
+"""Heuristic fit-scoring service (PR #56; semantic blend slice 2b).
 
-Every JobPosting gets a composite 0-100 score derived from five weighted
+Every JobPosting gets a composite 0-100 score derived from six weighted
 features compared against the OperatorProfile. The output is a pure
 function of (posting, profile) — deterministic, interpretable, no LLM
 call, no I/O. The composite score is materialized on
-``job_posting.fit_score`` so the future "Best fit" sort (PR #57) reads
-it index-backed.
+``job_posting.fit_score`` so the "Best fit" sort reads it index-backed.
 
 Features and weights
 ────────────────────
-  role_family   25%   — posting.role_family vs PREFERRED_FAMILIES set
-  seniority     25%   — posting.seniority_level vs profile.seniority_levels_included
-  salary        15%   — posting.salary_min/max vs profile.salary_floor/ceiling
-  tier          15%   — target_company.tier (T1=best)
-  geo           20%   — posting.locations_normalized vs profile.geo_whitelist
+  role_family    20%  — posting.role_family vs PREFERRED_FAMILIES set
+  seniority      20%  — posting.seniority_level vs profile.seniority_levels_included
+  salary         15%  — posting.salary_min/max vs profile.salary_floor/ceiling
+  tier           10%  — target_company.tier (T1=best)
+  geo            15%  — posting.locations_normalized vs profile.geo_whitelist
+  semantic_fit   20%  — calibrated similarity of the JD to the operator's
+                        ``looking_for_text`` (reads the precomputed
+                        ``job_posting.similarity_score``; see below)
 
-Each feature returns an integer 0-100; the composite is the rounded
-weighted sum.
+Each feature returns an integer 0-100; the composite is the weighted MEAN
+over the AVAILABLE features (so a not-yet-embedded posting, whose
+``semantic_fit`` is absent, scores on the structured five alone — the weight
+renormalizes, no fake signal). Then the role_family hard gate and the
+disguised-senior cap apply.
+
+Semantic feature & determinism (slice 2b)
+─────────────────────────────────────────
+``semantic_fit`` reads ``job_posting.similarity_score`` — the calibrated
+0-100 PERCENT_RANK of this posting's cosine to ``profile.looking_for_embedding``
+across the corpus, materialized by ``services/embeddings.recalibrate_similarity``
+(one deterministic SQL pass). The vector model (``gemini-embedding-001``,
+768-dim, L2-normalized) is pinned and version-stamped per row, and the
+percentile calibration is deterministic, so ``score_posting`` stays a pure
+function of its inputs. ``similarity_score`` is recomputed — and fit_score
+re-scored — on the embedding-sweep tail and the profile-save hook, so a
+profile-text edit actually moves scores. ``SCORER_VERSION`` is bumped so a
+re-score is attributable.
 
 Mock seam
 ─────────
@@ -51,17 +69,22 @@ logger = logging.getLogger(__name__)
 
 # ── Version constant ─────────────────────────────────────────────────────────
 
-SCORER_VERSION = "v1_heuristic"
+SCORER_VERSION = "v2_semantic"
 
 
 # ── Composite weights (sum = 100) ────────────────────────────────────────────
-
+#
+# slice 2b: ``semantic_fit`` joins the structured five. Trimmed tier 15→10 and
+# geo 20→15, role_family/seniority 25→20 to make room for the 20% profile-fit
+# signal. role_family stays gated (hard cap at 40) so its weight reduction
+# doesn't let wrong-role postings ride the composite up.
 _WEIGHTS: dict[str, int] = {
-    "role_family": 25,
-    "seniority": 25,
+    "role_family": 20,
+    "seniority": 20,
     "salary": 15,
-    "tier": 15,
-    "geo": 20,
+    "tier": 10,
+    "geo": 15,
+    "semantic_fit": 20,
 }
 assert sum(_WEIGHTS.values()) == 100, "scoring weights must sum to 100"
 
@@ -100,7 +123,7 @@ ADJACENT_FAMILIES: frozenset[str] = frozenset(
 # genuinely-junior-but-well-paid role: 55 sits below the 60 "good" and 80
 # "qualified" lines (drops out of Best Fit top bands) but above the 40
 # non-PM floor (stays visible, recoverable).
-_DISGUISED_SENIOR_SALARY_FLOOR_USD = 180_000
+_DISGUISED_SENIOR_SALARY_FLOOR_USD = 175_000
 _DISGUISED_SENIOR_CAP = 55
 # Only these seniority buckets can hide a senior role — ``apm``/``intern``
 # are explicitly junior (the operator wants them) and aren't where
@@ -391,15 +414,36 @@ def is_disguised_senior(posting: JobPosting) -> bool:
     )
 
 
+def score_semantic_fit(similarity_score: int | None) -> int | None:
+    """Profile-fit sub-score from the precomputed semantic similarity (slice 2b).
+
+    ``job_posting.similarity_score`` is the calibrated 0-100 PERCENT_RANK of the
+    posting's cosine similarity to ``profile.looking_for_embedding`` across the
+    corpus (``services/embeddings.recalibrate_similarity`` — one deterministic
+    SQL pass, re-run on the embedding-sweep tail + the profile-save hook).
+    Reading the precomputed column keeps ``score_posting`` pure / no-I/O /
+    deterministic.
+
+    Returns ``None`` when the row isn't calibrated yet (posting or profile not
+    embedded). ``score_posting`` then OMITS this feature and renormalizes over
+    the remaining weights, so a not-yet-embedded posting scores on the
+    structured features alone — no fake semantic signal.
+    """
+    if similarity_score is None:
+        return None
+    return max(0, min(100, int(similarity_score)))
+
+
 def score_breakdown(
     posting: JobPosting,
     profile: OperatorProfile,
     *,
     tier: int | None,
-) -> dict[str, int | bool]:
-    """Return the five sub-scores plus the ``disguised_senior`` flag.
+) -> dict[str, int | bool | None]:
+    """Return the six sub-scores plus the ``disguised_senior`` flag.
 
-    The five integer sub-scores feed the weighted composite; the
+    The integer sub-scores feed the weighted composite; ``semantic_fit`` is
+    ``None`` until the row is embedded + calibrated (then it's 0-100). The
     boolean ``disguised_senior`` is a debug/surface flag (NOT a weighted
     feature) — ``score_posting`` applies it as a post-composite cap, the
     same shape as the role_family gate. Useful for a "why this score" UI.
@@ -429,6 +473,7 @@ def score_breakdown(
             posting.locations_normalized,
             profile.geo_whitelist or [],
         ),
+        "semantic_fit": score_semantic_fit(posting.similarity_score),
         "disguised_senior": is_disguised_senior(posting),
     }
 
@@ -447,10 +492,22 @@ def score_posting(
     ``job_assist.services.scoring.score_posting`` to inject stubs.
     """
     parts = score_breakdown(posting, profile, tier=tier)
-    # Only the five weighted sub-scores feed the composite; the
-    # ``disguised_senior`` flag in ``parts`` is a post-composite cap, not
-    # a weighted feature, so it's excluded by iterating ``_WEIGHTS``.
-    weighted = sum(int(parts[k]) * _WEIGHTS[k] for k in _WEIGHTS) / 100.0
+    # Weighted MEAN over the AVAILABLE weighted features (iterating ``_WEIGHTS``
+    # excludes the ``disguised_senior`` flag, a post-composite cap). Only
+    # ``semantic_fit`` can be None (row not yet embedded/calibrated): omit it
+    # and renormalize over the remaining weights, so a pre-embedding posting
+    # scores on the structured features alone — no fake signal — and gains the
+    # semantic blend once ``similarity_score`` lands (re-scored on the
+    # embedding-sweep tail / profile-save hook).
+    acc = 0.0
+    total_weight = 0
+    for key, weight in _WEIGHTS.items():
+        value = parts[key]
+        if value is None:
+            continue
+        acc += int(value) * weight
+        total_weight += weight
+    weighted = acc / total_weight if total_weight else 0.0
     score = max(0, min(100, round(weighted)))
 
     # Hard gate (Bestiary 5.21): role_family is a DISQUALIFYING attribute, not
