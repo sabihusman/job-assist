@@ -1,0 +1,95 @@
+name: Broad ingest
+
+# Self-refreshing crawl for the broad-discovered handle set (the companies
+# seeded via POST /admin/discovered-handles/seed — Stripe, Navan, iCapital,
+# Chime, the applied-to fintech, etc.). Without this cron those handles crawl
+# only on a manual trigger and go stale after one pull.
+#
+# Design — OOM-safe on the small instance:
+#   * Calls POST /admin/broad-ingest/run with limit=1 (ONE handle per call) in a
+#     PACED loop with sleeps, mirroring the manual pacing that avoided the
+#     write-burst OOM thrash. Each call fetches a full board but the PM/PO title
+#     filter keeps only ~1-7 rows, so per-call memory stays tiny.
+#   * The server-side WEEKLY CAP bounds qualified roles per ISO week, so this is
+#     self-limiting even if the discovered set grows to thousands of handles.
+#   * Rotation is least-recently-ingested first, so SWEEP_CALLS handles/day
+#     rotates through the whole set over a few days — fresh without flooding.
+#
+# Schedule: 06:30 UTC — after the curated daily ingest (06:00) and before the
+# classifier (07:30) + embed (09:00) crons, so the day's new broad PM roles get
+# classified and embedded the same cycle.
+#
+# Secrets (already configured, same as ingest-daily.yml):
+#   API_URL, API_AUTH_TOKEN
+
+on:
+  schedule:
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+    inputs:
+      sweep_calls:
+        description: 'How many single-handle sweeps to run this invocation'
+        required: false
+        default: '10'
+
+# Don't stack a second broad sweep on top of a still-running one.
+concurrency:
+  group: broad-ingest
+  cancel-in-progress: false
+
+jobs:
+  broad-ingest:
+    name: Paced broad-ingest sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+      # Tunables: SWEEP_CALLS handles/day, paced PACE_SECONDS apart. WEEKLY_CAP
+      # is the server's self-limiting bound on qualified (80+ fit) roles/week.
+      SWEEP_CALLS: ${{ github.event.inputs.sweep_calls || '10' }}
+      PACE_SECONDS: '75'
+      WEEKLY_CAP: '100'
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Paced broad-ingest sweep
+        run: |
+          set -euo pipefail
+          echo "Running $SWEEP_CALLS single-handle sweeps, ${PACE_SECONDS}s apart (weekly_cap=$WEEKLY_CAP)…"
+          total_kept=0
+          for i in $(seq 1 "$SWEEP_CALLS"); do
+            # One handle per call → PM-filtered → ~1-7 rows scored. OOM-safe.
+            resp=$(curl -fsS --max-time 200 -X POST \
+              -H "Authorization: Bearer $API_AUTH_TOKEN" \
+              "$API_URL/admin/broad-ingest/run?limit=1&weekly_cap=$WEEKLY_CAP" 2>/dev/null || echo '{}')
+            # Pull a compact per-handle line + accumulate kept count. Tolerant of
+            # any shape (|| true) so one odd response never aborts the loop.
+            line=$(echo "$resp" | python3 -c "
+          import json, sys
+          try:
+              d = json.load(sys.stdin)
+              ph = d.get('per_handle') or []
+              kept = sum(int(h.get('postings_kept') or 0) for h in ph)
+              who = ';'.join(f\"{h.get('handle')}:fetched={h.get('postings_fetched')},kept={h.get('postings_kept')}\" for h in ph)
+              considered = d.get('handles_considered', 0)
+              print(f'{kept}\t{considered}\t{who or \"(none)\"}')
+          except Exception:
+              print('0\t0\t(unparsed)')
+          " 2>/dev/null || printf '0\t0\t(err)')
+            kept=$(echo "$line" | cut -f1)
+            considered=$(echo "$line" | cut -f2)
+            who=$(echo "$line" | cut -f3)
+            total_kept=$((total_kept + kept))
+            echo "  sweep $i: kept=$kept  [$who]"
+            # Nothing left to rotate through (all handles fresh) → stop early.
+            if [ "$considered" = "0" ]; then
+              echo "  no handles considered — set fully swept, stopping early."
+              break
+            fi
+            if [ "$i" -lt "$SWEEP_CALLS" ]; then sleep "$PACE_SECONDS"; fi
+          done
+          echo "::notice::broad-ingest swept up to $SWEEP_CALLS handles, kept $total_kept PM/PO roles this run."

@@ -1,0 +1,156 @@
+name: Ingest health
+
+# Dead-man's switch for the WHOLE ingest pipeline — so the operator never has to
+# manually check whether crawling still works. Runs daily after every ingest /
+# enrichment cron has had time to land, queries GET /admin/ingest/health, and on
+# any problem ALERTS via:
+#   1. a GitHub issue (deterministic; GitHub emails you about new issues), AND
+#   2. a direct SMTP email IF the MAIL_USERNAME/MAIL_PASSWORD secrets are set, AND
+#   3. failing the job (GitHub emails you about failed scheduled runs).
+#
+# The server-side endpoint flags: a cron that didn't run / failed, the broad set
+# going stale, the instance erroring, and STARVATION (≈0 net-new roles for N days).
+#
+# Test the alert any time WITHOUT breaking anything real:
+#   Actions → Ingest health → Run workflow → simulate_failure = true
+# → forces the alert path (issue + email + red run) so you can confirm delivery.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN (same as ingest-daily.yml).
+# Optional (for direct email): MAIL_USERNAME + MAIL_PASSWORD (Gmail app password).
+
+on:
+  schedule:
+    - cron: '30 9 * * *'  # 09:30 UTC — after curated (06:00), broad (06:30), classify (07:30), embed (09:00)
+  workflow_dispatch:
+    inputs:
+      simulate_failure:
+        description: 'Force the alert path to fire (test only — opens an issue + emails)'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: read
+
+jobs:
+  health:
+    name: Ingest pipeline health
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+    steps:
+      - name: Query ingest health
+        id: health
+        env:
+          SIMULATE: ${{ github.event.inputs.simulate_failure }}
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+
+          if [ "$SIMULATE" = "true" ]; then
+            echo "unhealthy=true" >> "$GITHUB_OUTPUT"
+            echo "summary=SIMULATED FAILURE — manual test of the ingest-health alert path. No real problem." >> "$GITHUB_OUTPUT"
+            echo "::warning::simulate_failure=true — firing the alert path on purpose."
+            exit 0
+          fi
+
+          if [ -z "$API_URL" ]; then
+            echo "unhealthy=true" >> "$GITHUB_OUTPUT"
+            echo "summary=API_URL secret is not configured — cannot check ingest health." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/ingest/health" || echo -e "\n000")
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "HTTP $CODE"
+          echo "$BODY"
+
+          if [ "$CODE" != "200" ]; then
+            echo "unhealthy=true" >> "$GITHUB_OUTPUT"
+            echo "summary=API unreachable or erroring (HTTP ${CODE}) at /admin/ingest/health — the instance may be down." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          OK=$(echo "$BODY" | python3 -c "import json,sys; print(json.load(sys.stdin).get('ok'))" 2>/dev/null || echo "False")
+          PROBLEMS=$(echo "$BODY" | python3 -c "import json,sys; print(' | '.join(json.load(sys.stdin).get('problems', [])))" 2>/dev/null || echo "could not parse health response")
+
+          if [ "$OK" = "True" ]; then
+            echo "unhealthy=false" >> "$GITHUB_OUTPUT"
+            echo "All ingest health checks passed."
+          else
+            echo "unhealthy=true" >> "$GITHUB_OUTPUT"
+            echo "summary=${PROBLEMS}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open / update alert issue
+        if: steps.health.outputs.unhealthy == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const date    = '${{ steps.health.outputs.date }}';
+            const summary = `${{ steps.health.outputs.summary }}`;
+            const title   = `Ingest health alert: ${date}`;
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', per_page: 50,
+            });
+            const body = [
+              `The ingest pipeline reported a problem on **${date}**:`,
+              '', '> ' + summary.split(' | ').join('\n> '), '',
+              'Checked by `GET /admin/ingest/health`. Look at the Railway API logs and recent',
+              '`/admin/ingest/runs` for detail.',
+              '',
+              `_Opened automatically by the [ingest-health workflow](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/workflows/ingest-health.yml)._`,
+            ].join('\n');
+            const existing = issues.find(i => i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.number, body,
+              });
+              core.info(`Updated existing alert issue #${existing.number}.`);
+            } else {
+              const { data: issue } = await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo, title, body,
+              });
+              core.info(`Opened alert issue #${issue.number}.`);
+            }
+
+      - name: Check email config
+        id: mail
+        if: steps.health.outputs.unhealthy == 'true'
+        env:
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+        run: |
+          if [ -n "$MAIL_PASSWORD" ]; then echo "configured=true" >> "$GITHUB_OUTPUT"; else echo "configured=false" >> "$GITHUB_OUTPUT"; echo "MAIL_* secrets not set — relying on GitHub issue + failed-run notifications for email."; fi
+
+      - name: Email alert (if SMTP configured)
+        if: steps.health.outputs.unhealthy == 'true' && steps.mail.outputs.configured == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "[job-assist] Ingest health alert: ${{ steps.health.outputs.date }}"
+          to: sabih.usman@gmail.com
+          from: job-assist alerts <${{ secrets.MAIL_USERNAME }}>
+          body: |
+            The job-assist ingest pipeline reported a problem on ${{ steps.health.outputs.date }}:
+
+            ${{ steps.health.outputs.summary }}
+
+            See the open "Ingest health alert" GitHub issue and the Railway API logs.
+
+      - name: Fail the run (GitHub emails you about failed scheduled runs)
+        if: steps.health.outputs.unhealthy == 'true'
+        run: |
+          echo "::error::Ingest health alert: ${{ steps.health.outputs.summary }}"
+          exit 1

@@ -3704,6 +3704,105 @@ async def list_ingest_runs(
     return {"total": len(items), "items": items}
 
 
+# How recent a successful run / broad sweep must be, and the starvation window.
+_HEALTH_RECENT_HOURS = 26
+_HEALTH_STARVATION_DAYS = 3
+_HEALTH_MIN_NEW_ROLES = 1
+
+
+@app.get("/admin/ingest/health", tags=["admin"])
+async def ingest_health(db: DbSession) -> dict[str, Any]:
+    """Dead-man's-switch health verdict for the whole ingest pipeline. Pure SELECT.
+
+    The ``ingest-health`` cron curls this daily and alerts when ``ok`` is false,
+    so the operator never has to manually check whether crawling still works.
+    Four checks, each mapping to a real failure mode:
+
+      * ``recent_success`` — a successful ``ingest_run`` finished within
+        ``_HEALTH_RECENT_HOURS`` (proves the daily curated cron actually ran).
+      * ``no_hard_failures`` — zero ``failed`` runs in that window
+        (``handle_not_found`` is a stale-board signal — surfaced, not a failure).
+      * ``broad_fresh`` — a ``discovered_handle`` was swept in that window
+        (proves the BROAD-ingest cron ran, not just the curated one).
+      * ``not_starved`` — at least ``_HEALTH_MIN_NEW_ROLES`` net-new postings over
+        the last ``_HEALTH_STARVATION_DAYS`` (catches "the well ran dry").
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import func, select
+
+    from job_assist.db.models import DiscoveredHandle, IngestRun, JobPosting
+
+    now = datetime.now(tz=UTC)
+    recent_cutoff = now - timedelta(hours=_HEALTH_RECENT_HOURS)
+    starve_cutoff = now - timedelta(days=_HEALTH_STARVATION_DAYS)
+
+    last_success = (
+        await db.execute(
+            select(func.max(IngestRun.finished_at)).where(IngestRun.status == "success")
+        )
+    ).scalar_one_or_none()
+    failed_recent = (
+        await db.execute(
+            select(func.count())
+            .select_from(IngestRun)
+            .where(IngestRun.status == "failed")
+            .where(IngestRun.started_at >= recent_cutoff)
+        )
+    ).scalar_one() or 0
+    not_found_recent = (
+        await db.execute(
+            select(func.count())
+            .select_from(IngestRun)
+            .where(IngestRun.status == "handle_not_found")
+            .where(IngestRun.started_at >= recent_cutoff)
+        )
+    ).scalar_one() or 0
+    broad_last_swept = (
+        await db.execute(select(func.max(DiscoveredHandle.last_ingested_at)))
+    ).scalar_one_or_none()
+    net_new = (
+        await db.execute(
+            select(func.count())
+            .select_from(JobPosting)
+            .where(JobPosting.first_seen_at >= starve_cutoff)
+        )
+    ).scalar_one() or 0
+
+    checks = {
+        "recent_success": last_success is not None and last_success >= recent_cutoff,
+        "no_hard_failures": failed_recent == 0,
+        "broad_fresh": broad_last_swept is not None and broad_last_swept >= recent_cutoff,
+        "not_starved": net_new >= _HEALTH_MIN_NEW_ROLES,
+    }
+    messages = {
+        "recent_success": f"no successful ingest_run in the last {_HEALTH_RECENT_HOURS}h "
+        f"(last success: {last_success})",
+        "no_hard_failures": f"{failed_recent} failed ingest_run(s) in the last "
+        f"{_HEALTH_RECENT_HOURS}h",
+        "broad_fresh": f"broad-ingest has not swept in the last {_HEALTH_RECENT_HOURS}h "
+        f"(last sweep: {broad_last_swept})",
+        "not_starved": f"starvation: only {net_new} net-new posting(s) in the last "
+        f"{_HEALTH_STARVATION_DAYS} days",
+    }
+    problems = [messages[name] for name, passed in checks.items() if not passed]
+
+    return {
+        "ok": not problems,
+        "problems": problems,
+        "checks": checks,
+        "metrics": {
+            "last_success_at": last_success.isoformat() if last_success else None,
+            "failed_runs_recent": failed_recent,
+            "handle_not_found_recent": not_found_recent,
+            "broad_last_swept_at": broad_last_swept.isoformat() if broad_last_swept else None,
+            "net_new_starvation_window": net_new,
+            "window_hours": _HEALTH_RECENT_HOURS,
+            "starvation_days": _HEALTH_STARVATION_DAYS,
+        },
+    }
+
+
 # ── Broad ingestion (Slice 2: handle discovery + bounded trial) ──────────────
 
 
