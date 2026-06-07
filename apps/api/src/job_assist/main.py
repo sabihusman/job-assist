@@ -719,6 +719,115 @@ async def seed_target_companies(
     }
 
 
+_CRAWL_CONFIG_SOURCES = {"curated", "broad", "deactivated", "applied"}
+
+
+def _validate_crawl_config_row(row: dict[str, Any]) -> None:
+    """Validate one crawl-config patch row; raise HTTP 400 on any bad field.
+
+    ``tier`` (when its key is present) must be null or an int 1-4; ``source``
+    (when present) must be a known provenance value. ``bool`` is rejected as a
+    tier because ``True``/``False`` are ints in Python.
+    """
+    if not row.get("name"):
+        raise HTTPException(status_code=400, detail=f"row missing 'name': {row!r}")
+    if "tier" in row:
+        tier = row["tier"]
+        if tier is not None and (
+            not isinstance(tier, int) or isinstance(tier, bool) or not (1 <= tier <= 4)
+        ):
+            raise HTTPException(status_code=400, detail=f"tier must be null or 1-4: {row!r}")
+    if "source" in row and row["source"] not in _CRAWL_CONFIG_SOURCES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"source must be one of {sorted(_CRAWL_CONFIG_SOURCES)}: {row!r}",
+        )
+
+
+def _apply_crawl_config(tc: Any, row: dict[str, Any]) -> bool:
+    """Apply a validated patch to a TargetCompany row. Patches ``tier`` / ``source``
+    only when the key is present. Returns True iff a column actually changed.
+    """
+    changed = False
+    if "tier" in row and tc.tier != row["tier"]:
+        tc.tier = row["tier"]
+        changed = True
+    if "source" in row and tc.source != row["source"]:
+        tc.source = row["source"]
+        changed = True
+    return changed
+
+
+@app.post("/admin/companies/crawl-config", tags=["admin"])
+async def set_company_crawl_config(
+    rows: list[dict[str, Any]],
+    db: DbSession,
+) -> dict[str, Any]:
+    """Patch the crawl-controlling fields (``tier``, ``source``) on existing
+    ``target_company`` rows, matched by ``name``. The seed endpoint only inserts
+    or backfills NULLs — it can't *change* an existing tier/source, so this is
+    the lever for deactivating or re-tiering a company already in the DB.
+
+    These two columns gate crawling:
+      * the daily curated cron (``GET /admin/ingest/plan``) ingests only rows
+        with ``tier IS NOT NULL``;
+      * the Apify Workday/iCIMS sweep (``list_fantastic_targets``) ingests only
+        rows with ``source == 'curated'``.
+
+    So to STOP crawling an off-profile company WITHOUT deleting it — preserving
+    the row, its ``domain``, and all Gmail-match history — set ``tier=null`` AND
+    ``source='deactivated'``: it drops out of BOTH paths and its Apify spend
+    stops. To PROMOTE a broad-discovered shell (``tier=null``) into the curated
+    daily cron, set ``tier`` to a pedigree (1-4).
+
+    Body: ``[{"name": "Athene", "tier": null, "source": "deactivated"}, ...]``.
+    A field is patched ONLY when its key is present (JSON ``null`` => set NULL;
+    an absent key leaves the column untouched). Only ``tier`` and ``source`` are
+    mutable here — every other column (incl. ``domain``) is immutable.
+
+    Validation runs over the whole batch BEFORE any write, so a single bad value
+    rejects the request with no partial commit. Idempotent — returns per-name
+    updated / unchanged / not_found.
+
+    TODO: add authentication before exposing publicly. Dev-mode only.
+    """
+    from sqlalchemy import select
+
+    from job_assist.db.models.target_company import TargetCompany
+
+    # Validate the entire batch up front — reject cleanly with no partial write.
+    for row in rows:
+        _validate_crawl_config_row(row)
+
+    updated: list[str] = []
+    unchanged: list[str] = []
+    not_found: list[str] = []
+
+    for row in rows:
+        name = row["name"]
+        tc = (
+            await db.execute(select(TargetCompany).where(TargetCompany.name == name))
+        ).scalar_one_or_none()
+        if tc is None:
+            not_found.append(name)
+        elif _apply_crawl_config(tc, row):
+            updated.append(name)
+        else:
+            unchanged.append(name)
+
+    await db.commit()
+    return {
+        "updated": updated,
+        "unchanged": unchanged,
+        "not_found": not_found,
+        "counts": {
+            "updated": len(updated),
+            "unchanged": len(unchanged),
+            "not_found": len(not_found),
+        },
+    }
+
+
 # ── Admin — seed contact ──────────────────────────────────────────────────────
 
 
