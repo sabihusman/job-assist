@@ -1261,7 +1261,13 @@ async def test_outcomes_response_shape(db_session: Any) -> None:
         "from_domain",
         "email_thread_id",
         "raw_snippet",
+        # feat/applied-unified: posting-specific overlay fields (NULL here — the
+        # fixture outcome is unlinked).
+        "posting_title",
+        "manual_status",
     }
+    assert sample["posting_title"] is None
+    assert sample["manual_status"] is None
     assert sample["stage"] == "application_confirmation"
     assert sample["confidence"] == pytest.approx(0.9)
 

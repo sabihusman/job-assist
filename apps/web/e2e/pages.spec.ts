@@ -138,17 +138,28 @@ test.beforeEach(async ({ page }) => {
 
 // ── Applied ─────────────────────────────────────────────────────────────
 
-test('Applied page loads and renders one row per applied posting', async ({ page }) => {
+// feat/applied-unified: the Applied tab is now the UNIFIED view — Gmail-detected
+// applications (the authoritative membership source) fused with the manual
+// Applied funnel as an overlay. With these fixtures that's 2 manual postings +
+// 1 Gmail-detected outcome (unlinked → its own entry) = 3 rows.
+test('Applied page renders the unified Gmail + manual applications', async ({ page }) => {
   await page.goto('/applied');
   await waitForDataReady(page);
   const content = mainContent(page);
-  await expect(content.getByText('Alpha Co')).toBeVisible();
-  await expect(content.getByText('Beta Co')).toBeVisible();
+  await expect(content.getByTestId('unified-applied-row')).toHaveCount(3);
+  // Manual applications surface by their (unique) role titles.
+  await expect(content.getByText('Senior PM, Alpha')).toBeVisible();
+  await expect(content.getByText('Senior PM, Beta')).toBeVisible();
+  // The Gmail-detected application surfaces as its own entry with a Gmail chip.
+  await expect(content.getByTestId('source-chip-gmail')).toBeVisible();
+  await expect(content.getByTestId('source-chip-manual').first()).toBeVisible();
 });
 
-test('Applied row expand reveals TIMELINE label', async ({ page }) => {
+test('Applied row expand reveals the Gmail timeline', async ({ page }) => {
   await page.goto('/applied');
   await waitForDataReady(page);
+  // Default sort=applied → the most recent activity (the Gmail outcome, 2d ago)
+  // is first; expanding it reveals the "Gmail timeline" section.
   await mainContent(page).getByRole('button', { expanded: false }).first().click();
   await expect(
     mainContent(page)
@@ -160,11 +171,9 @@ test('Applied row expand reveals TIMELINE label', async ({ page }) => {
 test('Applied sort=tier reorders the URL', async ({ page }) => {
   await page.goto('/applied');
   await waitForDataReady(page);
-  // The AppliedRow chevron buttons have accessible names like
-  // "Tier 1 Alpha Co Senior PM, …" (the Tier badge's aria-label
-  // contributes a "Tier 1" substring). `name: 'tier'` would match
-  // those rows too. Use `exact: true` against the sort strip's
-  // visible lowercase "tier" button instead.
+  // The unified row toggle buttons no longer carry a "Tier N" aria-label, but
+  // keep `exact: true` against the sort strip's lowercase "tier" button to stay
+  // unambiguous regardless.
   await mainContent(page).getByRole('button', { name: 'tier', exact: true }).click();
   await expect(page).toHaveURL(/sort=tier/);
 });
