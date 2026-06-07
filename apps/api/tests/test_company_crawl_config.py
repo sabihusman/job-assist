@@ -54,7 +54,7 @@ async def test_deactivate_drops_from_plan_and_keeps_row(db_session: Any) -> None
     await db_session.commit()
     original_domain = carrier.domain
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
         resp = await _post(client, [{"name": "Athene-Test", "tier": None, "source": "deactivated"}])
         assert resp.status_code == 200, resp.text
         assert resp.json()["counts"]["updated"] == 1
@@ -81,7 +81,7 @@ async def test_promote_broad_shell_into_plan(db_session: Any) -> None:
     db_session.add(shell)
     await db_session.commit()
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
         # Absent 'source' key => source untouched (stays 'broad').
         resp = await _post(client, [{"name": "Altruist-Test", "tier": 2}])
         assert resp.status_code == 200, resp.text
@@ -99,7 +99,7 @@ async def test_promote_broad_shell_into_plan(db_session: Any) -> None:
 async def test_unknown_name_reported_not_500(db_session: Any) -> None:
     from job_assist.main import app
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
         resp = await _post(client, [{"name": "Nonexistent-Co", "tier": None}])
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -117,7 +117,7 @@ async def test_invalid_tier_rejected_no_partial_write(db_session: Any) -> None:
     db_session.add(co)
     await db_session.commit()
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
         resp = await _post(
             client,
             [
@@ -137,6 +137,6 @@ async def test_invalid_tier_rejected_no_partial_write(db_session: Any) -> None:
 async def test_invalid_source_rejected(db_session: Any) -> None:
     from job_assist.main import app
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
         resp = await _post(client, [{"name": "Whatever", "source": "garbage"}])
     assert resp.status_code == 400
