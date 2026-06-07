@@ -167,6 +167,17 @@ export type ApplicationResumeMeta = {
   updated_at: string | null;
 };
 
+// feat/applied-pipeline-crosslink: a read-only pointer to the Gmail Pipeline
+// outcome matched to THIS specific posting (by company + role). Informational
+// only — it never moves status. NULL when no email matched this role.
+export type GmailOutcomeLink = {
+  outcome_event_id: string;
+  stage: string;
+  received_at: string;
+  email_thread_id: string | null;
+  subject: string;
+};
+
 export type PostingDetail = PostingListItem & {
   description_markdown: string | null;
   // Gemini-generated operator-focused summary (PR #41/#42). NULL until
@@ -178,6 +189,7 @@ export type PostingDetail = PostingListItem & {
   closed_at: string | null;
   state_history: PostingActionRow[];
   resume: ApplicationResumeMeta | null;
+  gmail_outcome: GmailOutcomeLink | null;
 };
 
 export type PostingsListResponse = {

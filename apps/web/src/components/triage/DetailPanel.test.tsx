@@ -48,6 +48,7 @@ function makeDetail(overrides: Partial<PostingDetail> = {}): PostingDetail {
     closed_at: null,
     state_history: [],
     resume: null,
+    gmail_outcome: null,
     ...overrides,
   };
 }
@@ -268,5 +269,31 @@ describe('DetailPanel', () => {
     // Toggle should be back to "Show full description" — full text hidden.
     expect(screen.getByRole('button', { name: /show full description/i })).toBeInTheDocument();
     expect(screen.queryByText(/bullet one/)).not.toBeInTheDocument();
+  });
+
+  // ── feat/applied-pipeline-crosslink: read-only Gmail Pipeline pointer ──────
+
+  test('renders the Gmail Pipeline cross-link chip when gmail_outcome is present', () => {
+    mockState.data = makeDetail({
+      gmail_outcome: {
+        outcome_event_id: 'oe-1',
+        stage: 'application_confirmation',
+        received_at: '2026-04-14T00:00:00Z',
+        email_thread_id: 't-1',
+        subject: 'Thanks for applying',
+      },
+    });
+    wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
+    const link = panel().getByTestId('gmail-outcome-link');
+    expect(link).toBeInTheDocument();
+    // Navigational only — links to the Pipeline, never mutates state.
+    expect(link.getAttribute('href')).toBe('/pipeline');
+    expect(link.textContent).toMatch(/gmail/i);
+  });
+
+  test('no Gmail cross-link chip when gmail_outcome is null', () => {
+    mockState.data = makeDetail({ gmail_outcome: null });
+    wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
+    expect(panel().queryByTestId('gmail-outcome-link')).not.toBeInTheDocument();
   });
 });

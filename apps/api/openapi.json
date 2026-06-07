@@ -1107,6 +1107,58 @@
         }
       }
     },
+    "/admin/outcomes/link-postings": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Outcomes Link Postings",
+        "description": "Link Gmail outcome_events to a SPECIFIC corpus posting by role (cross-link).\n\nPopulates ``outcome_event.job_posting_id`` so the Pipeline (Gmail) and the\ntriage/Applied posting can cross-reference each other. Cross-link ONLY \u2014\npurely navigational; it does not change any status, feed scoring, or affect\ntab membership (the posting-specific Applied/Rejected fix is preserved).\n\nMatching (``services/outcome_posting_match``) is deterministic and\nconservative: candidates are OPEN postings at the email's already-resolved\n``target_company_id``; the single best by role-token overlap is linked only\nwhen it clears a threshold AND (the company has one candidate OR it beats the\nrunner-up by a margin). A company with many postings never fans out \u2014 an\nemail maps to at-most-one posting, or stays Gmail-only.\n\nIdempotent (only ``job_posting_id IS NULL`` rows are considered). ``limit``\ncaps rows scanned. No LLM cost.\n\nTODO: add authentication before exposing publicly. Dev-mode only.",
+        "operationId": "outcomes_link_postings_admin_outcomes_link_postings_post",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Outcomes Link Postings Admin Outcomes Link Postings Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/companies/sync-applied": {
       "post": {
         "tags": [

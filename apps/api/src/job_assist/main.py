@@ -1524,6 +1524,19 @@ async def gmail_poll(db: DbSession) -> dict[str, Any]:
     except Exception as exc:
         raise _surface_gmail_failure("/admin/gmail/poll", exc) from exc
     await _sync_applied_companies_best_effort(db)
+    # feat/applied-pipeline-crosslink: link freshly-inserted outcomes to a
+    # specific posting by role so the Pipeline/posting cross-links populate.
+    # Best-effort — a linker failure must never fail the poll. Only new
+    # outcomes (job_posting_id IS NULL) are scanned; idempotent.
+    try:
+        from job_assist.services.outcome_posting_match import link_outcomes_to_postings
+
+        await link_outcomes_to_postings(db)
+    except Exception as exc:
+        await db.rollback()
+        logging.getLogger("job_assist.main").warning(
+            "outcome_posting_match.poll_tail_failed", extra={"error": str(exc)[:300]}
+        )
     return report.model_dump(mode="json")
 
 
@@ -1599,6 +1612,36 @@ async def outcomes_relink(
         raise
     except Exception as exc:
         raise _surface_gmail_failure("/admin/outcomes/relink", exc) from exc
+    return report.model_dump(mode="json")
+
+
+@app.post("/admin/outcomes/link-postings", tags=["admin"])
+async def outcomes_link_postings(
+    db: DbSession,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Link Gmail outcome_events to a SPECIFIC corpus posting by role (cross-link).
+
+    Populates ``outcome_event.job_posting_id`` so the Pipeline (Gmail) and the
+    triage/Applied posting can cross-reference each other. Cross-link ONLY —
+    purely navigational; it does not change any status, feed scoring, or affect
+    tab membership (the posting-specific Applied/Rejected fix is preserved).
+
+    Matching (``services/outcome_posting_match``) is deterministic and
+    conservative: candidates are OPEN postings at the email's already-resolved
+    ``target_company_id``; the single best by role-token overlap is linked only
+    when it clears a threshold AND (the company has one candidate OR it beats the
+    runner-up by a margin). A company with many postings never fans out — an
+    email maps to at-most-one posting, or stays Gmail-only.
+
+    Idempotent (only ``job_posting_id IS NULL`` rows are considered). ``limit``
+    caps rows scanned. No LLM cost.
+
+    TODO: add authentication before exposing publicly. Dev-mode only.
+    """
+    from job_assist.services.outcome_posting_match import link_outcomes_to_postings
+
+    report = await link_outcomes_to_postings(db, limit=limit)
     return report.model_dump(mode="json")
 
 
@@ -2677,6 +2720,7 @@ async def get_posting(
     from job_assist.db.models import (
         Division,
         JobPosting,
+        OutcomeEvent,
         PostingAction,
         PostingSource,
         TargetCompany,
@@ -2799,6 +2843,30 @@ async def get_posting(
     ).scalar_one_or_none()
     resume_block = _resume_meta(resume_row) if resume_row is not None else None
 
+    # feat/applied-pipeline-crosslink: the most-recent Gmail Pipeline outcome
+    # LINKED to THIS specific posting (outcome_event.job_posting_id == id) — a
+    # read-only pointer so the operator can jump to the Pipeline card. NULL when
+    # no email matched this role. Posting-specific by construction (the matcher
+    # links one email to at-most-one posting), never company-level — preserves
+    # the no-fanout fix. Informational only: it does NOT affect state/scoring.
+    gmail_outcome_row = (
+        await db.execute(
+            select(OutcomeEvent)
+            .where(OutcomeEvent.job_posting_id == posting_id)
+            .order_by(OutcomeEvent.received_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    gmail_outcome_block: dict[str, Any] | None = None
+    if gmail_outcome_row is not None:
+        gmail_outcome_block = {
+            "outcome_event_id": str(gmail_outcome_row.id),
+            "stage": _enum_value(gmail_outcome_row.outcome_type),
+            "received_at": gmail_outcome_row.received_at.isoformat(),
+            "email_thread_id": gmail_outcome_row.email_thread_id,
+            "subject": gmail_outcome_row.subject,
+        }
+
     return {
         "id": str(jp.id),
         "company": {
@@ -2847,6 +2915,9 @@ async def get_posting(
         "state_history": state_history,
         # feat/application-resume: per-application resume metadata (null if none).
         "resume": resume_block,
+        # feat/applied-pipeline-crosslink: read-only pointer to the matched Gmail
+        # Pipeline outcome (null if none). Informational; never moves state.
+        "gmail_outcome": gmail_outcome_block,
     }
 
 

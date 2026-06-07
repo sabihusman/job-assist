@@ -116,7 +116,12 @@ function TriagePageInner() {
   });
 
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
-  const selectedId = selectedIndex !== null ? (items[selectedIndex]?.id ?? null) : null;
+  // feat/applied-pipeline-crosslink: deep-link from the Pipeline ("View matched
+  // role" → /?posting=<id>). When set, the detail panel shows that posting
+  // (DetailPanel fetches by id), even if it isn't in the current list. Cleared
+  // on any explicit card select / close / Escape.
+  const [deepLinkId, setDeepLinkId] = useState<string | null>(() => searchParams.get('posting'));
+  const selectedId = selectedIndex !== null ? (items[selectedIndex]?.id ?? null) : deepLinkId;
 
   // PR #47: lifted reason-picker state. Local-to-TriageCard state was
   // unreachable from the page-level keyboard handler, which is why the
@@ -154,7 +159,9 @@ function TriagePageInner() {
   // deselects and STAYS neutral — the detail panel then animates back to its
   // resting width instead of snapping straight back to row 0.
   const hasData = items.length > 0;
-  const didAutoSelectRef = useRef(false);
+  // Suppress the first-row auto-select when arriving via a ?posting deep-link,
+  // so the linked posting (not row 0) is what shows.
+  const didAutoSelectRef = useRef(searchParams.get('posting') !== null);
   useEffect(() => {
     if (hasData && selectedIndex === null && !didAutoSelectRef.current) {
       didAutoSelectRef.current = true;
@@ -290,7 +297,10 @@ function TriagePageInner() {
       onAction4: () => {
         if (selectedId) handleAction(selectedId, { kind: 'snoozed' });
       },
-      onEscape: () => setSelectedIndex(null),
+      onEscape: () => {
+        setSelectedIndex(null);
+        setDeepLinkId(null);
+      },
     },
     /* enabled */ !recordAction.isPending && reasonPickerCardId === null,
   );
@@ -334,7 +344,10 @@ function TriagePageInner() {
             selectedIndex={selectedIndex}
             reasonPickerCardId={reasonPickerCardId}
             selectedIds={selectedIds}
-            onSelect={setSelectedIndex}
+            onSelect={(i) => {
+              setDeepLinkId(null);
+              setSelectedIndex(i);
+            }}
             onToggleReason={handleToggleReason}
             onAction={handleAction}
             onToggleSelect={toggleSelect}
@@ -353,7 +366,10 @@ function TriagePageInner() {
 
         <DetailPanel
           selectedId={selectedId}
-          onClose={() => setSelectedIndex(null)}
+          onClose={() => {
+            setSelectedIndex(null);
+            setDeepLinkId(null);
+          }}
           onAction={handleAction}
         />
       </div>
