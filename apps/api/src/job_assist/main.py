@@ -2063,6 +2063,57 @@ async def score_sweep_endpoint(
     )
 
 
+@app.post("/admin/score/backfill", tags=["admin"])
+async def score_backfill_endpoint(db: DbSession, batch_size: int = 100) -> dict[str, Any]:
+    """Re-score EVERY open posting with the current scorer, in ONE call.
+
+    Unlike ``/admin/score/sweep`` (which re-scores up to ``limit`` rows and
+    relies on the caller looping), this drains the whole corpus server-side via
+    ``rescore_open_postings``, which paginates in fixed-memory ``batch_size``
+    passes (heavy JD columns deferred, commit + expunge per batch). Peak memory
+    is bounded regardless of corpus size — no OOM, no client-side retry storm.
+
+    Use after a ``SCORER_VERSION`` bump to backfill the existing corpus. Returns
+    the counts plus a coverage check: ``not_on_current_version`` is the number
+    of open rows still NOT stamped with the live ``SCORER_VERSION`` — 0 means
+    100% coverage.
+
+    TODO: add authentication before exposing publicly. Dev-mode only today.
+    """
+    from sqlalchemy import func, select
+
+    from job_assist.db.models import JobPosting
+    from job_assist.services.rescore import rescore_open_postings
+    from job_assist.services.scoring import SCORER_VERSION
+
+    if batch_size < 1 or batch_size > 500:
+        raise HTTPException(status_code=422, detail="batch_size must be 1..500")
+
+    rescored, changed = await rescore_open_postings(db, batch_size=batch_size)
+
+    total_open = (
+        await db.execute(
+            select(func.count()).select_from(JobPosting).where(JobPosting.closed_at.is_(None))
+        )
+    ).scalar_one()
+    not_on_current = (
+        await db.execute(
+            select(func.count())
+            .select_from(JobPosting)
+            .where(JobPosting.closed_at.is_(None))
+            .where(JobPosting.scorer_version.is_distinct_from(SCORER_VERSION))
+        )
+    ).scalar_one()
+
+    return {
+        "rescored": rescored,
+        "changed": changed,
+        "total_open": total_open,
+        "scorer_version": SCORER_VERSION,
+        "not_on_current_version": not_on_current,
+    }
+
+
 # ── Admin — backfills ─────────────────────────────────────────────────────────
 
 

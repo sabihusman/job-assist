@@ -1319,6 +1319,52 @@
         }
       }
     },
+    "/admin/score/backfill": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Score Backfill Endpoint",
+        "description": "Re-score EVERY open posting with the current scorer, in ONE call.\n\nUnlike ``/admin/score/sweep`` (which re-scores up to ``limit`` rows and\nrelies on the caller looping), this drains the whole corpus server-side via\n``rescore_open_postings``, which paginates in fixed-memory ``batch_size``\npasses (heavy JD columns deferred, commit + expunge per batch). Peak memory\nis bounded regardless of corpus size \u2014 no OOM, no client-side retry storm.\n\nUse after a ``SCORER_VERSION`` bump to backfill the existing corpus. Returns\nthe counts plus a coverage check: ``not_on_current_version`` is the number\nof open rows still NOT stamped with the live ``SCORER_VERSION`` \u2014 0 means\n100% coverage.\n\nTODO: add authentication before exposing publicly. Dev-mode only today.",
+        "operationId": "score_backfill_endpoint_admin_score_backfill_post",
+        "parameters": [
+          {
+            "name": "batch_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Batch Size"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Score Backfill Endpoint Admin Score Backfill Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/backfill/department-team": {
       "post": {
         "tags": [
