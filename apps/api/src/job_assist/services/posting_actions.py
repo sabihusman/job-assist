@@ -185,7 +185,7 @@ async def bulk_get_current_states(
     The empty-list short-circuit avoids issuing an ``IN ()`` that
     SQLAlchemy 2.0 emits as ``IN (NULL)`` with a deprecation warning.
     """
-    out: dict[uuid.UUID, CurrentState | None] = {pid: None for pid in job_posting_ids}
+    out: dict[uuid.UUID, CurrentState | None] = dict.fromkeys(job_posting_ids)
     if not job_posting_ids:
         return out
 
