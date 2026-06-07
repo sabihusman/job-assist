@@ -440,6 +440,55 @@
         }
       }
     },
+    "/admin/companies/crawl-config": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Set Company Crawl Config",
+        "description": "Patch the crawl-controlling fields (``tier``, ``source``) on existing\n``target_company`` rows, matched by ``name``. The seed endpoint only inserts\nor backfills NULLs \u2014 it can't *change* an existing tier/source, so this is\nthe lever for deactivating or re-tiering a company already in the DB.\n\nThese two columns gate crawling:\n  * the daily curated cron (``GET /admin/ingest/plan``) ingests only rows\n    with ``tier IS NOT NULL``;\n  * the Apify Workday/iCIMS sweep (``list_fantastic_targets``) ingests only\n    rows with ``source == 'curated'``.\n\nSo to STOP crawling an off-profile company WITHOUT deleting it \u2014 preserving\nthe row, its ``domain``, and all Gmail-match history \u2014 set ``tier=null`` AND\n``source='deactivated'``: it drops out of BOTH paths and its Apify spend\nstops. To PROMOTE a broad-discovered shell (``tier=null``) into the curated\ndaily cron, set ``tier`` to a pedigree (1-4).\n\nBody: ``[{\"name\": \"Athene\", \"tier\": null, \"source\": \"deactivated\"}, ...]``.\nA field is patched ONLY when its key is present (JSON ``null`` => set NULL;\nan absent key leaves the column untouched). Only ``tier`` and ``source`` are\nmutable here \u2014 every other column (incl. ``domain``) is immutable.\n\nValidation runs over the whole batch BEFORE any write, so a single bad value\nrejects the request with no partial commit. Idempotent \u2014 returns per-name\nupdated / unchanged / not_found.\n\nTODO: add authentication before exposing publicly. Dev-mode only.",
+        "operationId": "set_company_crawl_config_admin_companies_crawl_config_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array",
+                "title": "Rows"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Set Company Crawl Config Admin Companies Crawl Config Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/seed/contacts": {
       "post": {
         "summary": "Seed Contacts",
