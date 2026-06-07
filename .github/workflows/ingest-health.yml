@@ -132,7 +132,7 @@ jobs:
 
       - name: Email alert (if SMTP configured)
         if: steps.health.outputs.unhealthy == 'true' && steps.mail.outputs.configured == 'true'
-        uses: dawidd6/action-send-mail@v3
+        uses: dawidd6/action-send-mail@4226df7daafa6fc901a43789c49bf7ab309066e7  # v3
         with:
           server_address: smtp.gmail.com
           server_port: 465
