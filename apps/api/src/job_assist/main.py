@@ -719,6 +719,45 @@ async def seed_target_companies(
     }
 
 
+_CRAWL_CONFIG_SOURCES = {"curated", "broad", "deactivated", "applied"}
+
+
+def _validate_crawl_config_row(row: dict[str, Any]) -> None:
+    """Validate one crawl-config patch row; raise HTTP 400 on any bad field.
+
+    ``tier`` (when its key is present) must be null or an int 1-4; ``source``
+    (when present) must be a known provenance value. ``bool`` is rejected as a
+    tier because ``True``/``False`` are ints in Python.
+    """
+    if not row.get("name"):
+        raise HTTPException(status_code=400, detail=f"row missing 'name': {row!r}")
+    if "tier" in row:
+        tier = row["tier"]
+        if tier is not None and (
+            not isinstance(tier, int) or isinstance(tier, bool) or not (1 <= tier <= 4)
+        ):
+            raise HTTPException(status_code=400, detail=f"tier must be null or 1-4: {row!r}")
+    if "source" in row and row["source"] not in _CRAWL_CONFIG_SOURCES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"source must be one of {sorted(_CRAWL_CONFIG_SOURCES)}: {row!r}",
+        )
+
+
+def _apply_crawl_config(tc: Any, row: dict[str, Any]) -> bool:
+    """Apply a validated patch to a TargetCompany row. Patches ``tier`` / ``source``
+    only when the key is present. Returns True iff a column actually changed.
+    """
+    changed = False
+    if "tier" in row and tc.tier != row["tier"]:
+        tc.tier = row["tier"]
+        changed = True
+    if "source" in row and tc.source != row["source"]:
+        tc.source = row["source"]
+        changed = True
+    return changed
+
+
 @app.post("/admin/companies/crawl-config", tags=["admin"])
 async def set_company_crawl_config(
     rows: list[dict[str, Any]],
@@ -756,22 +795,9 @@ async def set_company_crawl_config(
 
     from job_assist.db.models.target_company import TargetCompany
 
-    allowed_sources = {"curated", "broad", "deactivated", "applied"}
-
     # Validate the entire batch up front — reject cleanly with no partial write.
     for row in rows:
-        if not row.get("name"):
-            raise HTTPException(status_code=400, detail=f"row missing 'name': {row!r}")
-        tier = row.get("tier") if "tier" in row else None
-        if "tier" in row and tier is not None and (
-            not isinstance(tier, int) or isinstance(tier, bool) or not (1 <= tier <= 4)
-        ):
-            raise HTTPException(status_code=400, detail=f"tier must be null or 1-4: {row!r}")
-        if "source" in row and row["source"] not in allowed_sources:
-            raise HTTPException(
-                status_code=400,
-                detail=f"source must be one of {sorted(allowed_sources)}: {row!r}",
-            )
+        _validate_crawl_config_row(row)
 
     updated: list[str] = []
     unchanged: list[str] = []
@@ -784,15 +810,10 @@ async def set_company_crawl_config(
         ).scalar_one_or_none()
         if tc is None:
             not_found.append(name)
-            continue
-        changed = False
-        if "tier" in row and tc.tier != row["tier"]:
-            tc.tier = row["tier"]
-            changed = True
-        if "source" in row and tc.source != row["source"]:
-            tc.source = row["source"]
-            changed = True
-        (updated if changed else unchanged).append(name)
+        elif _apply_crawl_config(tc, row):
+            updated.append(name)
+        else:
+            unchanged.append(name)
 
     await db.commit()
     return {
