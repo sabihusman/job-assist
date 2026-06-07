@@ -1,13 +1,14 @@
 'use client';
 
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useState } from 'react';
+import { Suspense, useMemo } from 'react';
 
-import { AppliedList } from '@/components/applied/AppliedList';
 import { AppliedSortStrip } from '@/components/applied/AppliedSortStrip';
+import { UnifiedAppliedList } from '@/components/applied/UnifiedAppliedList';
 import { AppShell } from '@/components/chrome/AppShell';
-import { useAppliedPostings } from '@/lib/api/applied';
+import { useAllOutcomes, useAppliedPostings } from '@/lib/api/applied';
 import type { AppliedSort } from '@/lib/applied/types';
+import { unifyApplied } from '@/lib/applied/unify';
 
 /**
  * Applied page (PR #32c).
@@ -44,47 +45,47 @@ function AppliedPageInner() {
   const searchParams = useSearchParams();
   const sort = (searchParams.get('sort') as AppliedSort | null) ?? 'applied';
 
-  const page1 = useAppliedPostings();
-  const [extraOffset, setExtraOffset] = useState<number | null>(null);
-  const extra = useAppliedPostings(extraOffset ?? 0, extraOffset !== null);
+  // feat/applied-unified: the manual Applied funnel is now an OVERLAY, not the
+  // membership source. Manual is tiny (~4) so a single page suffices — Load
+  // More is gone. The Pipeline (Gmail, ~150) is the authoritative membership
+  // source and is fetched inside UnifiedAppliedList (shared cache with the
+  // Pipeline page). We fetch it here too only to show the resolved count; React
+  // Query dedupes the request by key.
+  const manual = useAppliedPostings();
+  const outcomes = useAllOutcomes(true);
 
-  const page1Items = page1.data?.items ?? [];
-  const items =
-    extraOffset !== null && extra.data ? [...page1Items, ...extra.data.items] : page1Items;
-  const total = page1.data?.total ?? 0;
-  const hasMore = total > items.length;
+  const manualPostings = manual.data?.items ?? [];
+  const count = useMemo(
+    () => unifyApplied(outcomes.data?.items ?? [], manualPostings).length,
+    [outcomes.data, manualPostings],
+  );
 
-  const isError = page1.isError || extra.isError;
+  const isError = manual.isError || outcomes.isError;
   const errorMsg =
-    (page1.error as Error)?.message ?? (extra.error as Error)?.message ?? 'Unknown error';
+    (manual.error as Error)?.message ?? (outcomes.error as Error)?.message ?? 'Unknown error';
+  const isLoading = manual.isLoading || outcomes.isLoading;
 
   return (
     <div className="flex min-w-0 flex-col gap-4 px-4 py-4 md:px-6">
       <div className="flex items-center justify-between">
         <p className="text-[13px] text-muted-foreground">
-          {page1.data ? `${items.length} of ${total} active` : '…'}
+          {isLoading ? '…' : `${count} application${count === 1 ? '' : 's'}`}
         </p>
         <AppliedSortStrip />
       </div>
 
       {isError ? (
-        <ErrorCard message={errorMsg} onRetry={() => page1.refetch()} />
-      ) : page1.isLoading ? (
+        <ErrorCard
+          message={errorMsg}
+          onRetry={() => {
+            manual.refetch();
+            outcomes.refetch();
+          }}
+        />
+      ) : isLoading ? (
         <LoadingSkeleton />
       ) : (
-        <>
-          <AppliedList postings={items} sort={sort} />
-          {hasMore && (
-            <button
-              type="button"
-              onClick={() => setExtraOffset(items.length)}
-              disabled={extra.isLoading}
-              className="self-center rounded-md border border-border bg-surface px-3 py-1 text-[12px] hover:bg-accent disabled:opacity-50"
-            >
-              {extra.isLoading ? 'Loading…' : `Load more (${total - items.length} remaining)`}
-            </button>
-          )}
-        </>
+        <UnifiedAppliedList manualPostings={manualPostings} sort={sort} />
       )}
     </div>
   );

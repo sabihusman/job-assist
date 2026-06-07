@@ -28,7 +28,19 @@ export type OutcomeEvent = {
   target_company_id?: string | null;
   // feat/pipeline-detail: ~200-char Gmail preview (no email body is stored).
   raw_snippet?: string | null;
+  // feat/applied-unified: posting-specific overlay, set ONLY when this email
+  // was matched to ONE corpus posting via the #162 no-fanout matcher (NULL for
+  // the unlinked majority). `posting_title` is the real role; `manual_status`
+  // is the AUTHORITATIVE manual application_state on that posting — it wins
+  // over the Gmail stage in the unified Applied view. Posting-specific by
+  // construction, so it can never reintroduce the company-level fanout (#157).
+  posting_title?: string | null;
+  manual_status?: ResolvedStatus | null;
 };
+
+// feat/manual-application-status: the manual lifecycle stage (mirrors the
+// Python APPLICATION_STATUS_VALUES). Canonical source is the ORM model.
+export type ResolvedStatus = 'applied' | 'interview' | 'offer' | 'accepted' | 'rejected';
 
 export type OutcomesListResponse = {
   total: number;

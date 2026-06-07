@@ -3417,7 +3417,12 @@ async def list_outcomes(
     """
     from sqlalchemy import func, select
 
-    from job_assist.db.models import OutcomeEvent, TargetCompany
+    from job_assist.db.models import (
+        ApplicationState,
+        JobPosting,
+        OutcomeEvent,
+        TargetCompany,
+    )
 
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=422, detail="limit must be 1..200")
@@ -3439,9 +3444,26 @@ async def list_outcomes(
     # LEFT JOIN target_company so a linked row can surface its real name; the
     # join column is NULL for the unlinked majority (which the client labels
     # from the subject instead).
+    # feat/applied-unified: LEFT JOIN the linked posting (job_posting_id, set
+    # ONLY by the #162 no-fanout matcher — never company-level) so each Gmail
+    # row can carry (a) the real role title and (b) the manual application_state
+    # overlay. Both join columns are NULL for the unlinked majority. These feed
+    # the unified Applied view's manual-vs-Gmail resolution (manual wins where
+    # set); the join is posting-specific by construction, so it CANNOT
+    # reintroduce the company-level fanout bug (#157).
     rows_stmt = (
-        select(OutcomeEvent, TargetCompany.name)
+        select(
+            OutcomeEvent,
+            TargetCompany.name,
+            ApplicationState.status,
+            JobPosting.normalized_title,
+        )
         .outerjoin(TargetCompany, OutcomeEvent.target_company_id == TargetCompany.id)
+        .outerjoin(JobPosting, OutcomeEvent.job_posting_id == JobPosting.id)
+        .outerjoin(
+            ApplicationState,
+            OutcomeEvent.job_posting_id == ApplicationState.job_posting_id,
+        )
         .order_by(OutcomeEvent.received_at.asc())
         .limit(limit)
         .offset(offset)
@@ -3468,8 +3490,15 @@ async def list_outcomes(
             # feat/pipeline-detail: the ~200-char Gmail preview (no body is
             # stored) — shown in the Pipeline card detail panel.
             "raw_snippet": o.raw_snippet,
+            # feat/applied-unified: posting-specific overlay (NULL unless this
+            # email was matched to ONE corpus posting via #162). ``posting_title``
+            # is the real role; ``manual_status`` is the authoritative manual
+            # application_state on that posting (manual overrides Gmail stage in
+            # the unified Applied view).
+            "posting_title": posting_title,
+            "manual_status": _enum_value(manual_status),
         }
-        for (o, company_name) in rows
+        for (o, company_name, manual_status, posting_title) in rows
     ]
 
     return {"total": total, "offset": offset, "limit": limit, "items": items}
