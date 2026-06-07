@@ -2700,6 +2700,30 @@
         }
       }
     },
+    "/admin/ingest/health": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Ingest Health",
+        "description": "Dead-man's-switch health verdict for the whole ingest pipeline. Pure SELECT.\n\nThe ``ingest-health`` cron curls this daily and alerts when ``ok`` is false,\nso the operator never has to manually check whether crawling still works.\nFour checks, each mapping to a real failure mode:\n\n  * ``recent_success`` \u2014 a successful ``ingest_run`` finished within\n    ``_HEALTH_RECENT_HOURS`` (proves the daily curated cron actually ran).\n  * ``no_hard_failures`` \u2014 zero ``failed`` runs in that window\n    (``handle_not_found`` is a stale-board signal \u2014 surfaced, not a failure).\n  * ``broad_fresh`` \u2014 a ``discovered_handle`` was swept in that window\n    (proves the BROAD-ingest cron ran, not just the curated one).\n  * ``not_starved`` \u2014 at least ``_HEALTH_MIN_NEW_ROLES`` net-new postings over\n    the last ``_HEALTH_STARVATION_DAYS`` (catches \"the well ran dry\").",
+        "operationId": "ingest_health_admin_ingest_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Ingest Health Admin Ingest Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/discovered-handles/seed": {
       "post": {
         "tags": [
