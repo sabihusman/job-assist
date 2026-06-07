@@ -12,9 +12,11 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Least-privilege defaults. Jobs that need more declare it explicitly.
-permissions:
-  contents: read
+# Least-privilege: permissions are declared PER JOB (SonarQube githubactions:S8264),
+# never at the workflow level. Jobs that check out the repo grant themselves
+# `contents: read`; jobs needing more add it to their own block (web-e2e:
+# deployments:read, pr-comment: pull-requests:write); jobs that touch no token
+# scope declare `permissions: {}`.
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -24,6 +26,8 @@ jobs:
   web-lint:
     name: Web · Lint
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -37,6 +41,8 @@ jobs:
   web-typecheck:
     name: Web · Typecheck
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -50,6 +56,8 @@ jobs:
   web-test:
     name: Web · Unit Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -156,6 +164,8 @@ jobs:
   api-lint:
     name: API · Lint
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: apps/api
@@ -171,6 +181,8 @@ jobs:
   api-typecheck:
     name: API · Typecheck
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: apps/api
@@ -189,6 +201,8 @@ jobs:
     # change must regenerate the snapshot in the same PR.
     name: API · OpenAPI Snapshot
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: apps/api
@@ -207,6 +221,8 @@ jobs:
   api-test:
     name: API · Unit Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: apps/api
@@ -244,6 +260,8 @@ jobs:
     # runner. The async URL in config.py is for the app runtime only.
     name: API · Migration Check
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: apps/api
@@ -310,6 +328,8 @@ jobs:
   secret-scan:
     name: Secret Scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -336,6 +356,7 @@ jobs:
     # gate job requires no editing when the real harness replaces this stub.
     name: Outreach Eval (placeholder — active Week 4)
     runs-on: ubuntu-latest
+    permissions: {}  # no checkout, no token scope needed
     steps:
       - name: Eval not yet implemented
         run: |
@@ -368,6 +389,7 @@ jobs:
       - outreach-eval
     if: always() && github.event_name == 'pull_request'
     permissions:
+      contents: read
       pull-requests: write
     steps:
       - uses: actions/github-script@v7
@@ -437,6 +459,7 @@ jobs:
   all-checks:
     name: All Checks
     runs-on: ubuntu-latest
+    permissions: {}  # gate job: reads needs.* results only, no token scope
     needs:
       - web-lint
       - web-typecheck
