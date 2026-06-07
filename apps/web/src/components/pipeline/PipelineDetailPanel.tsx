@@ -1,6 +1,7 @@
 'use client';
 
-import { ArrowLeft, X } from 'lucide-react';
+import { ArrowLeft, SquareArrowOutUpRight, X } from 'lucide-react';
+import Link from 'next/link';
 
 import { CompanyAvatar } from '@/components/shared/CompanyAvatar';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
@@ -135,6 +136,10 @@ function ContentBody({
   const company = deriveLabel(events);
   const role = deriveRole(events);
   const stage = stageOf(latest.stage);
+  // feat/applied-pipeline-crosslink: if any email here was matched to a SPECIFIC
+  // corpus posting (outcome_event.job_posting_id), link to it. Posting-specific
+  // by construction — never company-level.
+  const linkedPostingId = events.find((e) => e.posting_id)?.posting_id ?? null;
 
   return (
     <div className="flex h-full flex-col">
@@ -155,6 +160,17 @@ function ContentBody({
                 ? fmtDate(latest.received_at)
                 : `${events.length} emails · ${fmtDate(events[0].received_at)} – ${fmtDate(latest.received_at)}`}
             </span>
+            {linkedPostingId && (
+              <Link
+                href={`/?posting=${linkedPostingId}`}
+                data-testid="view-posting-link"
+                className="mt-1 inline-flex items-center gap-1 text-[12px] text-primary underline-offset-2 hover:underline"
+                title="Open the matched role in Triage"
+              >
+                <SquareArrowOutUpRight className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                View matched role
+              </Link>
+            )}
           </div>
         </div>
 

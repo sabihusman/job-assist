@@ -1,6 +1,7 @@
 'use client';
 
-import { ArrowLeft, ExternalLink, X } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Mail, X } from 'lucide-react';
+import Link from 'next/link';
 import { useState } from 'react';
 
 import { ActionButton } from '@/components/shared/ActionButton';
@@ -13,8 +14,9 @@ import { StatusButtons } from '@/components/triage/StatusButtons';
 import type { TriageCardAction } from '@/components/triage/TriageCard';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { usePosting } from '@/lib/api/hooks';
+import { STAGE_LABELS, stageOf } from '@/lib/applied/stages';
 import { familyLabel } from '@/lib/triage/family-labels';
-import type { PostingDetail } from '@/lib/triage/types';
+import type { GmailOutcomeLink, PostingDetail } from '@/lib/triage/types';
 import { useIsLgUp } from '@/lib/use-media-query';
 import { cn } from '@/lib/utils';
 
@@ -278,6 +280,11 @@ function DetailContentBody({
           gmailRejectionHint={posting.state.gmail_rejection_hint ?? false}
         />
 
+        {/* feat/applied-pipeline-crosslink: read-only pointer to the matched
+            Gmail Pipeline entry. Manual status above stays authoritative; this
+            is purely a navigational hint (links to the Pipeline). */}
+        {posting.gmail_outcome && <GmailOutcomeChip outcome={posting.gmail_outcome} />}
+
         {/* JD markdown — summary preferred, full description on toggle.
             Keyed on posting.id so the showFullJd state resets whenever
             the operator selects a different posting. */}
@@ -387,6 +394,36 @@ function JdSection({
       </h4>
       <p className="mt-3 text-[13px] text-muted-foreground">No description available.</p>
     </section>
+  );
+}
+
+/**
+ * Read-only cross-link to the matched Gmail Pipeline entry (feat/applied-
+ * pipeline-crosslink). Informational only — it does NOT change status (manual
+ * application_state stays authoritative). Links to the Pipeline view. The match
+ * is posting-specific (one email → at-most-one posting), never company-level,
+ * so this never reintroduces the fanout bug.
+ */
+function GmailOutcomeChip({ outcome }: { outcome: GmailOutcomeLink }) {
+  const stage = stageOf(outcome.stage);
+  const label = stage ? STAGE_LABELS[stage] : outcome.stage;
+  const date = new Date(outcome.received_at).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
+  return (
+    <Link
+      href="/pipeline"
+      data-testid="gmail-outcome-link"
+      className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-2 px-2.5 py-1.5 text-[12px] text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
+      title="View in the Gmail Pipeline"
+    >
+      <Mail className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      <span>
+        Gmail: <span className="font-medium text-foreground/90">{label}</span> · {date}
+      </span>
+      <span aria-hidden="true">→</span>
+    </Link>
   );
 }
 
