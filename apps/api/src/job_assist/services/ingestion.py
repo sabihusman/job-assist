@@ -32,14 +32,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 if TYPE_CHECKING:
     from sqlalchemy.engine import CursorResult
 
-from job_assist.adapters.base import Adapter, HandleNotFoundError
+from job_assist.adapters.base import Adapter, HandleNotFoundError, NormalizedPosting
 from job_assist.db.models.closed_channel import ClosedChannel
 from job_assist.db.models.ingest_run import IngestRun
 from job_assist.db.models.job_posting import JobPosting
 from job_assist.db.models.operator_profile import OperatorProfile
 from job_assist.db.models.posting_source import PostingSource
 from job_assist.db.models.target_company import TargetCompany
-from job_assist.triage.config import hard_rule_config_from_profile
+from job_assist.triage.config import HardRuleConfig, hard_rule_config_from_profile
 
 logger = structlog.get_logger(__name__)
 
@@ -95,44 +95,17 @@ class IngestionService:
         postings_skipped_title_filter = 0
 
         try:
-            # ── Resolve canonical company name ────────────────────────────────
-            # When the caller didn't hand us the company (the native path),
-            # resolve it by ats_handle as before.
-            if target_company is None:
-                tc_row = await session.execute(
-                    select(TargetCompany).where(TargetCompany.ats_handle == handle)
-                )
-                target_company = tc_row.scalar_one_or_none()
-            canonical_name: str = (
-                target_company.name if target_company else handle.replace("-", " ").title()
+            # Per-run setup, loaded ONCE so the per-posting loop stays O(1):
+            # resolve the company link, then the operator profile + hard-rule
+            # inputs (see each helper for the contract).
+            target_company, canonical_name = await self._resolve_company_and_name(
+                session, handle, target_company
             )
-
-            # ── Operator profile (PR #56) ────────────────────────────────────
-            # Loaded once per ingest run. Scoring is per-posting but cheap;
-            # passing the profile in by reference avoids N+1 reads. NULL means
-            # the table is unseeded — score_posting falls through to neutral
-            # defaults if any extractor needs a field that isn't set.
             op_row = await session.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
             operator_profile = op_row.scalar_one_or_none()
-
-            # ── Hard-rule inputs (PR C) ──────────────────────────────────────
-            # Build the HardRuleConfig + load the active ClosedChannel ONCE per
-            # run (one company per handle), mirroring the operator_profile read
-            # so the per-posting eval below stays O(1) — no N+1. ``None`` config
-            # when the profile is unseeded → the eval is skipped per-posting.
-            hard_rule_config = (
-                hard_rule_config_from_profile(operator_profile)
-                if operator_profile is not None
-                else None
+            hard_rule_config, active_closed_channel = await self._load_hard_rule_inputs(
+                session, operator_profile, target_company
             )
-            active_closed_channel = None
-            if target_company is not None:
-                cc_row = await session.execute(
-                    select(ClosedChannel)
-                    .where(ClosedChannel.target_company_id == target_company.id)
-                    .where(ClosedChannel.unsealed_at.is_(None))
-                )
-                active_closed_channel = cc_row.scalar_one_or_none()
 
             # ── Fetch ─────────────────────────────────────────────────────────
             raw_postings = await adapter.fetch_postings(handle)
@@ -151,158 +124,21 @@ class IngestionService:
 
                 norm = adapter.normalize(raw, canonical_name)
 
-                # ── Upsert JobPosting by content_hash ─────────────────────────
-                jp_row = await session.execute(
-                    select(JobPosting).where(JobPosting.content_hash == norm.content_hash)
-                )
-                job_posting = jp_row.scalar_one_or_none()
-
-                if job_posting is None:
-                    job_posting = JobPosting(
-                        canonical_company_name=norm.canonical_company_name,
-                        normalized_title=norm.normalized_title,
-                        raw_title=norm.raw_title,
-                        location_raw=norm.location_raw,
-                        locations_normalized=norm.locations_normalized,
-                        remote_type=norm.remote_type,
-                        salary_min=norm.salary_min,
-                        salary_max=norm.salary_max,
-                        salary_currency=norm.salary_currency,
-                        salary_period=norm.salary_period,
-                        seniority_level=norm.seniority_level,
-                        role_family=norm.role_family,
-                        department=norm.department,
-                        team=norm.team,
-                        jd_text=norm.jd_text,
-                        jd_text_hash=norm.jd_text_hash,
-                        content_hash=norm.content_hash,
-                        posted_at=norm.posted_at,
-                        first_seen_at=norm.first_seen_at,
-                        last_seen_at=norm.last_seen_at,
-                        should_embed=norm.should_embed,
-                        target_company_id=(target_company.id if target_company else None),
-                    )
-                    session.add(job_posting)
-                    await session.flush()
+                # Each sub-step is an independently-testable helper; the
+                # sequence (upsert → score → hard-rules → source → flush) and
+                # its per-row flush boundary are unchanged from the inline
+                # version.
+                job_posting, is_new = await self._upsert_job_posting(session, norm, target_company)
+                if is_new:
                     postings_new += 1
                 else:
-                    job_posting.last_seen_at = datetime.now(tz=UTC)
-                    # Reappearance: a posting that was marked stale
-                    # (``closed_at`` set by the mark-stale sweep) but now
-                    # shows up again on the ATS is a live reposting —
-                    # re-open it. We just refreshed last_seen_at above, so
-                    # clear closed_at to match. Without this, a reposted
-                    # role would stay hidden forever.
-                    if job_posting.closed_at is not None:
-                        job_posting.closed_at = None
-                    if job_posting.jd_text_hash != norm.jd_text_hash:
-                        job_posting.jd_text = norm.jd_text
-                        job_posting.jd_text_hash = norm.jd_text_hash
-                    if target_company is not None and job_posting.target_company_id is None:
-                        job_posting.target_company_id = target_company.id
-                    # Self-heal the new department / team columns on re-ingest:
-                    # only fill when the column is currently NULL so we don't
-                    # overwrite a value the operator may have edited by hand.
-                    if job_posting.department is None and norm.department is not None:
-                        job_posting.department = norm.department
-                    if job_posting.team is None and norm.team is not None:
-                        job_posting.team = norm.team
-                    # Self-heal salary on re-ingest (PR: Greenhouse salary fix).
-                    # Greenhouse rows ingested before JD-body salary extraction
-                    # have NULL salary; once the adapter starts populating it,
-                    # backfill on the next re-fetch. Fill-if-NULL only — never
-                    # overwrite an existing range (could be operator-corrected
-                    # or a prior good parse). Backfill the whole tuple together
-                    # so currency/period stay consistent with the numbers.
-                    if job_posting.salary_min is None and norm.salary_min is not None:
-                        job_posting.salary_min = norm.salary_min
-                        job_posting.salary_max = norm.salary_max
-                        job_posting.salary_currency = norm.salary_currency
-                        # ``salary_period`` is a str on NormalizedPosting but a
-                        # SalaryPeriod enum column; SQLAlchemy coerces on write.
-                        # Same enum-assignment pattern as the reclassify sweep.
-                        job_posting.salary_period = norm.salary_period  # type: ignore[assignment]
                     postings_updated += 1
 
-                # ── Auto-score (PR #56) ──────────────────────────────────────
-                # Compute and write fit_score on every new/updated posting.
-                # Bestiary contract (PR #56 Decision E): a scoring failure
-                # must NEVER cascade to fail an ingest run. Score is
-                # optional decoration — log + continue on any exception so
-                # a Workday/iCIMS ingest keeps progressing even if the
-                # heuristic raises on a malformed payload.
-                if operator_profile is not None:
-                    try:
-                        from job_assist.services.scoring import SCORER_VERSION, score_posting
-
-                        new_score = score_posting(
-                            job_posting,
-                            operator_profile,
-                            tier=(target_company.tier if target_company else None),
-                        )
-                        job_posting.fit_score = new_score
-                        job_posting.scored_at = datetime.now(tz=UTC)
-                        job_posting.scorer_version = SCORER_VERSION
-                    except Exception as exc:
-                        logger.warning(
-                            "ingestion.scoring_failed",
-                            posting_id=str(job_posting.id) if job_posting.id else None,
-                            error=str(exc)[:300],
-                        )
-
-                # ── Hard-rule eligibility (PR C) ─────────────────────────────
-                # Wire the previously-orphaned apply_hard_rules into the corpus.
-                # Persist the failed RuleName (or NULL = passed) so /postings can
-                # filter cheaply and the operator can see WHY a row was hidden.
-                # Same Bestiary contract as scoring: a filter failure must NEVER
-                # cascade to fail the ingest run — log + continue.
-                if hard_rule_config is not None:
-                    try:
-                        from job_assist.triage.hard_rules import apply_hard_rules
-
-                        verdict = apply_hard_rules(
-                            job_posting,
-                            target_company,
-                            active_closed_channel,
-                            hard_rule_config,
-                        )
-                        job_posting.hard_rule_failed = (
-                            None if verdict.passed else verdict.failed_rule
-                        )
-                        job_posting.hard_rules_evaluated_at = datetime.now(tz=UTC)
-                    except Exception as exc:
-                        logger.warning(
-                            "ingestion.hard_rules_failed",
-                            posting_id=str(job_posting.id) if job_posting.id else None,
-                            error=str(exc)[:300],
-                        )
-
-                # ── Upsert PostingSource by (ats, source_job_id) ──────────────
-                ps_row = await session.execute(
-                    select(PostingSource).where(
-                        PostingSource.ats == norm.ats,
-                        PostingSource.source_job_id == norm.source_job_id,
-                    )
+                self._auto_score(job_posting, operator_profile, target_company)
+                self._eval_hard_rules(
+                    job_posting, target_company, active_closed_channel, hard_rule_config
                 )
-                posting_source = ps_row.scalar_one_or_none()
-
-                now = datetime.now(tz=UTC)
-                if posting_source is None:
-                    posting_source = PostingSource(
-                        job_posting_id=job_posting.id,
-                        ats=norm.ats,
-                        source_job_id=norm.source_job_id,
-                        source_url=norm.source_url,
-                        apply_url=norm.apply_url,
-                        raw_payload=norm.raw_payload,
-                        parser_version=norm.parser_version,
-                        fetch_status=norm.fetch_status,
-                        fetched_at=now,
-                    )
-                    session.add(posting_source)
-                else:
-                    posting_source.raw_payload = norm.raw_payload
-                    posting_source.fetched_at = now
+                await self._upsert_posting_source(session, norm, job_posting)
 
                 await session.flush()
 
@@ -361,6 +197,262 @@ class IngestionService:
             logger.exception("ingestion.failed", handle=handle, ats=adapter.ats)
 
         return run
+
+    # ── Per-run setup helpers ────────────────────────────────────────────────
+
+    async def _resolve_company_and_name(
+        self,
+        session: AsyncSession,
+        handle: str,
+        target_company: TargetCompany | None,
+    ) -> tuple[TargetCompany | None, str]:
+        """Resolve the company link + canonical name for this run.
+
+        When the caller didn't hand us the company (the native path), resolve it
+        by ``ats_handle == handle`` as before; the Fantastic.jobs/Apify path
+        passes the row in. ``canonical_name`` falls back to a title-cased handle
+        when no company row exists.
+        """
+        if target_company is None:
+            tc_row = await session.execute(
+                select(TargetCompany).where(TargetCompany.ats_handle == handle)
+            )
+            target_company = tc_row.scalar_one_or_none()
+        canonical_name: str = (
+            target_company.name if target_company else handle.replace("-", " ").title()
+        )
+        return target_company, canonical_name
+
+    async def _load_hard_rule_inputs(
+        self,
+        session: AsyncSession,
+        operator_profile: OperatorProfile | None,
+        target_company: TargetCompany | None,
+    ) -> tuple[HardRuleConfig | None, ClosedChannel | None]:
+        """Build the HardRuleConfig + load the active ClosedChannel ONCE per run
+        (PR C). Mirrors the operator_profile read so the per-posting eval stays
+        O(1) — no N+1. ``None`` config when the profile is unseeded → the eval is
+        skipped per-posting.
+        """
+        hard_rule_config = (
+            hard_rule_config_from_profile(operator_profile)
+            if operator_profile is not None
+            else None
+        )
+        active_closed_channel = None
+        if target_company is not None:
+            cc_row = await session.execute(
+                select(ClosedChannel)
+                .where(ClosedChannel.target_company_id == target_company.id)
+                .where(ClosedChannel.unsealed_at.is_(None))
+            )
+            active_closed_channel = cc_row.scalar_one_or_none()
+        return hard_rule_config, active_closed_channel
+
+    # ── Per-posting helpers ──────────────────────────────────────────────────
+
+    async def _upsert_job_posting(
+        self,
+        session: AsyncSession,
+        norm: NormalizedPosting,
+        target_company: TargetCompany | None,
+    ) -> tuple[JobPosting, bool]:
+        """Upsert a JobPosting by ``content_hash``. Returns ``(job_posting,
+        is_new)`` so the caller can keep the new/updated counters. The new branch
+        flushes to populate ``job_posting.id`` (needed by PostingSource), exactly
+        as before.
+        """
+        jp_row = await session.execute(
+            select(JobPosting).where(JobPosting.content_hash == norm.content_hash)
+        )
+        job_posting = jp_row.scalar_one_or_none()
+
+        if job_posting is None:
+            job_posting = self._create_job_posting(norm, target_company)
+            session.add(job_posting)
+            await session.flush()
+            return job_posting, True
+
+        self._update_job_posting(job_posting, norm, target_company)
+        return job_posting, False
+
+    def _create_job_posting(
+        self,
+        norm: NormalizedPosting,
+        target_company: TargetCompany | None,
+    ) -> JobPosting:
+        """Build a fresh JobPosting from a NormalizedPosting (new-row branch)."""
+        return JobPosting(
+            canonical_company_name=norm.canonical_company_name,
+            normalized_title=norm.normalized_title,
+            raw_title=norm.raw_title,
+            location_raw=norm.location_raw,
+            locations_normalized=norm.locations_normalized,
+            remote_type=norm.remote_type,
+            salary_min=norm.salary_min,
+            salary_max=norm.salary_max,
+            salary_currency=norm.salary_currency,
+            salary_period=norm.salary_period,
+            seniority_level=norm.seniority_level,
+            role_family=norm.role_family,
+            department=norm.department,
+            team=norm.team,
+            jd_text=norm.jd_text,
+            jd_text_hash=norm.jd_text_hash,
+            content_hash=norm.content_hash,
+            posted_at=norm.posted_at,
+            first_seen_at=norm.first_seen_at,
+            last_seen_at=norm.last_seen_at,
+            should_embed=norm.should_embed,
+            target_company_id=(target_company.id if target_company else None),
+        )
+
+    def _update_job_posting(
+        self,
+        job_posting: JobPosting,
+        norm: NormalizedPosting,
+        target_company: TargetCompany | None,
+    ) -> None:
+        """Refresh an existing JobPosting on re-ingest (update-row branch).
+
+        Bumps ``last_seen_at``, re-opens a reappeared posting, refreshes JD text
+        on change, and self-heals fill-if-NULL columns (company link, department,
+        team, salary). Mutations are byte-identical to the inline version.
+        """
+        job_posting.last_seen_at = datetime.now(tz=UTC)
+        # Reappearance: a posting that was marked stale (``closed_at`` set by the
+        # mark-stale sweep) but now shows up again on the ATS is a live
+        # reposting — re-open it. We just refreshed last_seen_at above, so clear
+        # closed_at to match. Without this, a reposted role would stay hidden
+        # forever.
+        if job_posting.closed_at is not None:
+            job_posting.closed_at = None
+        if job_posting.jd_text_hash != norm.jd_text_hash:
+            job_posting.jd_text = norm.jd_text
+            job_posting.jd_text_hash = norm.jd_text_hash
+        if target_company is not None and job_posting.target_company_id is None:
+            job_posting.target_company_id = target_company.id
+        # Self-heal the new department / team columns on re-ingest: only fill
+        # when the column is currently NULL so we don't overwrite a value the
+        # operator may have edited by hand.
+        if job_posting.department is None and norm.department is not None:
+            job_posting.department = norm.department
+        if job_posting.team is None and norm.team is not None:
+            job_posting.team = norm.team
+        # Self-heal salary on re-ingest (PR: Greenhouse salary fix). Greenhouse
+        # rows ingested before JD-body salary extraction have NULL salary; once
+        # the adapter starts populating it, backfill on the next re-fetch.
+        # Fill-if-NULL only — never overwrite an existing range (could be
+        # operator-corrected or a prior good parse). Backfill the whole tuple
+        # together so currency/period stay consistent with the numbers.
+        if job_posting.salary_min is None and norm.salary_min is not None:
+            job_posting.salary_min = norm.salary_min
+            job_posting.salary_max = norm.salary_max
+            job_posting.salary_currency = norm.salary_currency
+            # ``salary_period`` is a str on NormalizedPosting but a SalaryPeriod
+            # enum column; SQLAlchemy coerces on write. Same enum-assignment
+            # pattern as the reclassify sweep.
+            job_posting.salary_period = norm.salary_period  # type: ignore[assignment]
+
+    def _auto_score(
+        self,
+        job_posting: JobPosting,
+        operator_profile: OperatorProfile | None,
+        target_company: TargetCompany | None,
+    ) -> None:
+        """Compute + write fit_score on a new/updated posting (PR #56).
+
+        No-op when the profile is unseeded. Bestiary contract (PR #56 Decision
+        E): a scoring failure must NEVER cascade to fail an ingest run — score is
+        optional decoration, so log + swallow on any exception.
+        """
+        if operator_profile is None:
+            return
+        try:
+            from job_assist.services.scoring import SCORER_VERSION, score_posting
+
+            new_score = score_posting(
+                job_posting,
+                operator_profile,
+                tier=(target_company.tier if target_company else None),
+            )
+            job_posting.fit_score = new_score
+            job_posting.scored_at = datetime.now(tz=UTC)
+            job_posting.scorer_version = SCORER_VERSION
+        except Exception as exc:
+            logger.warning(
+                "ingestion.scoring_failed",
+                posting_id=str(job_posting.id) if job_posting.id else None,
+                error=str(exc)[:300],
+            )
+
+    def _eval_hard_rules(
+        self,
+        job_posting: JobPosting,
+        target_company: TargetCompany | None,
+        active_closed_channel: ClosedChannel | None,
+        hard_rule_config: HardRuleConfig | None,
+    ) -> None:
+        """Evaluate hard-rule eligibility + persist the failed RuleName (PR C).
+
+        No-op when the config is unseeded. Persist NULL = passed so /postings can
+        filter cheaply. Same Bestiary contract as scoring: a filter failure must
+        NEVER cascade to fail the ingest run — log + swallow.
+        """
+        if hard_rule_config is None:
+            return
+        try:
+            from job_assist.triage.hard_rules import apply_hard_rules
+
+            verdict = apply_hard_rules(
+                job_posting,
+                target_company,
+                active_closed_channel,
+                hard_rule_config,
+            )
+            job_posting.hard_rule_failed = None if verdict.passed else verdict.failed_rule
+            job_posting.hard_rules_evaluated_at = datetime.now(tz=UTC)
+        except Exception as exc:
+            logger.warning(
+                "ingestion.hard_rules_failed",
+                posting_id=str(job_posting.id) if job_posting.id else None,
+                error=str(exc)[:300],
+            )
+
+    async def _upsert_posting_source(
+        self,
+        session: AsyncSession,
+        norm: NormalizedPosting,
+        job_posting: JobPosting,
+    ) -> None:
+        """Upsert the PostingSource by ``(ats, source_job_id)`` — insert with full
+        provenance on first sight, else refresh ``raw_payload`` + ``fetched_at``.
+        """
+        ps_row = await session.execute(
+            select(PostingSource).where(
+                PostingSource.ats == norm.ats,
+                PostingSource.source_job_id == norm.source_job_id,
+            )
+        )
+        posting_source = ps_row.scalar_one_or_none()
+
+        now = datetime.now(tz=UTC)
+        if posting_source is None:
+            posting_source = PostingSource(
+                job_posting_id=job_posting.id,
+                ats=norm.ats,
+                source_job_id=norm.source_job_id,
+                source_url=norm.source_url,
+                apply_url=norm.apply_url,
+                raw_payload=norm.raw_payload,
+                parser_version=norm.parser_version,
+                fetch_status=norm.fetch_status,
+                fetched_at=now,
+            )
+            session.add(posting_source)
+        else:
+            posting_source.raw_payload = norm.raw_payload
+            posting_source.fetched_at = now
 
 
 # ── Stale-posting detection ────────────────────────────────────────────────────
