@@ -96,6 +96,7 @@ async def test_healthy_world_reports_ok(db_session: Any) -> None:
         h = await _health(client)
 
     assert h["ok"] is True, h["problems"]
+    assert h["severity"] == "ok"
     assert h["problems"] == []
     assert all(h["checks"].values())
 
@@ -115,6 +116,7 @@ async def test_starvation_flags_not_ok(db_session: Any) -> None:
         h = await _health(client)
 
     assert h["ok"] is False
+    assert h["severity"] == "degraded"  # starvation is a SOFT problem → yellow
     assert h["checks"]["not_starved"] is False
     assert any("starvation" in p for p in h["problems"])
 
@@ -132,6 +134,7 @@ async def test_failed_run_flags_not_ok(db_session: Any) -> None:
         h = await _health(client)
 
     assert h["ok"] is False
+    assert h["severity"] == "down"  # a failed run is a HARD problem → red
     assert h["checks"]["no_hard_failures"] is False
     assert h["metrics"]["failed_runs_recent"] >= 1
 
@@ -151,6 +154,7 @@ async def test_stale_broad_sweep_flags_not_ok(db_session: Any) -> None:
         h = await _health(client)
 
     assert h["ok"] is False
+    assert h["severity"] == "degraded"  # broad stale is a SOFT problem → yellow
     assert h["checks"]["broad_fresh"] is False
 
 
@@ -169,6 +173,7 @@ async def test_no_recent_success_flags_not_ok(db_session: Any) -> None:
         h = await _health(client)
 
     assert h["ok"] is False
+    assert h["severity"] == "down"  # cron stopped running is a HARD problem → red
     assert h["checks"]["recent_success"] is False
 
 
@@ -187,5 +192,6 @@ async def test_handle_not_found_is_not_a_hard_failure(db_session: Any) -> None:
         h = await _health(client)
 
     assert h["ok"] is True, h["problems"]
+    assert h["severity"] == "ok"
     assert h["checks"]["no_hard_failures"] is True
     assert h["metrics"]["handle_not_found_recent"] >= 1

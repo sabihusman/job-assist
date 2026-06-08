@@ -3787,8 +3787,18 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
     }
     problems = [messages[name] for name, passed in checks.items() if not passed]
 
+    # Three-state severity for the UI health dot. HARD problems (a cron didn't
+    # run / a run failed = the instance is erroring) are DOWN/red; SOFT problems
+    # (starvation, broad set going stale) are DEGRADED/yellow; otherwise OK/green.
+    # The frontend maps an unreachable endpoint to DOWN too — a dead backend
+    # must never read green.
+    hard_down = not checks["recent_success"] or not checks["no_hard_failures"]
+    soft_degraded = not checks["not_starved"] or not checks["broad_fresh"]
+    severity = "down" if hard_down else ("degraded" if soft_degraded else "ok")
+
     return {
         "ok": not problems,
+        "severity": severity,
         "problems": problems,
         "checks": checks,
         "metrics": {

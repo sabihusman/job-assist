@@ -1,0 +1,121 @@
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, test } from 'vitest';
+
+import { HealthDotView } from '@/components/chrome/HealthDot';
+import type { IngestHealth } from '@/lib/api/health';
+
+function makeHealth(over: Partial<IngestHealth> = {}): IngestHealth {
+  return {
+    ok: true,
+    severity: 'ok',
+    problems: [],
+    checks: {
+      recent_success: true,
+      no_hard_failures: true,
+      broad_fresh: true,
+      not_starved: true,
+    },
+    metrics: {
+      last_success_at: '2026-06-07T22:00:00Z',
+      failed_runs_recent: 0,
+      handle_not_found_recent: 0,
+      broad_last_swept_at: '2026-06-07T21:00:00Z',
+      net_new_starvation_window: 12,
+      window_hours: 26,
+      starvation_days: 3,
+    },
+    ...over,
+  };
+}
+
+describe('HealthDotView', () => {
+  test('GREEN: ok state → emerald dot, all checks pass', async () => {
+    render(<HealthDotView state="ok" health={makeHealth()} isError={false} />);
+    const dot = screen.getByTestId('health-dot');
+    expect(dot).toHaveAttribute('data-state', 'ok');
+    expect(dot.className).toContain('bg-emerald-500');
+    expect(dot).toHaveAccessibleName(/healthy/i);
+
+    await userEvent.click(dot);
+    expect(screen.getByTestId('health-popover')).toBeInTheDocument();
+    expect(screen.getByTestId('health-check-recent_success')).toHaveAttribute('data-pass', 'true');
+    expect(screen.getByTestId('health-check-not_starved')).toHaveAttribute('data-pass', 'true');
+  });
+
+  test('YELLOW: degraded state → amber dot, the soft check shows failing', async () => {
+    const health = makeHealth({
+      ok: false,
+      severity: 'degraded',
+      problems: ['starvation: only 0 net-new posting(s) in the last 3 days'],
+      checks: {
+        recent_success: true,
+        no_hard_failures: true,
+        broad_fresh: true,
+        not_starved: false,
+      },
+    });
+    render(<HealthDotView state="degraded" health={health} isError={false} />);
+    const dot = screen.getByTestId('health-dot');
+    expect(dot).toHaveAttribute('data-state', 'degraded');
+    expect(dot.className).toContain('bg-amber-500');
+
+    await userEvent.click(dot);
+    expect(screen.getByTestId('health-check-not_starved')).toHaveAttribute('data-pass', 'false');
+    expect(screen.getByTestId('health-check-recent_success')).toHaveAttribute('data-pass', 'true');
+  });
+
+  test('RED: down state → red dot, hard check failing', async () => {
+    const health = makeHealth({
+      ok: false,
+      severity: 'down',
+      problems: ['1 failed ingest_run(s) in the last 26h'],
+      checks: {
+        recent_success: true,
+        no_hard_failures: false,
+        broad_fresh: true,
+        not_starved: true,
+      },
+    });
+    render(<HealthDotView state="down" health={health} isError={false} />);
+    const dot = screen.getByTestId('health-dot');
+    expect(dot).toHaveAttribute('data-state', 'down');
+    expect(dot.className).toContain('bg-red-500');
+
+    await userEvent.click(dot);
+    expect(screen.getByTestId('health-check-no_hard_failures')).toHaveAttribute(
+      'data-pass',
+      'false',
+    );
+  });
+
+  test('UNREACHABLE → RED (never green/unknown): isError shows red + unreachable note', async () => {
+    // The backend is dead → no health data, isError=true. Must read red.
+    render(<HealthDotView state="down" health={undefined} isError={true} />);
+    const dot = screen.getByTestId('health-dot');
+    expect(dot).toHaveAttribute('data-state', 'down');
+    expect(dot.className).toContain('bg-red-500');
+
+    await userEvent.click(dot);
+    expect(screen.getByTestId('health-popover')).toHaveTextContent(/unreachable/i);
+  });
+
+  test('loading → neutral pulsing dot (not green), no false-healthy', async () => {
+    render(<HealthDotView state="loading" health={undefined} isError={false} />);
+    const dot = screen.getByTestId('health-dot');
+    expect(dot).toHaveAttribute('data-state', 'loading');
+    expect(dot.className).toContain('animate-pulse');
+    // Critically, loading must NOT be emerald (no premature green).
+    expect(dot.className).not.toContain('bg-emerald-500');
+
+    await userEvent.click(dot);
+    expect(screen.getByTestId('health-popover')).toHaveTextContent(/checking/i);
+  });
+
+  test('popover opens on hover and the dot is a labelled button (a11y)', async () => {
+    render(<HealthDotView state="ok" health={makeHealth()} isError={false} />);
+    expect(screen.queryByTestId('health-popover')).not.toBeInTheDocument();
+    await userEvent.hover(screen.getByTestId('health-dot'));
+    expect(screen.getByTestId('health-popover')).toBeInTheDocument();
+  });
+});
