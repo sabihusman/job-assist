@@ -100,7 +100,12 @@ def test_workbook_renders_all_rows_no_cap() -> None:
     """The 40-row cap is gone: every row handed in is rendered (the endpoint
     no longer clamps the SQL fetch, so the workbook must not clamp either)."""
     rows = [
-        (_posting(fit_score=90 - i), _target_company(f"Co{i}", tier=1), "greenhouse", f"https://x/{i}")
+        (
+            _posting(fit_score=90 - i),
+            _target_company(f"Co{i}", tier=1),
+            "greenhouse",
+            f"https://x/{i}",
+        )
         for i in range(57)  # well past the old 40 cap
     ]
     buf = build_workbook_bytes(
