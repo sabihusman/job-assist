@@ -49,7 +49,13 @@
   .diagram-stage{height:74vh;min-height:420px}
   .diagram-stage .mermaid{width:100%;height:100%;display:flex;align-items:center;justify-content:center}
   .diagram-stage .mermaid svg{width:100%;height:100%}
-  .svg-pan-zoom-control{transform:scale(1.1)}
+  /* Smooth zoom: ease the viewport transform. Pan stays 1:1 with the cursor —
+     the .panning class (set on mousedown) disables the transition so dragging
+     tracks the mouse exactly instead of lagging behind an animation. */
+  .diagram-stage svg{cursor:grab}
+  .diagram-stage svg.panning{cursor:grabbing}
+  .diagram-stage svg .svg-pan-zoom_viewport{transition:transform 140ms cubic-bezier(.22,.61,.36,1)}
+  .diagram-stage svg.panning .svg-pan-zoom_viewport{transition:none}
   footer{padding:18px 28px;color:var(--muted);border-top:1px solid var(--line);font-size:12.5px}
 
   /* PRINT / PDF mode: linear, all panels, fit diagrams to page width */
@@ -160,8 +166,13 @@
       svg.removeAttribute('style');
       svg.style.width='100%'; svg.style.height='100%';
       var pz = svgPanZoom(svg, {controlIconsEnabled:false, fit:true, center:true,
-        minZoom:0.3, maxZoom:25, zoomScaleSensitivity:0.4, dblClickZoomEnabled:false});
+        minZoom:0.3, maxZoom:25, zoomScaleSensitivity:0.2, dblClickZoomEnabled:false});
       svg.addEventListener('dblclick', function(){ try{ pz.reset(); }catch(_){} });
+      // 1:1 cursor tracking while dragging (transition off); smooth eased wheel-zoom otherwise.
+      svg.addEventListener('mousedown', function(){ svg.classList.add('panning'); });
+      var endPan = function(){ svg.classList.remove('panning'); };
+      document.addEventListener('mouseup', endPan);
+      svg.addEventListener('mouseleave', endPan);
     }catch(e){/* non-fatal */}
   }
 
