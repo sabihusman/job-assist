@@ -70,7 +70,29 @@ async function handler(
     init.duplex = 'half';
   }
 
-  const upstream = await fetch(url, init);
+  // Surface a proxy→upstream connection failure instead of letting it bubble
+  // into an opaque empty-body 500. If the fetch to Railway is reset / hangs /
+  // refuses (e.g. during a streamed write body), Next would otherwise return a
+  // bare 500 with no body — undiagnosable. Return a 502 carrying the real error
+  // (incl. undici's `cause`, where ECONNRESET / "socket hang up" lives).
+  let upstream: Response;
+  try {
+    upstream = await fetch(url, init);
+  } catch (err) {
+    const base = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    const cause = (err as { cause?: unknown }).cause;
+    const causeMsg =
+      cause instanceof Error ? `${cause.name}: ${cause.message}` : cause ? String(cause) : '';
+    return new Response(
+      JSON.stringify({
+        detail: 'Proxy could not reach the API',
+        error: causeMsg ? `${base} (cause: ${causeMsg})` : base,
+        upstream_path: upstreamPath,
+        method,
+      }),
+      { status: 502, headers: { 'content-type': 'application/json' } },
+    );
+  }
 
   const responseHeaders = new Headers();
   upstream.headers.forEach((value, key) => {

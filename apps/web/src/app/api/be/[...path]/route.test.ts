@@ -119,4 +119,25 @@ describe('API proxy route', () => {
     expect((init.headers as Headers).has('host')).toBe(false);
     expect((init.headers as Headers).get('x-keep')).toBe('1');
   });
+
+  test('upstream connection failure → 502 carrying the real error (not an empty 500)', async () => {
+    // undici surfaces connection resets as `TypeError: fetch failed` with the
+    // real reason on `.cause`. The proxy must echo BOTH so a write that dies on
+    // the proxy→API hop is diagnosable instead of an opaque empty body.
+    const err = new TypeError('fetch failed');
+    (err as { cause?: unknown }).cause = new Error('read ECONNRESET');
+    fetchMock.mockRejectedValue(err);
+
+    const res = await POST(
+      mockReq({ method: 'POST', body: 'BODY_STREAM' }),
+      params(['admin', 'companies', 'crawl-config']),
+    );
+
+    expect(res.status).toBe(502);
+    const body = (await res.json()) as { detail: string; error: string; upstream_path: string };
+    expect(body.detail).toContain('could not reach');
+    expect(body.error).toContain('fetch failed');
+    expect(body.error).toContain('ECONNRESET');
+    expect(body.upstream_path).toBe('admin/companies/crawl-config');
+  });
 });
