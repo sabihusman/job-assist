@@ -95,11 +95,15 @@
   var firstH2 = raw.search(/^##\s+/m);
   var headerMd = firstH2 >= 0 ? raw.slice(0, firstH2) : raw;
   var body = firstH2 >= 0 ? raw.slice(firstH2) : "";
-  var parts = body.split(/\n(?=##\s+)/g).map(function(s){return s.trim();}).filter(Boolean);
+  // Split on a newline that begins an H2 ("## "). Literal space + simple
+  // lookahead → no ambiguous repetition, so no ReDoS surface.
+  var parts = body.split(/\n(?=## )/g).map(function(s){return s.trim();}).filter(Boolean);
 
   function titleOf(secMd){
-    var m = secMd.match(/^##\s+(.+)$/m);
-    return m ? m[1].replace(/`/g,'').trim() : 'Section';
+    // First line only (string op, no regex), then strip leading #'s and
+    // backticks. Avoids the greedy ``(.+)$`` ReDoS pattern (Sonar S5852).
+    var firstLine = secMd.split('\n', 1)[0] || '';
+    return firstLine.replace(/^#+/, '').replace(/`/g, '').trim();
   }
   function shortTab(t){
     // "1. Ingest subsystem — adapters ..." -> "1 · Ingest subsystem"
