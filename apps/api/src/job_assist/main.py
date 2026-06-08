@@ -2763,27 +2763,33 @@ async def export_postings_xlsx(
     include_closed: bool = False,
     include_filtered: bool = False,
 ) -> Response:
-    """Export the current Triage view as a two-sheet xlsx.
+    """Export the CURRENT FILTERED VIEW as a two-sheet xlsx — every row the
+    Triage list would render for this URL, in the same sort order, with NO
+    row cap (just pagination removed).
 
-    Same filter / sort / cap vocabulary as ``GET /postings``. Output:
+    Same filter / sort / cap vocabulary as ``GET /postings``, built from the
+    SAME ``build_view_parts(spec)`` so the exported set is provably identical
+    to the list's — minus ``limit``/``offset``. Output:
       * Sheet 1 ``Export Context`` — timestamp, corpus size, active
         filters, matched-before-cap count, score range, scorer weights,
         operator hard rules, plain-language notes on the score.
-      * Sheet 2 ``Jobs`` — top ``EXPORT_ROW_CAP`` (40) rows by the
-        operator-selected sort, with rank, company, role, fit_score and
-        its five sub-scores, salary, location, remote_type, tier,
-        ats_source, apply_url, first_seen, jd_summary_markdown.
+      * Sheet 2 ``Jobs`` — ALL matching rows by the operator-selected sort,
+        with rank, company, role, fit_score and its five sub-scores, salary,
+        location, remote_type, tier, ats_source, apply_url, first_seen,
+        jd_summary_markdown.
 
-    Cap semantics: the per-company cap is honored exactly as the visible
-    view does — exported 40 == visible 40 for the same URL. The
+    Cap semantics: the per-company cap (a VIEW filter the list also applies)
+    is honored exactly as the visible view does, so "what I see filtered" ==
+    "what I get". Only the export's old 40-row pagination cap is gone. The
     "matched-before-cap" count on Sheet 1 reports how many would have
-    surfaced without the cap so the reviewer can sense the funnel.
+    surfaced without the per-company cap so the reviewer can sense the funnel.
+    Zero matches → a valid workbook with headers only (not an error).
     """
     from sqlalchemy import func, select
     from sqlalchemy.orm import aliased
 
     from job_assist.db.models import JobPosting, OperatorProfile, PostingSource, TargetCompany
-    from job_assist.services.postings_export import EXPORT_ROW_CAP, build_workbook_bytes
+    from job_assist.services.postings_export import build_workbook_bytes
     from job_assist.services.postings_query import PostingsViewSpec, build_view_parts
 
     # Reuse the same validators the list endpoint uses; they raise 422
@@ -2861,6 +2867,11 @@ async def export_postings_xlsx(
         .limit(1)
         .lateral("recent_ps")
     )
+    # NO ``.limit()`` — the export is the FULL filtered+sorted set, unbounded.
+    # This is the only line that differs from list_postings' row query (which
+    # adds ``.limit(limit).offset(offset)`` for pagination). Same base_join,
+    # same WHERE, same ORDER BY, same per-company cap — so the export is
+    # provably "the list without pagination".
     rows_stmt = (
         select(
             JobPosting,
@@ -2871,7 +2882,6 @@ async def export_postings_xlsx(
         .select_from(base_join)
         .outerjoin(recent_ps, true())
         .order_by(*order_clauses)
-        .limit(EXPORT_ROW_CAP)
     )
     # The state-filter WHERE clauses (built by build_view_parts) reference the
     # recent_pa LATERAL. list_postings OUTER-joins it onto its row query so an

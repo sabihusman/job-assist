@@ -63,9 +63,11 @@ describe('ExportButton', () => {
     expect(a.hasAttribute('download')).toBe(true);
   });
 
-  test('displays the locked label "Export view (top 40)"', () => {
+  test('displays the "Export current view" label (no row-cap claim)', () => {
     setParams('');
     render(<ExportButton />);
-    expect(screen.getByText(/export view \(top 40\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/export current view/i)).toBeInTheDocument();
+    // The old "top 40" cap is gone — the label must not imply one.
+    expect(screen.queryByText(/top 40/i)).not.toBeInTheDocument();
   });
 });
