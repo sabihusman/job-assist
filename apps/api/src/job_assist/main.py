@@ -790,8 +790,10 @@ def _validate_crawl_config_row(row: dict[str, Any]) -> None:
     """Validate one crawl-config patch row; raise HTTP 400 on any bad field.
 
     ``tier`` (when its key is present) must be null or an int 1-4; ``source``
-    (when present) must be a known provenance value. ``bool`` is rejected as a
-    tier because ``True``/``False`` are ints in Python.
+    (when present) must be a known provenance value; ``ats`` (when present) must
+    be a known ingestable ATS; ``ats_handle`` (when present) must be null or a
+    string. ``bool`` is rejected as a tier because ``True``/``False`` are ints
+    in Python.
     """
     if not row.get("name"):
         raise HTTPException(status_code=400, detail=f"row missing 'name': {row!r}")
@@ -806,11 +808,31 @@ def _validate_crawl_config_row(row: dict[str, Any]) -> None:
             status_code=400,
             detail=f"source must be one of {sorted(_CRAWL_CONFIG_SOURCES)}: {row!r}",
         )
+    if "ats" in row and row["ats"] not in _ALLOWED_ATS_VALUES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"ats must be one of {sorted(_ALLOWED_ATS_VALUES)}: {row!r}",
+        )
+    if (
+        "ats_handle" in row
+        and row["ats_handle"] is not None
+        and not isinstance(row["ats_handle"], str)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"ats_handle must be null or a string: {row!r}",
+        )
 
 
 def _apply_crawl_config(tc: Any, row: dict[str, Any]) -> bool:
-    """Apply a validated patch to a TargetCompany row. Patches ``tier`` / ``source``
-    only when the key is present. Returns True iff a column actually changed.
+    """Apply a validated patch to a TargetCompany row. Patches ``tier`` /
+    ``source`` / ``ats`` / ``ats_handle`` only when the key is present. Returns
+    True iff a column actually changed.
+
+    Note on ``ats``: ``tc.ats`` is a SQLAlchemy Enum, so it compares unequal to a
+    raw string even when they represent the same value (``AtsKind.workday !=
+    "workday"``). Compare against the underlying ``.value`` so a no-op patch is
+    correctly reported ``unchanged`` rather than churning a write every call.
     """
     changed = False
     if "tier" in row and tc.tier != row["tier"]:
@@ -818,6 +840,14 @@ def _apply_crawl_config(tc: Any, row: dict[str, Any]) -> bool:
         changed = True
     if "source" in row and tc.source != row["source"]:
         tc.source = row["source"]
+        changed = True
+    if "ats" in row:
+        current_ats = tc.ats.value if hasattr(tc.ats, "value") else tc.ats
+        if current_ats != row["ats"]:
+            tc.ats = row["ats"]
+            changed = True
+    if "ats_handle" in row and tc.ats_handle != row["ats_handle"]:
+        tc.ats_handle = row["ats_handle"]
         changed = True
     return changed
 
@@ -827,27 +857,35 @@ async def set_company_crawl_config(
     rows: list[dict[str, Any]],
     db: DbSession,
 ) -> dict[str, Any]:
-    """Patch the crawl-controlling fields (``tier``, ``source``) on existing
-    ``target_company`` rows, matched by ``name``. The seed endpoint only inserts
-    or backfills NULLs — it can't *change* an existing tier/source, so this is
-    the lever for deactivating or re-tiering a company already in the DB.
+    """Patch the crawl-controlling fields (``tier``, ``source``, ``ats``,
+    ``ats_handle``) on existing ``target_company`` rows, matched by ``name``. The
+    seed endpoint only inserts or backfills NULLs — it can't *change* an existing
+    non-NULL value, so this is the lever for deactivating, re-tiering, or
+    re-routing a company already in the DB.
 
-    These two columns gate crawling:
+    These columns gate crawling:
       * the daily curated cron (``GET /admin/ingest/plan``) ingests only rows
         with ``tier IS NOT NULL``;
       * the Apify Workday/iCIMS sweep (``list_fantastic_targets``) ingests only
-        rows with ``source == 'curated'``.
+        rows with ``ats IN ('workday','icims')`` AND ``source == 'curated'`` AND
+        a non-NULL ``domain``.
 
     So to STOP crawling an off-profile company WITHOUT deleting it — preserving
     the row, its ``domain``, and all Gmail-match history — set ``tier=null`` AND
     ``source='deactivated'``: it drops out of BOTH paths and its Apify spend
     stops. To PROMOTE a broad-discovered shell (``tier=null``) into the curated
-    daily cron, set ``tier`` to a pedigree (1-4).
+    daily cron, set ``tier`` to a pedigree (1-4). To ROUTE an ``ats='unknown'``
+    employer (whose board blocks our egress IP) onto the Apify Workday path, set
+    ``ats='workday'`` — the actor targets by ``domain``, so no ``ats_handle`` is
+    needed. ``ats`` is mutable here precisely because ``discover-ats`` only
+    detects free greenhouse/lever/ashby boards, never the IP-blocked Workday/iCIMS
+    ones, leaving no other way to flip a stuck ``unknown`` row onto the paid path.
 
     Body: ``[{"name": "Athene", "tier": null, "source": "deactivated"}, ...]``.
     A field is patched ONLY when its key is present (JSON ``null`` => set NULL;
-    an absent key leaves the column untouched). Only ``tier`` and ``source`` are
-    mutable here — every other column (incl. ``domain``) is immutable.
+    an absent key leaves the column untouched). Only ``tier``, ``source``,
+    ``ats``, and ``ats_handle`` are mutable here — every other column (incl.
+    ``domain``) is immutable.
 
     Validation runs over the whole batch BEFORE any write, so a single bad value
     rejects the request with no partial commit. Idempotent — returns per-name
