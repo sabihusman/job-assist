@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import logging
 import os
+import traceback
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -156,6 +157,43 @@ async def auth_guard(request: Request, call_next: RequestResponseEndpoint) -> Re
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
 
     return await call_next(request)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Surface the REAL error on any otherwise-unhandled 500.
+
+    Previously an unhandled exception (e.g. a DB write failing) returned a bare,
+    opaque 500 with an empty body — leaving write failures undiagnosable. This
+    logs the full traceback (greppable in the Railway logs as
+    ``unhandled_exception``) AND echoes the exception type + message in the
+    response body, so a failing write can be diagnosed straight from the HTTP
+    response (``curl`` it) without digging through logs. The exception MESSAGE is
+    what decides the cause — e.g. asyncpg's "could not extend file" (disk),
+    "read-only transaction" (replica routing), "connection refused" /
+    "terminating connection" (DB restart → stale pool), "too many connections"
+    (pool exhaustion).
+
+    The app is single-operator behind the bearer gate, so echoing the error text
+    is acceptable and the diagnostic value is high. FastAPI handles
+    ``HTTPException`` before this, so 4xx responses are unaffected.
+    """
+    logger.error(
+        "unhandled_exception",
+        method=request.method,
+        path=request.url.path,
+        error_type=type(exc).__name__,
+        error=str(exc)[:1000],
+        traceback=traceback.format_exc()[:4000],
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal Server Error",
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:500],
+        },
+    )
 
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
