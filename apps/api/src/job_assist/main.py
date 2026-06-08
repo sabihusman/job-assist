@@ -156,7 +156,33 @@ async def auth_guard(request: Request, call_next: RequestResponseEndpoint) -> Re
         if settings.auth_enforce and expected:
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
 
-    return await call_next(request)
+    # Catch downstream exceptions HERE, inside the middleware, not only via the
+    # global @app.exception_handler — a bare-Exception handler doesn't reliably
+    # fire through BaseHTTPMiddleware (Starlette composition gotcha), which is
+    # how a failing DB write returned an opaque empty-body 500. This guarantees a
+    # catchable error is logged (``unhandled_exception_mw``, full traceback) AND
+    # echoed in the response body. A worker SIGKILL/segfault still bypasses this —
+    # the body then STAYS empty, which is itself the signal (a crash, not a
+    # catchable DB error).
+    try:
+        return await call_next(request)
+    except Exception as exc:
+        logger.error(
+            "unhandled_exception_mw",
+            method=request.method,
+            path=path,
+            error_type=type(exc).__name__,
+            error=str(exc)[:1000],
+            traceback=traceback.format_exc()[:4000],
+        )
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Internal Server Error",
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:500],
+            },
+        )
 
 
 @app.exception_handler(Exception)
