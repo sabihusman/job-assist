@@ -293,30 +293,37 @@ async def sweep_embeddings(session: AsyncSession, limit: int = 100) -> SweepSumm
 
     ``should_embed`` is intentionally NOT used as a selector — it is vestigial
     (always False) and would select zero rows.
+
+    Concurrency (feat/sweep-skip-locked): rows are CLAIMED one at a time with
+    ``FOR UPDATE SKIP LOCKED`` (``claim_next_id``) instead of bulk-selected, so
+    overlapping sweeps can't grab the same row and double-call the embedding API.
+    The lock is held through the row's embed call and released when
+    ``embed_one_posting`` commits. A bulk ``FOR UPDATE`` would NOT work here: the
+    first per-row commit releases every lock the bulk SELECT took.
     """
-    eligible = (
-        (
-            await session.execute(
-                select(JobPosting.id)
-                .where(JobPosting.closed_at.is_(None))
-                .where(
-                    (JobPosting.jd_embedding.is_(None))
-                    | (JobPosting.jd_text_hash_embedded != JobPosting.jd_text_hash)
-                )
-                .where(JobPosting.embedding_attempt_count < settings.embedding_enrich_max_attempts)
-                .order_by(
-                    JobPosting.embedding_attempt_count.asc(),
-                    JobPosting.first_seen_at.asc(),
-                )
-                .limit(limit)
-            )
+    from job_assist.services.sweep_claim import claim_next_id
+
+    eligible_base = (
+        select(JobPosting.id)
+        .where(JobPosting.closed_at.is_(None))
+        .where(
+            (JobPosting.jd_embedding.is_(None))
+            | (JobPosting.jd_text_hash_embedded != JobPosting.jd_text_hash)
         )
-        .scalars()
-        .all()
+        .where(JobPosting.embedding_attempt_count < settings.embedding_enrich_max_attempts)
+        .order_by(
+            JobPosting.embedding_attempt_count.asc(),
+            JobPosting.first_seen_at.asc(),
+        )
     )
 
     summary = SweepSummary()
-    for posting_id in eligible:
+    seen: set[uuid.UUID] = set()
+    while len(seen) < limit:
+        posting_id = await claim_next_id(session, eligible_base, JobPosting.id, seen)
+        if posting_id is None:
+            break  # no more eligible rows we can lock (drained, or locked by a peer run)
+        seen.add(posting_id)
         try:
             result = await embed_one_posting(session, posting_id)
         except Exception as exc:
@@ -328,6 +335,10 @@ async def sweep_embeddings(session: AsyncSession, limit: int = 100) -> SweepSumm
                 extra={"posting_id": str(posting_id), "error": err},
             )
             result = EmbeddingResult(status="error", posting_id=str(posting_id), error=err)
+        # Eligible claimed rows always commit inside embed_one_posting; this is a
+        # belt-and-braces release of the claim lock on any path that didn't.
+        if session.in_transaction():
+            await session.commit()
         summary.record(result)
 
     # slice 2a: when new vectors landed, the percentile ranks shift — recompute

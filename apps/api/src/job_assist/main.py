@@ -2026,10 +2026,19 @@ async def reclassify_sweep_endpoint(
         )
     # Oldest classified_at first; NULLs sort first so never-LLM-classified
     # rows are processed before rows the sweep has already touched.
-    stmt = stmt.order_by(
-        JobPosting.classified_at.asc().nulls_first(),
-        JobPosting.first_seen_at.asc(),
-    ).limit(payload.limit)
+    #
+    # FOR UPDATE SKIP LOCKED (feat/sweep-skip-locked): this sweep commits ONCE at
+    # the end, so the locks taken here are held for the whole run — an overlapping
+    # sweep (delayed cron + manual trigger) skips these rows and works a disjoint
+    # set instead of double-calling Gemini on the same postings.
+    stmt = (
+        stmt.order_by(
+            JobPosting.classified_at.asc().nulls_first(),
+            JobPosting.first_seen_at.asc(),
+        )
+        .limit(payload.limit)
+        .with_for_update(skip_locked=True)
+    )
 
     rows = (await db.execute(stmt)).scalars().all()
 
@@ -2229,11 +2238,21 @@ async def score_sweep_endpoint(
     if payload.only_unscored:
         stmt = stmt.where(JobPosting.fit_score.is_(None))
     # Stable id ASC tiebreaker on every key (bestiary entry).
-    stmt = stmt.order_by(
-        JobPosting.scored_at.asc().nulls_first(),
-        JobPosting.first_seen_at.asc(),
-        JobPosting.id.asc(),
-    ).limit(payload.limit)
+    #
+    # FOR UPDATE SKIP LOCKED (feat/sweep-skip-locked): single end-of-loop commit,
+    # so the locks span the run and overlapping sweeps skip these rows. ``of=
+    # JobPosting`` locks ONLY the posting rows — locking the nullable side of the
+    # TargetCompany outer join is invalid in Postgres. (Scoring makes no Gemini
+    # call; this just keeps the sweep a clean, non-double-working queue.)
+    stmt = (
+        stmt.order_by(
+            JobPosting.scored_at.asc().nulls_first(),
+            JobPosting.first_seen_at.asc(),
+            JobPosting.id.asc(),
+        )
+        .limit(payload.limit)
+        .with_for_update(skip_locked=True, of=JobPosting)
+    )
 
     rows = (await db.execute(stmt)).all()
 
