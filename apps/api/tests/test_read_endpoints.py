@@ -1585,3 +1585,126 @@ async def test_actioned_state_export_still_filters(db_session: Any) -> None:
     joined = " ".join(titles).lower()
     assert "interested role" in joined
     assert "untouched role" not in joined
+
+
+# ── triage export = current filtered view, unbounded (feat/triage-export-full-view) ──
+
+
+@_NEEDS_DB
+async def test_export_matches_filtered_sorted_list_exactly(db_session: Any) -> None:
+    """The export is the list view minus pagination: SAME rows, SAME order.
+
+    Drive both ``GET /postings`` and ``GET /postings/export.xlsx`` with the
+    identical filter+sort URL, then assert the export's ordered titles equal the
+    list's ordered titles. Both run through ``build_view_parts(spec)``, so this
+    pins them together — if either drifts (a filter, the sort, the cap), the
+    ordered sequences diverge and this fails.
+    """
+    company = _company(name="ParityCo", tier=1)
+    db_session.add(company)
+    await db_session.flush()
+
+    # Distinct fit_scores → an unambiguous best_fit (score DESC) order.
+    scored = [("Parity Role Alpha", 95), ("Parity Role Bravo", 81), ("Parity Role Charlie", 73)]
+    for title, score in scored:
+        jp = _posting(target_company_id=company.id, title=title, fit_score=score)
+        db_session.add(jp)
+        await db_session.flush()
+        db_session.add(_posting_source(job_posting_id=jp.id))
+    await db_session.commit()
+
+    # Identical params on both endpoints. cap off + high limit so the list
+    # returns the FULL set (the only difference left is export's missing limit).
+    query = "state=triage&per_company_cap=0&sort=best_fit"
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            list_resp = await ac.get(f"/postings?{query}&limit=100")
+            export_resp = await ac.get(f"/postings/export.xlsx?{query}")
+    finally:
+        await _drop_override()
+
+    assert list_resp.status_code == 200
+    assert export_resp.status_code == 200
+    list_titles = [item["role"]["title"] for item in list_resp.json()["items"]]
+    export_titles = _export_job_titles(export_resp.content)
+    # Same rows, same order — the export IS the list, unpaginated.
+    assert export_titles == list_titles
+    assert len(export_titles) == 3
+
+
+@_NEEDS_DB
+async def test_export_has_no_row_cap(db_session: Any) -> None:
+    """The hardcoded 40-row cap is gone: a filtered view of >40 rows exports
+    ALL of them, not the old top-40 slice."""
+    company = _company(name="BigCo", tier=1)
+    db_session.add(company)
+    await db_session.flush()
+
+    n = 45  # > the old EXPORT_ROW_CAP of 40
+    for i in range(n):
+        jp = _posting(
+            target_company_id=company.id,
+            title=f"Capless Role {i:02d}",
+            fit_score=90 - i,
+        )
+        db_session.add(jp)
+        await db_session.flush()
+        db_session.add(_posting_source(job_posting_id=jp.id))
+    await db_session.commit()
+
+    # per_company_cap=0 so all 45 same-company rows survive the per-company cap;
+    # the only thing that could clamp to 40 was the removed export limit.
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp = await ac.get("/postings/export.xlsx?state=triage&per_company_cap=0")
+    finally:
+        await _drop_override()
+
+    assert resp.status_code == 200
+    titles = _export_job_titles(resp.content)
+    assert len(titles) == n, f"expected all {n} rows (cap gone), got {len(titles)}"
+
+
+@_NEEDS_DB
+async def test_export_empty_filter_yields_headers_only_not_error(db_session: Any) -> None:
+    """A filter matching 0 rows downloads a valid xlsx with headers only —
+    never a 4xx/5xx."""
+    company = _company(name="EmptyCo", tier=1)
+    db_session.add(company)
+    await db_session.flush()
+    jp = _posting(target_company_id=company.id, title="Only Role", fit_score=88)
+    db_session.add(jp)
+    await db_session.flush()
+    db_session.add(_posting_source(job_posting_id=jp.id))
+    await db_session.commit()
+
+    # target_company_id pointing at a company with no postings → 0 matches.
+    empty_company = _company(name="NoPostingsCo", tier=1)
+    db_session.add(empty_company)
+    await db_session.commit()
+
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp = await ac.get(
+                f"/postings/export.xlsx?state=triage&per_company_cap=0&target_company_id={empty_company.id}"
+            )
+    finally:
+        await _drop_override()
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    # Valid workbook, headers intact, zero data rows.
+    import io
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(resp.content), read_only=True)
+    assert wb.sheetnames == ["Export Context", "Jobs"]
+    jobs_rows = list(wb["Jobs"].iter_rows(values_only=True))
+    assert jobs_rows[0][0] == "rank"  # header present
+    assert _export_job_titles(resp.content) == []  # no data rows

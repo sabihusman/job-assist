@@ -20,7 +20,7 @@ from job_assist.db.enums import RoleFamily, SeniorityLevel
 from job_assist.db.models.job_posting import JobPosting
 from job_assist.db.models.operator_profile import OperatorProfile
 from job_assist.db.models.target_company import TargetCompany
-from job_assist.services.postings_export import EXPORT_ROW_CAP, build_workbook_bytes
+from job_assist.services.postings_export import build_workbook_bytes
 from job_assist.services.postings_query import PostingsViewSpec
 
 
@@ -96,9 +96,65 @@ def sample_rows() -> list[tuple[JobPosting, TargetCompany | None, str | None, st
     ]
 
 
-def test_export_row_cap_is_forty() -> None:
-    """Locked PR scope: export 40 == visible 40."""
-    assert EXPORT_ROW_CAP == 40
+def test_workbook_renders_all_rows_no_cap() -> None:
+    """The 40-row cap is gone: every row handed in is rendered (the endpoint
+    no longer clamps the SQL fetch, so the workbook must not clamp either)."""
+    rows = [
+        (_posting(fit_score=90 - i), _target_company(f"Co{i}", tier=1), "greenhouse", f"https://x/{i}")
+        for i in range(57)  # well past the old 40 cap
+    ]
+    buf = build_workbook_bytes(
+        spec=PostingsViewSpec(),
+        profile=_profile(),
+        rows=rows,
+        corpus_size=999,
+        matched_before_cap=57,
+    )
+    ws = _open(buf)["Jobs"]
+    assert ws.max_row == 58  # 1 header + 57 data rows
+    # Ranks run 1..57 contiguously — nothing truncated.
+    assert [ws.cell(row=i, column=1).value for i in range(2, 59)] == list(range(1, 58))
+
+
+def test_empty_rows_yields_headers_only_file_not_error() -> None:
+    """0 matches → a VALID workbook with header rows only (edge case: an empty
+    filtered view must download a file, never error)."""
+    buf = build_workbook_bytes(
+        spec=PostingsViewSpec(tier=(4,)),
+        profile=_profile(),
+        rows=[],
+        corpus_size=999,
+        matched_before_cap=0,
+    )
+    wb = _open(buf)
+    assert wb.sheetnames == ["Export Context", "Jobs"]
+    jobs = wb["Jobs"]
+    assert jobs.max_row == 1  # header row only, no data
+    assert jobs.cell(row=1, column=1).value == "rank"  # headers intact
+
+
+def test_context_sheet_advertises_no_row_cap() -> None:
+    """Sheet 1's 'Export row cap' line must say there's no cap (not '40')."""
+    buf = build_workbook_bytes(
+        spec=PostingsViewSpec(),
+        profile=_profile(),
+        rows=[(_posting(), _target_company(), "greenhouse", "https://x")],
+        corpus_size=10,
+        matched_before_cap=1,
+    )
+    ws = _open(buf)["Export Context"]
+    # Find the 'Export row cap' label cell (col A) and read its value (col B).
+    cap_value = next(
+        (
+            ws.cell(row=r, column=2).value
+            for r in range(1, ws.max_row + 1)
+            if ws.cell(row=r, column=1).value == "Export row cap"
+        ),
+        None,
+    )
+    assert cap_value is not None
+    assert "full filtered view" in cap_value
+    assert "40" not in cap_value
 
 
 def test_workbook_has_two_sheets_in_correct_order(

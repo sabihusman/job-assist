@@ -33,11 +33,6 @@ from job_assist.services.scoring import (
 )
 from job_assist.triage.config import hard_rule_config_from_profile
 
-# Max rows on Sheet 2. Locked to 40 (PR-scope decision): "top 40 by the
-# visible sort." The endpoint clamps the ``limit`` query param to this
-# value before the SQL fetch — see ``main.py::export_postings_xlsx``.
-EXPORT_ROW_CAP = 40
-
 _HEADER_FILL = PatternFill("solid", start_color="1F2937")  # slate-800
 _HEADER_FONT = Font(bold=True, color="FFFFFF")
 _BOLD = Font(bold=True)
@@ -85,7 +80,7 @@ def _build_context_sheet(
             [
                 ("Generated (UTC)", now),
                 ("Scorer version", SCORER_VERSION),
-                ("Export row cap", str(EXPORT_ROW_CAP)),
+                ("Export row cap", "(none — full filtered view)"),
             ],
         ),
         (
@@ -329,4 +324,4 @@ def build_workbook_bytes(
     return buf.getvalue()
 
 
-__all__ = ["EXPORT_ROW_CAP", "build_workbook_bytes"]
+__all__ = ["build_workbook_bytes"]
