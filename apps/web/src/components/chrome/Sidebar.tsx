@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useState } from 'react';
 
+import { HealthDot } from '@/components/chrome/HealthDot';
 import { SavedFilters } from '@/components/chrome/SavedFilters';
 import { SidebarItem } from '@/components/chrome/SidebarItem';
 import { NAV_ITEMS } from '@/components/chrome/nav-items';
@@ -83,7 +84,8 @@ function SidebarContents({
 }) {
   return (
     <div className="flex h-full flex-col">
-      {/* Brand */}
+      {/* Brand — the system-health dot sits right at the title (feat/health-
+          indicator) so overall health is the first thing visible. */}
       <div className="flex h-12 items-center gap-2 px-3">
         <div
           aria-hidden="true"
@@ -91,13 +93,18 @@ function SidebarContents({
         >
           J
         </div>
-        {!collapsed && (
-          <div className="flex flex-col leading-tight">
-            <span className="text-sm font-bold uppercase tracking-wide">Job Assist</span>
+        {!collapsed ? (
+          <div className="flex min-w-0 flex-1 flex-col leading-tight">
+            <span className="flex items-center gap-1.5 text-sm font-bold uppercase tracking-wide">
+              Job Assist
+              <HealthDot />
+            </span>
             <span className="font-mono text-xs text-muted-foreground">
               v{process.env.NEXT_PUBLIC_APP_VERSION ?? '0.4.0'} · local
             </span>
           </div>
+        ) : (
+          <HealthDot />
         )}
       </div>
 
