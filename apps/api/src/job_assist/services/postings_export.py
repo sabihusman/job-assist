@@ -146,8 +146,10 @@ def _build_context_sheet(
             [
                 (
                     "Composition",
-                    "Weighted sum of five 0-100 sub-scores: role_family, "
-                    "seniority, salary, tier, geo (weights above).",
+                    "Weighted mean of six 0-100 sub-scores: role_family, "
+                    "seniority, salary, tier, geo, semantic_fit (weights above). "
+                    "semantic_fit is dropped and the remaining weights "
+                    "renormalize when a posting has no similarity_score yet.",
                 ),
                 (
                     "Role-family gate",
