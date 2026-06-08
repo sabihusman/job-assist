@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 
 from job_assist.db.enums import RoleFamily, SeniorityLevel
@@ -139,12 +139,10 @@ async def test_concurrent_claim_skips_locked_row(db_session: Any) -> None:
     engine, conn = await _second_engine_conn()
     trans = await conn.begin()
     try:
-        # Peer run locks A (and holds the lock — no commit).
+        # Peer run locks A (and holds the lock — no commit). Core construct (not
+        # raw SQL) so there's no string-SQL hotspot.
         locked = (
-            await conn.execute(
-                text("SELECT id FROM job_posting WHERE id = :id FOR UPDATE"),
-                {"id": a_id},
-            )
+            await conn.execute(select(JobPosting.id).where(JobPosting.id == a_id).with_for_update())
         ).scalar_one()
         assert locked == a_id
 
@@ -174,7 +172,9 @@ async def test_concurrent_claim_returns_none_when_all_locked(db_session: Any) ->
     trans = await conn.begin()
     try:
         await conn.execute(
-            text("SELECT id FROM job_posting WHERE canonical_company_name = 'ClaimCo' FOR UPDATE")
+            select(JobPosting.id)
+            .where(JobPosting.canonical_company_name == "ClaimCo")
+            .with_for_update()
         )
         got = await claim_next_id(db_session, _BASE, JobPosting.id, set())
         assert got is None
