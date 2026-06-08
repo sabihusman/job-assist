@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Job Assist — Architecture Map</title>
+<style>
+  :root{
+    --bg:#0b1020; --panel:#121a2e; --panel2:#0f1626; --ink:#e8edf6; --muted:#9fb0cc;
+    --line:#243150; --accent:#38bdf8; --accent2:#a78bfa; --chip:#1b2540;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header.top{padding:22px 28px 14px;border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,#0e1730,#0b1020);position:relative}
+  header.top h1{margin:0 0 6px;font-size:24px;letter-spacing:.2px}
+  header.top .sub{color:var(--muted);font-size:13.5px;max-width:1100px}
+  header.top blockquote{margin:10px 0 0;padding:10px 14px;border-left:3px solid var(--accent2);
+    background:var(--panel2);border-radius:6px;color:#cdd9ee;font-size:13px}
+  header.top blockquote p{margin:6px 0}
+  .legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .legend .pill{font-size:12px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:var(--chip);color:#cdd9ee}
+  nav.tabs{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;gap:6px;
+    padding:10px 18px;background:rgba(11,16,32,.92);backdrop-filter:blur(6px);border-bottom:1px solid var(--line)}
+  nav.tabs button{cursor:pointer;border:1px solid var(--line);background:var(--panel);color:var(--ink);
+    padding:6px 12px;border-radius:8px;font-size:13px;transition:.15s}
+  nav.tabs button:hover{border-color:var(--accent)}
+  nav.tabs button.active{background:var(--accent);color:#04121e;border-color:var(--accent);font-weight:600}
+  main{padding:18px 28px 60px;max-width:1280px;margin:0 auto}
+  .panel{display:none}
+  .panel.active{display:block;animation:fade .2s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
+  h2{font-size:20px;margin:6px 0 4px;color:#fff}
+  h3{font-size:16px;color:#dbe6fb;margin:18px 0 6px}
+  p,li{color:#d7e0f0}
+  code{background:#0c1426;border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:12.5px;color:#bfe3ff}
+  pre code{display:block;padding:12px;overflow:auto}
+  table{border-collapse:collapse;margin:12px 0;font-size:13px;width:100%}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel);color:#fff}
+  tr:nth-child(even) td{background:#0e1729}
+  blockquote{margin:12px 0;padding:8px 14px;border-left:3px solid var(--accent2);background:var(--panel2);border-radius:6px;color:#cdd9ee}
+  .diagram-wrap{position:relative;border:1px solid var(--line);border-radius:12px;background:#0c1326;margin:14px 0;overflow:hidden}
+  .diagram-wrap .hint{position:absolute;top:8px;right:12px;font-size:11px;color:var(--muted);
+    background:rgba(11,16,32,.7);padding:2px 8px;border-radius:6px;z-index:5;pointer-events:none}
+  .diagram-stage{height:74vh;min-height:420px}
+  .diagram-stage .mermaid{width:100%;height:100%;display:flex;align-items:center;justify-content:center}
+  .diagram-stage .mermaid svg{width:100%;height:100%}
+  .svg-pan-zoom-control{transform:scale(1.1)}
+  footer{padding:18px 28px;color:var(--muted);border-top:1px solid var(--line);font-size:12.5px}
+
+  /* PRINT / PDF mode: linear, all panels, fit diagrams to page width */
+  body.print nav.tabs{display:none}
+  body.print .panel{display:block !important;page-break-inside:avoid;break-inside:avoid;margin-bottom:18px}
+  body.print .diagram-stage{height:auto;min-height:0}
+  body.print .diagram-stage .mermaid svg{width:100%;height:auto;max-width:100%}
+  body.print .diagram-wrap .hint{display:none}
+  body.print header.top{break-after:avoid}
+  @page{margin:14mm}
+  @media print{body{background:#0b1020 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div id="hdr"></div>
+</header>
+<nav class="tabs" id="tabs"></nav>
+<main id="main"></main>
+<footer id="foot"></footer>
+
+<script type="text/markdown" id="md-src">@@MARKDOWN@@</script>
+
+<script>@@MARKED_JS@@</script>
+<script>@@MERMAID_JS@@</script>
+<script>@@SVGPANZOOM_JS@@</script>
+
+<script>
+(function(){
+  "use strict";
+  var isPrint = /(?:^|[?&#])print\b/.test(location.search + location.hash);
+  if(isPrint) document.body.classList.add('print');
+
+  var raw = document.getElementById('md-src').textContent;
+
+  // Split into header (before first "## ") + sections (each "## ...").
+  var firstH2 = raw.search(/^##\s+/m);
+  var headerMd = firstH2 >= 0 ? raw.slice(0, firstH2) : raw;
+  var body = firstH2 >= 0 ? raw.slice(firstH2) : "";
+  var parts = body.split(/\n(?=##\s+)/g).map(function(s){return s.trim();}).filter(Boolean);
+
+  function titleOf(secMd){
+    var m = secMd.match(/^##\s+(.+)$/m);
+    return m ? m[1].replace(/`/g,'').trim() : 'Section';
+  }
+  function shortTab(t){
+    // "1. Ingest subsystem — adapters ..." -> "1 · Ingest subsystem"
+    var dash = t.split(/[—–-]/)[0].trim();
+    return dash.length > 30 ? dash.slice(0,30)+'…' : dash;
+  }
+
+  marked.setOptions({gfm:true, breaks:false});
+
+  // Render header banner
+  document.getElementById('hdr').innerHTML = marked.parse(headerMd);
+
+  mermaid.initialize({
+    startOnLoad:false, theme:'dark', securityLevel:'loose',
+    flowchart:{useMaxWidth:false, htmlLabels:true},
+    sequence:{useMaxWidth:false},
+    themeVariables:{fontSize:'14px'}
+  });
+
+  var tabsEl = document.getElementById('tabs');
+  var mainEl = document.getElementById('main');
+  var rendered = {};   // idx -> bool (mermaid done)
+  var panels = [];
+
+  parts.forEach(function(secMd, i){
+    var panel = document.createElement('section');
+    panel.className = 'panel' + ((i===0 && !isPrint) ? ' active' : (isPrint ? ' active':''));
+    panel.dataset.idx = i;
+    panel.innerHTML = marked.parse(secMd);
+    // Convert ```mermaid code blocks -> <div class="mermaid"> inside a zoom stage
+    panel.querySelectorAll('code.language-mermaid').forEach(function(code){
+      var pre = code.closest('pre');
+      var wrap = document.createElement('div'); wrap.className='diagram-wrap';
+      var hint = document.createElement('div'); hint.className='hint';
+      hint.textContent = isPrint ? '' : 'scroll = zoom · drag = pan · dbl-click = reset';
+      var stage = document.createElement('div'); stage.className='diagram-stage';
+      var mm = document.createElement('div'); mm.className='mermaid';
+      mm.textContent = code.textContent;
+      stage.appendChild(mm); wrap.appendChild(hint); wrap.appendChild(stage);
+      pre.replaceWith(wrap);
+    });
+    mainEl.appendChild(panel);
+    panels.push(panel);
+
+    if(!isPrint){
+      var btn = document.createElement('button');
+      btn.textContent = shortTab(titleOf(secMd));
+      btn.className = (i===0?'active':'');
+      btn.addEventListener('click', function(){
+        tabsEl.querySelectorAll('button').forEach(function(b){b.classList.remove('active');});
+        btn.classList.add('active');
+        panels.forEach(function(p){p.classList.remove('active');});
+        panel.classList.add('active');
+        renderMermaidIn(panel, i);
+        window.scrollTo({top:0, behavior:'instant'});
+      });
+      tabsEl.appendChild(btn);
+    }
+  });
+
+  function attachPanZoom(svg){
+    if(isPrint) return;                  // static for PDF
+    try{
+      svg.removeAttribute('style');
+      svg.style.width='100%'; svg.style.height='100%';
+      var pz = svgPanZoom(svg, {controlIconsEnabled:false, fit:true, center:true,
+        minZoom:0.3, maxZoom:25, zoomScaleSensitivity:0.4, dblClickZoomEnabled:false});
+      svg.addEventListener('dblclick', function(){ try{ pz.reset(); }catch(_){} });
+    }catch(e){/* non-fatal */}
+  }
+
+  // mermaid.run() mutates global state and is NOT safe to call concurrently —
+  // overlapping calls (lazy pre-render racing a tab click) corrupt rendering and
+  // surface a bogus "Syntax error". Serialize every render through one queue.
+  var renderChain = Promise.resolve();
+  function renderMermaidIn(panel, idx){
+    if(rendered[idx]) return renderChain;
+    rendered[idx] = true;
+    var nodes = Array.prototype.slice.call(panel.querySelectorAll('.mermaid'));
+    if(!nodes.length) return renderChain;
+    renderChain = renderChain.then(function(){
+      return mermaid.run({nodes:nodes}).then(function(){
+        if(!isPrint){
+          panel.querySelectorAll('.diagram-stage svg').forEach(attachPanZoom);
+        }
+      }).catch(function(e){
+        nodes.forEach(function(n){ if(!n.querySelector('svg')){
+          n.innerHTML = '<pre style="color:#fca5a5">diagram render error: '+(e&&e.message||e)+'</pre>'; }});
+      });
+    });
+    return renderChain;
+  }
+
+  // Footer
+  document.getElementById('foot').innerHTML =
+    'Generated from <code>job-assist-architecture.md</code> — the single source of truth. ' +
+    'Interactive HTML, Markdown, and PDF all render the same diagrams. Read from the live codebase with file:line evidence.';
+
+  // Initial render
+  if(isPrint){
+    // Queue every panel (serialized internally), then signal Playwright when done.
+    panels.forEach(function(p,i){ renderMermaidIn(p,i); });
+    renderChain.then(function(){
+      window.__PRINT_READY__ = true;
+      document.body.setAttribute('data-print-ready','1');
+    });
+  } else {
+    // Render ONLY the visible panel. Mermaid cannot measure text geometry in a
+    // display:none container (it renders a broken/error SVG), so every other
+    // panel is rendered on its first tab activation — when it's visible.
+    renderMermaidIn(panels[0], 0);
+  }
+})();
+</script>
+</body>
+</html>
