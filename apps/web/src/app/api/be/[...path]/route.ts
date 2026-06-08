@@ -36,7 +36,13 @@ function authToken(): string {
 }
 
 // Hop-by-hop / host headers that must not be forwarded upstream.
-const STRIP_REQUEST_HEADERS = new Set(['host', 'connection', 'content-length']);
+//   - ``expect``: clients (curl, .NET/PowerShell) send ``Expect: 100-continue``
+//     on POST/PUT bodies, but undici's ``fetch`` REJECTS any request carrying an
+//     Expect header ("NotSupportedError: expect header not supported"). Forwarding
+//     it made every WRITE through the proxy fail with an opaque empty 500 while
+//     reads (no Expect) and direct-to-Railway curls worked. It's hop-by-hop, so
+//     stripping it is correct regardless.
+const STRIP_REQUEST_HEADERS = new Set(['host', 'connection', 'content-length', 'expect']);
 // Response headers that ``fetch`` already resolved — re-emitting them corrupts
 // the streamed body.
 const STRIP_RESPONSE_HEADERS = new Set(['content-encoding', 'content-length', 'transfer-encoding']);

@@ -130,6 +130,19 @@ describe('API proxy route', () => {
     expect((init.headers as Headers).get('x-keep')).toBe('1');
   });
 
+  test('strips the Expect header (undici fetch rejects it — broke every write)', async () => {
+    fetchMock.mockResolvedValue(new Response('{}', { status: 200 }));
+
+    await POST(
+      mockReq({ method: 'POST', body: '[]', headers: { expect: '100-continue', 'x-keep': '1' } }),
+      params(['admin', 'companies', 'crawl-config']),
+    );
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Headers).has('expect')).toBe(false);
+    expect((init.headers as Headers).get('x-keep')).toBe('1');
+  });
+
   test('upstream connection failure → 502 carrying the real error (not an empty 500)', async () => {
     // undici surfaces connection resets as `TypeError: fetch failed` with the
     // real reason on `.cause`. The proxy must echo BOTH so a write that dies on
