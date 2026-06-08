@@ -59,15 +59,22 @@ async function handler(
   const method = req.method.toUpperCase();
   const hasBody = method !== 'GET' && method !== 'HEAD';
 
-  const init: RequestInit & { duplex?: 'half' } = {
+  const init: RequestInit = {
     method,
     headers,
     redirect: 'manual',
   };
   if (hasBody) {
-    init.body = req.body as BodyInit;
-    // undici requires duplex when streaming a request body.
-    init.duplex = 'half';
+    // BUFFER the request body rather than streaming ``req.body`` upstream with
+    // ``duplex: 'half'``. Forwarding a Web ReadableStream through undici fetch on
+    // Vercel intermittently RESETS the connection on POST/PUT bodies — reads
+    // (no body) worked, but every WRITE returned an opaque empty-body 500. The
+    // direct-to-Railway curl proved the API/DB are fine; the streamed-body proxy
+    // hop was the sole failure. Buffering sidesteps the broken streaming path
+    // entirely and lets fetch set a correct Content-Length. Payloads here are
+    // small JSON (and the occasional small resume upload), so buffering is safe.
+    const buf = await req.arrayBuffer();
+    if (buf.byteLength > 0) init.body = buf;
   }
 
   // Surface a proxy→upstream connection failure instead of letting it bubble
