@@ -3840,6 +3840,14 @@ _HEALTH_RECENT_HOURS = 26
 _HEALTH_STARVATION_DAYS = 3
 _HEALTH_MIN_NEW_ROLES = 1
 
+# LLM (Gemini) health. The classifier sweep runs daily, so >24h since the most
+# recent LLM-driven write (classified_at / embedded_at) means it stalled →
+# YELLOW. Exhausted embedding errors (a row that burned all its attempts and
+# still has no vector + a stored error) are the queryable proxy for "LLM calls
+# are failing" → YELLOW; a large pile of them is a hard outage → RED.
+_HEALTH_LLM_STALE_HOURS = 24
+_HEALTH_LLM_HARD_ERRORS = 25
+
 
 @app.get("/admin/ingest/health", tags=["admin"])
 async def ingest_health(db: DbSession) -> dict[str, Any]:
@@ -3900,11 +3908,44 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
         )
     ).scalar_one() or 0
 
+    # ── LLM (Gemini) health ──────────────────────────────────────────────
+    # Last LLM activity = the most recent classifier (classified_at) or embedding
+    # (embedded_at) write. Errors = OPEN rows that exhausted their embedding
+    # attempts and still have no vector + a stored error (the queryable "calls are
+    # failing" proxy — the classifier doesn't persist per-row errors).
+    llm_stale_cutoff = now - timedelta(hours=_HEALTH_LLM_STALE_HOURS)
+    last_classified = (
+        await db.execute(select(func.max(JobPosting.classified_at)))
+    ).scalar_one_or_none()
+    last_embedded = (
+        await db.execute(select(func.max(JobPosting.embedded_at)))
+    ).scalar_one_or_none()
+    _llm_times = [t for t in (last_classified, last_embedded) if t is not None]
+    llm_last_used = max(_llm_times) if _llm_times else None
+    llm_errors = (
+        await db.execute(
+            select(func.count())
+            .select_from(JobPosting)
+            .where(JobPosting.closed_at.is_(None))
+            .where(JobPosting.embedding_error.is_not(None))
+            .where(JobPosting.jd_embedding.is_(None))
+            .where(JobPosting.embedding_attempt_count >= settings.embedding_enrich_max_attempts)
+        )
+    ).scalar_one() or 0
+
+    classifier_fresh = last_classified is not None and last_classified >= llm_stale_cutoff
+    llm_failing = llm_errors > 0
+    llm_hard_down = llm_errors >= _HEALTH_LLM_HARD_ERRORS
+
     checks = {
         "recent_success": last_success is not None and last_success >= recent_cutoff,
         "no_hard_failures": failed_recent == 0,
         "broad_fresh": broad_last_swept is not None and broad_last_swept >= recent_cutoff,
         "not_starved": net_new >= _HEALTH_MIN_NEW_ROLES,
+        # feat/llm-health: the classifier sweep ran in the last 24h AND embeddings
+        # aren't piling up exhausted errors. Soft (yellow) unless errors are
+        # severe (hard_down below escalates to red).
+        "llm_healthy": classifier_fresh and not llm_failing,
     }
     messages = {
         "recent_success": f"no successful ingest_run in the last {_HEALTH_RECENT_HOURS}h "
@@ -3915,6 +3956,12 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
         f"(last sweep: {broad_last_swept})",
         "not_starved": f"starvation: only {net_new} net-new posting(s) in the last "
         f"{_HEALTH_STARVATION_DAYS} days",
+        "llm_healthy": (
+            f"classifier sweep has not run in the last {_HEALTH_LLM_STALE_HOURS}h "
+            f"(LLM last used: {llm_last_used})"
+            if not classifier_fresh
+            else f"LLM calls are failing: {llm_errors} postings exhausted their embedding attempts"
+        ),
     }
     problems = [messages[name] for name, passed in checks.items() if not passed]
 
@@ -3923,8 +3970,13 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
     # (starvation, broad set going stale) are DEGRADED/yellow; otherwise OK/green.
     # The frontend maps an unreachable endpoint to DOWN too — a dead backend
     # must never read green.
-    hard_down = not checks["recent_success"] or not checks["no_hard_failures"]
-    soft_degraded = not checks["not_starved"] or not checks["broad_fresh"]
+    # feat/llm-health: a stale classifier or some failing LLM calls are SOFT
+    # (yellow); a large pile of exhausted embedding errors is a hard LLM outage
+    # (red).
+    hard_down = not checks["recent_success"] or not checks["no_hard_failures"] or llm_hard_down
+    soft_degraded = (
+        not checks["not_starved"] or not checks["broad_fresh"] or not checks["llm_healthy"]
+    )
     severity = "down" if hard_down else ("degraded" if soft_degraded else "ok")
 
     return {
@@ -3940,6 +3992,12 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
             "net_new_starvation_window": net_new,
             "window_hours": _HEALTH_RECENT_HOURS,
             "starvation_days": _HEALTH_STARVATION_DAYS,
+            # feat/llm-health
+            "llm_last_used_at": llm_last_used.isoformat() if llm_last_used else None,
+            "llm_last_classified_at": last_classified.isoformat() if last_classified else None,
+            "llm_last_embedded_at": last_embedded.isoformat() if last_embedded else None,
+            "llm_exhausted_errors": llm_errors,
+            "llm_stale_hours": _HEALTH_LLM_STALE_HOURS,
         },
     }
 
