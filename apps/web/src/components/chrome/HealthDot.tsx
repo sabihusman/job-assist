@@ -38,7 +38,17 @@ const CHECK_LABELS: Record<keyof IngestHealth['checks'], string> = {
   broad_fresh: 'Broad-ingest fresh',
   not_starved: 'New roles flowing in',
   llm_healthy: 'LLM (Gemini) healthy',
+  gmail_healthy: 'Gmail sweep running',
 };
+
+/** Format a sweep runtime in seconds → "12.4s" / "1m 03s" / "—". */
+function fmtRuntime(seconds: number | null): string {
+  if (seconds === null || Number.isNaN(seconds)) return '—';
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return `${m}m ${String(s).padStart(2, '0')}s`;
+}
 
 function fmtTime(iso: string | null): string {
   if (!iso) return 'never';
@@ -130,6 +140,11 @@ export function HealthDotView({
               <div className="mt-2 flex flex-col gap-0.5 border-t border-border pt-2 font-mono text-[10px] text-muted-foreground">
                 <p>last ingest: {fmtTime(health.metrics.last_success_at)}</p>
                 <p>LLM last used: {fmtTime(health.metrics.llm_last_used_at)}</p>
+                <p data-testid="health-gmail-sweep">
+                  Gmail sweep: {fmtTime(health.metrics.gmail_last_sweep_at)}
+                  {health.metrics.gmail_last_sweep_runtime_seconds !== null &&
+                    ` · ran ${fmtRuntime(health.metrics.gmail_last_sweep_runtime_seconds)}`}
+                </p>
               </div>
             </>
           )}
