@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react';
 import { AppShell } from '@/components/chrome/AppShell';
 import { PipelineBoard } from '@/components/pipeline/PipelineBoard';
 import { PipelineDetailPanel } from '@/components/pipeline/PipelineDetailPanel';
+import { PipelineExportButton } from '@/components/pipeline/PipelineExportButton';
 import { usePipelineData } from '@/lib/api/pipeline';
 import { PIPELINE_STAGES, sanitizeColumnOrder } from '@/lib/applied/stages';
 import { useUiStore } from '@/lib/stores/ui';
@@ -26,7 +27,11 @@ export default function PipelinePage() {
   const allEmpty = useMemo(() => PIPELINE_STAGES.every((s) => buckets[s].length === 0), [buckets]);
 
   return (
-    <AppShell title="Pipeline" subtitle="Kanban by outcome stage">
+    <AppShell
+      title="Pipeline"
+      subtitle="Kanban by outcome stage"
+      adornments={<PipelineExportButton buckets={buckets} order={order} />}
+    >
       {isError ? (
         <ErrorCard message={(error as Error)?.message ?? 'Unknown error'} onRetry={refetch} />
       ) : isLoading ? (
