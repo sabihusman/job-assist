@@ -15,6 +15,7 @@ function makeHealth(over: Partial<IngestHealth> = {}): IngestHealth {
       no_hard_failures: true,
       broad_fresh: true,
       not_starved: true,
+      llm_healthy: true,
     },
     metrics: {
       last_success_at: '2026-06-07T22:00:00Z',
@@ -24,6 +25,11 @@ function makeHealth(over: Partial<IngestHealth> = {}): IngestHealth {
       net_new_starvation_window: 12,
       window_hours: 26,
       starvation_days: 3,
+      llm_last_used_at: '2026-06-07T21:30:00Z',
+      llm_last_classified_at: '2026-06-07T21:30:00Z',
+      llm_last_embedded_at: '2026-06-07T20:00:00Z',
+      llm_exhausted_errors: 0,
+      llm_stale_hours: 24,
     },
     ...over,
   };
@@ -53,6 +59,7 @@ describe('HealthDotView', () => {
         no_hard_failures: true,
         broad_fresh: true,
         not_starved: false,
+        llm_healthy: true,
       },
     });
     render(<HealthDotView state="degraded" health={health} isError={false} />);
@@ -75,6 +82,7 @@ describe('HealthDotView', () => {
         no_hard_failures: false,
         broad_fresh: true,
         not_starved: true,
+        llm_healthy: true,
       },
     });
     render(<HealthDotView state="down" health={health} isError={false} />);
@@ -117,5 +125,24 @@ describe('HealthDotView', () => {
     expect(screen.queryByTestId('health-popover')).not.toBeInTheDocument();
     await userEvent.hover(screen.getByTestId('health-dot'));
     expect(screen.getByTestId('health-popover')).toBeInTheDocument();
+  });
+
+  test('LLM: popover shows the LLM check row + "LLM last used" timestamp', async () => {
+    const health = makeHealth({
+      ok: false,
+      severity: 'degraded',
+      problems: ['classifier sweep has not run in the last 24h'],
+      checks: {
+        recent_success: true,
+        no_hard_failures: true,
+        broad_fresh: true,
+        not_starved: true,
+        llm_healthy: false,
+      },
+    });
+    render(<HealthDotView state="degraded" health={health} isError={false} />);
+    await userEvent.click(screen.getByTestId('health-dot'));
+    expect(screen.getByTestId('health-check-llm_healthy')).toHaveAttribute('data-pass', 'false');
+    expect(screen.getByText(/LLM last used:/)).toBeInTheDocument();
   });
 });

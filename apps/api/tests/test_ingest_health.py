@@ -49,7 +49,14 @@ def _handle(*, last_ingested_hours_ago: float | None) -> DiscoveredHandle:
     )
 
 
-def _posting(*, first_seen_days_ago: float) -> JobPosting:
+def _posting(
+    *,
+    first_seen_days_ago: float,
+    classified_hours_ago: float | None = None,
+    embedded_hours_ago: float | None = None,
+    embedding_error: str | None = None,
+    embedding_attempt_count: int = 0,
+) -> JobPosting:
     now = datetime.now(tz=UTC)
     seen = now - timedelta(days=first_seen_days_ago)
     suffix = uuid.uuid4().hex[:10]
@@ -65,6 +72,14 @@ def _posting(*, first_seen_days_ago: float) -> JobPosting:
         content_hash=f"hash-{suffix}",
         first_seen_at=seen,
         last_seen_at=seen,
+        classified_at=(
+            None if classified_hours_ago is None else now - timedelta(hours=classified_hours_ago)
+        ),
+        embedded_at=(
+            None if embedded_hours_ago is None else now - timedelta(hours=embedded_hours_ago)
+        ),
+        embedding_error=embedding_error,
+        embedding_attempt_count=embedding_attempt_count,
     )
 
 
@@ -75,12 +90,13 @@ async def _health(client: AsyncClient) -> dict[str, Any]:
 
 
 def _healthy_fixtures() -> list[Any]:
-    """A fully-healthy world: a recent successful run, a fresh broad sweep, and
-    net-new postings inside the starvation window."""
+    """A fully-healthy world: a recent successful run, a fresh broad sweep,
+    net-new postings inside the starvation window, and a recent classifier run
+    (so the LLM check passes)."""
     return [
         _run(status="success", finished_hours_ago=2, started_hours_ago=2.1),
         _handle(last_ingested_hours_ago=2),
-        _posting(first_seen_days_ago=0.5),
+        _posting(first_seen_days_ago=0.5, classified_hours_ago=2),
     ]
 
 
@@ -195,3 +211,87 @@ async def test_handle_not_found_is_not_a_hard_failure(db_session: Any) -> None:
     assert h["severity"] == "ok"
     assert h["checks"]["no_hard_failures"] is True
     assert h["metrics"]["handle_not_found_recent"] >= 1
+
+
+# ── feat/llm-health ──────────────────────────────────────────────────────────
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_stale_classifier_flags_degraded(db_session: Any) -> None:
+    """Ingest is healthy, but the classifier sweep last ran >24h ago → YELLOW."""
+    from job_assist.main import app
+
+    db_session.add(_run(status="success", finished_hours_ago=2, started_hours_ago=2.1))
+    db_session.add(_handle(last_ingested_hours_ago=2))
+    db_session.add(_posting(first_seen_days_ago=0.5, classified_hours_ago=30))  # >24h
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["ok"] is False
+    assert h["severity"] == "degraded"  # stale LLM is a SOFT problem → yellow
+    assert h["checks"]["llm_healthy"] is False
+    assert any("classifier sweep" in p for p in h["problems"])
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_some_llm_errors_flag_degraded(db_session: Any) -> None:
+    """A few exhausted embedding errors (LLM calls failing) → YELLOW."""
+    from job_assist.main import app
+
+    db_session.add_all(_healthy_fixtures())  # classifier fresh
+    db_session.add(
+        _posting(first_seen_days_ago=10, embedding_error="boom", embedding_attempt_count=5)
+    )
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["ok"] is False
+    assert h["severity"] == "degraded"  # a few errors is SOFT → yellow
+    assert h["checks"]["llm_healthy"] is False
+    assert h["metrics"]["llm_exhausted_errors"] >= 1
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_many_llm_errors_flag_down(db_session: Any) -> None:
+    """A large pile of exhausted embedding errors = a hard LLM outage → RED."""
+    from job_assist.main import app
+
+    db_session.add_all(_healthy_fixtures())
+    for _ in range(25):  # >= _HEALTH_LLM_HARD_ERRORS
+        db_session.add(
+            _posting(first_seen_days_ago=10, embedding_error="boom", embedding_attempt_count=5)
+        )
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["severity"] == "down"  # severe LLM failure is HARD → red
+    assert h["checks"]["llm_healthy"] is False
+    assert h["metrics"]["llm_exhausted_errors"] >= 25
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_llm_last_used_is_most_recent_activity(db_session: Any) -> None:
+    """llm_last_used_at = the most recent of classified_at / embedded_at."""
+    from job_assist.main import app
+
+    db_session.add_all(_healthy_fixtures())  # has a posting classified 2h ago
+    db_session.add(_posting(first_seen_days_ago=1, embedded_hours_ago=1))  # embedded 1h ago (newer)
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["metrics"]["llm_last_used_at"] is not None
+    assert h["metrics"]["llm_last_embedded_at"] is not None
+    # The embedding (1h ago) is more recent than the classification (2h ago).
+    assert h["metrics"]["llm_last_used_at"] == h["metrics"]["llm_last_embedded_at"]

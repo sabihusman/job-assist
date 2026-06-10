@@ -3,12 +3,15 @@ import { expect, test } from '@playwright/test';
 import { mainContent, mockApi, waitForDataReady } from './helpers';
 
 /**
- * /rejected page E2E (PR #50).
+ * /rejected page E2E (PR #50; feat/rejected-unified).
  *
- * Wire-level contract: `/rejected/page.tsx` calls `useRejectedPostings()`
- * which hits `GET /postings?state=rejected`. The backend EXISTS predicate
- * against outcome_event is opaque to the frontend — the test treats it
- * as a black box and asserts the page renders whatever the API returns.
+ * Wire-level contract: `/rejected/page.tsx` now UNIFIES the manual rejected
+ * funnel (`GET /postings?state=rejected`) with Gmail-detected rejections
+ * (`GET /outcomes`) via `unifyApplied`, then filters to the rejected stage —
+ * mirroring the Applied tab (#163). A manual rejected posting must carry
+ * `state.resolved_status='rejected'` (the API always sends it for state=rejected)
+ * so the unifier keeps it. `/outcomes` defaults to empty in `mockApi`, so this
+ * spec exercises the manual side.
  */
 
 const REJECTED_ITEM = {
@@ -33,6 +36,8 @@ const REJECTED_ITEM = {
     reason: null,
     snooze_until: null,
     current_at: new Date().toISOString(),
+    // state=rejected ⇒ resolved_status='rejected' (manual application_state).
+    resolved_status: 'rejected',
   },
 };
 
@@ -57,5 +62,5 @@ test('renders empty state when no rejected postings exist', async ({ page }) => 
   await waitForDataReady(page);
 
   await expect(mainContent(page).getByTestId('rejected-empty')).toBeVisible();
-  await expect(mainContent(page).getByText('No rejected postings yet.')).toBeVisible();
+  await expect(mainContent(page).getByText('No rejections yet.')).toBeVisible();
 });
