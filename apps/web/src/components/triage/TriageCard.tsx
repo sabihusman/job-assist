@@ -3,8 +3,10 @@
 import { Building2, Clock, DollarSign, MapPin } from 'lucide-react';
 
 import { ActionButton } from '@/components/shared/ActionButton';
+import { RepeatSignalBadges } from '@/components/shared/RepeatSignalBadges';
 import { ReasonPicker } from '@/components/triage/ReasonPicker';
 import { ScoreBlock, isDimScore } from '@/components/triage/ScoreBlock';
+import type { RepeatSignals } from '@/lib/api/companySignals';
 import { familyLabel } from '@/lib/triage/family-labels';
 import type { ActionReason, ActionType, PostingListItem } from '@/lib/triage/types';
 import { cn } from '@/lib/utils';
@@ -34,6 +36,7 @@ export function TriageCard({
   isSelected,
   reasonOpen,
   isChecked = false,
+  signals,
   onSelect,
   onToggleReason,
   onAction,
@@ -46,6 +49,12 @@ export function TriageCard({
   // renders when ``onToggleCheck`` is supplied (the triage page wires it; other
   // surfaces that reuse the card don't).
   isChecked?: boolean;
+  // feat/company-app-awareness: the per-company signal map (keyed by normalized
+  // company name), passed down so the card can badge how many open apps /
+  // rejections the operator has at this company — visible at triage time,
+  // before investing in the role. Optional so other surfaces reusing the card
+  // (and existing tests) stay valid.
+  signals?: RepeatSignals;
   onSelect: () => void;
   onToggleReason: () => void;
   onAction: (action: TriageCardAction) => void;
@@ -129,11 +138,13 @@ export function TriageCard({
             {posting.state.current && <StatusPill state={posting.state.current} />}
           </div>
 
-          {/* Line 2 — tier dot+label and family tag. */}
+          {/* Line 2 — tier dot+label, family tag, and company-level app
+            awareness (active apps / rejections here). */}
           <div className="flex flex-wrap items-center gap-2">
             <TierBadge tier={tier} />
             <FamilyTag family={role.family} />
             {remote && <RemoteBadge remote={String(remote)} />}
+            <RepeatSignalBadges companyName={company.name} signals={signals} />
           </div>
 
           {/* Line 3 — metadata: company / location / salary / first-seen /

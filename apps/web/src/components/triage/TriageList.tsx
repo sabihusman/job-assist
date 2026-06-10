@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 
 import { TriageCard, type TriageCardAction } from '@/components/triage/TriageCard';
+import type { RepeatSignals } from '@/lib/api/companySignals';
 import type { PostingListItem } from '@/lib/triage/types';
 
 /**
@@ -20,6 +21,7 @@ export function TriageList({
   selectedIndex,
   reasonPickerCardId,
   selectedIds,
+  signals,
   onSelect,
   onToggleReason,
   onAction,
@@ -34,6 +36,9 @@ export function TriageList({
   /** feat/bulk-triage-actions: the set of checkbox-selected posting ids.
    *  Undefined disables the per-card checkbox entirely. */
   selectedIds?: Set<string>;
+  /** feat/company-app-awareness: per-company signal map (keyed by normalized
+   *  company name). Passed to each card for the app-awareness badge. */
+  signals?: RepeatSignals;
   onSelect: (index: number) => void;
   /** PR #47: toggle the reason picker open/closed for one card. */
   onToggleReason: (postingId: string) => void;
@@ -63,6 +68,7 @@ export function TriageList({
             isSelected={selectedIndex === index}
             reasonOpen={reasonPickerCardId === posting.id}
             isChecked={selectedIds?.has(posting.id) ?? false}
+            signals={signals}
             onSelect={() => onSelect(index)}
             onToggleReason={() => onToggleReason(posting.id)}
             onAction={(action) => onAction(posting.id, action)}

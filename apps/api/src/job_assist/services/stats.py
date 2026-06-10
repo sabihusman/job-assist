@@ -38,6 +38,15 @@ from job_assist.db.models import JobPosting, PostingAction
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
+# feat/company-app-awareness: a reluctant "too many open applications at this
+# company" pass is PORTFOLIO management, not a fit signal. It is excluded from
+# the calibration fit-learning aggregates (``rejected_by_you`` and
+# ``top_rejected_role_families``) so it never reads as "you keep rejecting this
+# role family / too many roles". It still lives in posting_action as a normal
+# not_interested row; it just doesn't teach the calibration view anything.
+_PORTFOLIO_PASS_REASON = "too_many_open_apps"
+
+
 def _round2(value: float) -> float:
     """Round to 2dp. Centralised so the rounding policy is unambiguous."""
     return round(value, 2)
@@ -90,7 +99,11 @@ async def get_calibration(
         .filter(in_window_action & (PostingAction.action_type == "applied"))
         .label("applied"),
         func.count(func.distinct(JobPosting.id))
-        .filter(in_window_action & (PostingAction.action_type == "not_interested"))
+        .filter(
+            in_window_action
+            & (PostingAction.action_type == "not_interested")
+            & PostingAction.reason.is_distinct_from(_PORTFOLIO_PASS_REASON)
+        )
         .label("rejected_by_you"),
     ).select_from(
         JobPosting.__table__.outerjoin(
@@ -131,6 +144,7 @@ async def get_calibration(
         )
         .where(in_window_action)
         .where(PostingAction.action_type == "not_interested")
+        .where(PostingAction.reason.is_distinct_from(_PORTFOLIO_PASS_REASON))
         .where(JobPosting.role_family.is_not(None))
         .group_by(JobPosting.role_family)
         .order_by(func.count(func.distinct(JobPosting.id)).desc(), role_family_text.asc())

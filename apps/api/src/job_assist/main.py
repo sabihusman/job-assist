@@ -3631,6 +3631,28 @@ async def list_companies(
     return {"total": total, "offset": offset, "limit": limit, "items": items}
 
 
+@app.get("/companies/repeat-signals", tags=["public"])
+async def company_repeat_signals(db: DbSession) -> dict[str, Any]:
+    """Per-company application-awareness counts from the Gmail outcome history
+    (feat/company-app-awareness).
+
+    Returns ``{"signals": {norm_name: {"rejections": r, "active_apps": a,
+    "display_name": str}}}`` for every company attributable from the outcome
+    history with ``rejections >= 1`` or ``active_apps >= 1``. Keyed by the
+    NORMALIZED company name (so "Stripe, Inc." and "stripe" collapse); matched on
+    name (linked ``target_company.name`` or the name extracted from the email
+    subject), capturing the unlinked majority. Ambiguous names are suppressed.
+
+    The triage UI keys badges by the posting's normalized company name and
+    applies the 1-2 neutral / >=3 amber threshold client-side.
+
+    TODO: add authentication before exposing publicly. Dev-mode only.
+    """
+    from job_assist.services.company_signals import compute_repeat_signals
+
+    return {"signals": await compute_repeat_signals(db)}
+
+
 @app.get("/outcomes", tags=["public"])
 async def list_outcomes(
     db: DbSession,

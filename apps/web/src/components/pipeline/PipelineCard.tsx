@@ -1,3 +1,5 @@
+import { RepeatSignalBadges } from '@/components/shared/RepeatSignalBadges';
+import type { RepeatSignals } from '@/lib/api/companySignals';
 import type { ApplicationCard } from '@/lib/pipeline/bucket';
 import { familyLabel } from '@/lib/triage/family-labels';
 import { cn } from '@/lib/utils';
@@ -6,7 +8,15 @@ import { cn } from '@/lib/utils';
  * Compact kanban card. Clickable (feat/pipeline-detail) — selecting it opens
  * the PipelineDetailPanel. Smaller padding and typography than TriageCard.
  */
-export function PipelineCard({ card, onSelect }: { card: ApplicationCard; onSelect?: () => void }) {
+export function PipelineCard({
+  card,
+  onSelect,
+  signals,
+}: {
+  card: ApplicationCard;
+  onSelect?: () => void;
+  signals?: RepeatSignals;
+}) {
   const tier = card.tier;
   const interactive = onSelect != null;
   return (
@@ -31,6 +41,7 @@ export function PipelineCard({ card, onSelect }: { card: ApplicationCard; onSele
     >
       {typeof tier === 'number' && <TierBadge tier={tier} />}
       <span className="truncate text-[13px] font-semibold">{card.companyName}</span>
+      <RepeatSignalBadges companyName={card.companyName} signals={signals} />
       <span className="truncate text-[12px] text-muted-foreground">
         {card.roleTitle}
         {card.roleFamily && `, ${familyLabel(card.roleFamily)}`}

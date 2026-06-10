@@ -2345,6 +2345,30 @@
         }
       }
     },
+    "/companies/repeat-signals": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Company Repeat Signals",
+        "description": "Per-company application-awareness counts from the Gmail outcome history\n(feat/company-app-awareness).\n\nReturns ``{\"signals\": {norm_name: {\"rejections\": r, \"active_apps\": a,\n\"display_name\": str}}}`` for every company attributable from the outcome\nhistory with ``rejections >= 1`` or ``active_apps >= 1``. Keyed by the\nNORMALIZED company name (so \"Stripe, Inc.\" and \"stripe\" collapse); matched on\nname (linked ``target_company.name`` or the name extracted from the email\nsubject), capturing the unlinked majority. Ambiguous names are suppressed.\n\nThe triage UI keys badges by the posting's normalized company name and\napplies the 1-2 neutral / >=3 amber threshold client-side.\n\nTODO: add authentication before exposing publicly. Dev-mode only.",
+        "operationId": "company_repeat_signals_companies_repeat_signals_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Company Repeat Signals Companies Repeat Signals Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/outcomes": {
       "get": {
         "tags": [
@@ -3402,7 +3426,8 @@
           "already_rejected_here",
           "just_not_feeling_it",
           "too_senior",
-          "too_junior"
+          "too_junior",
+          "too_many_open_apps"
         ],
         "title": "ActionReason",
         "description": "Operator's reason for ``not_interested`` (PR #31).\n\nRequired when ``action_type = not_interested``; forbidden otherwise."
