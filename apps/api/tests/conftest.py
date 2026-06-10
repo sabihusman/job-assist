@@ -93,7 +93,11 @@ async def db_session(_apply_migrations: None) -> AsyncGenerator[AsyncSession, No
             sa.text(
                 "TRUNCATE posting_action, posting_source, triage_result, "
                 "outcome_event, application_state, job_posting, ingest_run, "
-                "closed_channel, target_company, contact, discovered_handle CASCADE"
+                "closed_channel, target_company, contact, discovered_handle, "
+                # feat/gmail-health-check: gmail_sweep_run is written from an
+                # autonomous session (record_sweep), so it survives the request
+                # transaction and must be truncated here or it leaks across tests.
+                "gmail_sweep_run CASCADE"
             )
         )
         await session.commit()
