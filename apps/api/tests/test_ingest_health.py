@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from job_assist.db.models import DiscoveredHandle, IngestRun, JobPosting
+from job_assist.db.models import DiscoveredHandle, GmailSweepRun, IngestRun, JobPosting
 
 _NEEDS_DB = pytest.mark.skipif(
     not os.getenv("TEST_DATABASE_URL"),
@@ -83,6 +83,24 @@ def _posting(
     )
 
 
+def _gmail_sweep(
+    *,
+    started_hours_ago: float,
+    runtime_seconds: float = 30.0,
+    status: str = "success",
+    kind: str = "poll",
+) -> GmailSweepRun:
+    now = datetime.now(tz=UTC)
+    started = now - timedelta(hours=started_hours_ago)
+    finished = None if status == "running" else started + timedelta(seconds=runtime_seconds)
+    return GmailSweepRun(
+        kind=kind,
+        started_at=started,
+        finished_at=finished,
+        status=status,
+    )
+
+
 async def _health(client: AsyncClient) -> dict[str, Any]:
     resp = await client.get("/admin/ingest/health")
     assert resp.status_code == 200, resp.text
@@ -91,12 +109,13 @@ async def _health(client: AsyncClient) -> dict[str, Any]:
 
 def _healthy_fixtures() -> list[Any]:
     """A fully-healthy world: a recent successful run, a fresh broad sweep,
-    net-new postings inside the starvation window, and a recent classifier run
-    (so the LLM check passes)."""
+    net-new postings inside the starvation window, a recent classifier run
+    (so the LLM check passes), and a recent successful Gmail sweep."""
     return [
         _run(status="success", finished_hours_ago=2, started_hours_ago=2.1),
         _handle(last_ingested_hours_ago=2),
         _posting(first_seen_days_ago=0.5, classified_hours_ago=2),
+        _gmail_sweep(started_hours_ago=2, runtime_seconds=42.0),
     ]
 
 
@@ -295,3 +314,87 @@ async def test_llm_last_used_is_most_recent_activity(db_session: Any) -> None:
     assert h["metrics"]["llm_last_embedded_at"] is not None
     # The embedding (1h ago) is more recent than the classification (2h ago).
     assert h["metrics"]["llm_last_used_at"] == h["metrics"]["llm_last_embedded_at"]
+
+
+# ── feat/gmail-health-check ───────────────────────────────────────────────────
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_gmail_healthy_reports_runtime(db_session: Any) -> None:
+    """A recent successful Gmail sweep → gmail_healthy True, runtime surfaced."""
+    from job_assist.main import app
+
+    db_session.add_all(_healthy_fixtures())  # includes a 2h-ago sweep, 42s runtime
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["checks"]["gmail_healthy"] is True
+    assert h["metrics"]["gmail_last_sweep_status"] == "success"
+    assert h["metrics"]["gmail_last_sweep_runtime_seconds"] == 42.0
+    assert h["metrics"]["gmail_last_sweep_at"] is not None
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_gmail_stale_flags_degraded(db_session: Any) -> None:
+    """Everything else healthy, but the last Gmail sweep started >13h ago → YELLOW."""
+    from job_assist.main import app
+
+    db_session.add(_run(status="success", finished_hours_ago=2, started_hours_ago=2.1))
+    db_session.add(_handle(last_ingested_hours_ago=2))
+    db_session.add(_posting(first_seen_days_ago=0.5, classified_hours_ago=2))
+    db_session.add(_gmail_sweep(started_hours_ago=20))  # > _HEALTH_GMAIL_STALE_HOURS
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["ok"] is False
+    assert h["severity"] == "degraded"  # stale Gmail is a SOFT problem → yellow
+    assert h["checks"]["gmail_healthy"] is False
+    assert any("Gmail sweep has not run" in p for p in h["problems"])
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_gmail_no_sweep_ever_flags_degraded(db_session: Any) -> None:
+    """No Gmail sweep has ever run → gmail_healthy False, runtime None."""
+    from job_assist.main import app
+
+    db_session.add(_run(status="success", finished_hours_ago=2, started_hours_ago=2.1))
+    db_session.add(_handle(last_ingested_hours_ago=2))
+    db_session.add(_posting(first_seen_days_ago=0.5, classified_hours_ago=2))
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["checks"]["gmail_healthy"] is False
+    assert h["severity"] == "degraded"
+    assert h["metrics"]["gmail_last_sweep_at"] is None
+    assert h["metrics"]["gmail_last_sweep_runtime_seconds"] is None
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_gmail_last_sweep_failed_flags_degraded(db_session: Any) -> None:
+    """A recent but FAILED Gmail sweep → gmail_healthy False (soft/yellow)."""
+    from job_assist.main import app
+
+    db_session.add(_run(status="success", finished_hours_ago=2, started_hours_ago=2.1))
+    db_session.add(_handle(last_ingested_hours_ago=2))
+    db_session.add(_posting(first_seen_days_ago=0.5, classified_hours_ago=2))
+    db_session.add(_gmail_sweep(started_hours_ago=1, status="failed"))
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["ok"] is False
+    assert h["severity"] == "degraded"
+    assert h["checks"]["gmail_healthy"] is False
+    assert h["metrics"]["gmail_last_sweep_status"] == "failed"
+    assert any("last Gmail sweep failed" in p for p in h["problems"])

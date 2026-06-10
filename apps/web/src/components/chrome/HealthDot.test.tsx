@@ -16,6 +16,7 @@ function makeHealth(over: Partial<IngestHealth> = {}): IngestHealth {
       broad_fresh: true,
       not_starved: true,
       llm_healthy: true,
+      gmail_healthy: true,
     },
     metrics: {
       last_success_at: '2026-06-07T22:00:00Z',
@@ -30,6 +31,10 @@ function makeHealth(over: Partial<IngestHealth> = {}): IngestHealth {
       llm_last_embedded_at: '2026-06-07T20:00:00Z',
       llm_exhausted_errors: 0,
       llm_stale_hours: 24,
+      gmail_last_sweep_at: '2026-06-07T21:45:00Z',
+      gmail_last_sweep_status: 'success',
+      gmail_last_sweep_runtime_seconds: 12.4,
+      gmail_stale_hours: 13,
     },
     ...over,
   };
@@ -60,6 +65,7 @@ describe('HealthDotView', () => {
         broad_fresh: true,
         not_starved: false,
         llm_healthy: true,
+        gmail_healthy: true,
       },
     });
     render(<HealthDotView state="degraded" health={health} isError={false} />);
@@ -83,6 +89,7 @@ describe('HealthDotView', () => {
         broad_fresh: true,
         not_starved: true,
         llm_healthy: true,
+        gmail_healthy: true,
       },
     });
     render(<HealthDotView state="down" health={health} isError={false} />);
@@ -95,6 +102,34 @@ describe('HealthDotView', () => {
       'data-pass',
       'false',
     );
+  });
+
+  test('GMAIL: a stalled Gmail sweep shows the gmail check failing (soft/yellow)', async () => {
+    const health = makeHealth({
+      ok: false,
+      severity: 'degraded',
+      problems: ['Gmail sweep has not run in the last 13h (last sweep: None)'],
+      checks: {
+        recent_success: true,
+        no_hard_failures: true,
+        broad_fresh: true,
+        not_starved: true,
+        llm_healthy: true,
+        gmail_healthy: false,
+      },
+    });
+    render(<HealthDotView state="degraded" health={health} isError={false} />);
+    await userEvent.click(screen.getByTestId('health-dot'));
+    expect(screen.getByTestId('health-check-gmail_healthy')).toHaveAttribute('data-pass', 'false');
+  });
+
+  test('GMAIL: popover shows the last sweep time + runtime', async () => {
+    render(<HealthDotView state="ok" health={makeHealth()} isError={false} />);
+    await userEvent.click(screen.getByTestId('health-dot'));
+    const line = screen.getByTestId('health-gmail-sweep');
+    // 12.4s runtime renders as "ran 12.4s"; >=60s would format as "Xm YYs".
+    expect(line).toHaveTextContent(/Gmail sweep:/);
+    expect(line).toHaveTextContent(/ran 12\.4s/);
   });
 
   test('UNREACHABLE → RED (never green/unknown): isError shows red + unreachable note', async () => {
@@ -138,6 +173,7 @@ describe('HealthDotView', () => {
         broad_fresh: true,
         not_starved: true,
         llm_healthy: false,
+        gmail_healthy: true,
       },
     });
     render(<HealthDotView state="degraded" health={health} isError={false} />);

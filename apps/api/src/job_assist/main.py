@@ -1687,10 +1687,14 @@ async def gmail_backfill(
         )
 
     from job_assist.gmail.backfill import run_backfill
+    from job_assist.services.gmail_sweep_run import record_sweep
 
     try:
-        gmail, classifier = _build_gmail_runtime()
-        report = await run_backfill(db, gmail, classifier, days_back=days)
+        # feat/gmail-health-check: same sweep recording as the poll path.
+        async with record_sweep("backfill") as sweep:
+            gmail, classifier = _build_gmail_runtime()
+            report = await run_backfill(db, gmail, classifier, days_back=days)
+            sweep.set_counts(report)
     except HTTPException:
         raise
     except Exception as exc:
@@ -1726,10 +1730,15 @@ async def gmail_poll(db: DbSession) -> dict[str, Any]:
         )
 
     from job_assist.gmail.backfill import run_poll
+    from job_assist.services.gmail_sweep_run import record_sweep
 
     try:
-        gmail, classifier = _build_gmail_runtime()
-        report = await run_poll(db, gmail, classifier)
+        # feat/gmail-health-check: record the sweep (start/finish/runtime/status)
+        # so the health monitor can report Gmail ingestion liveness + runtime.
+        async with record_sweep("poll") as sweep:
+            gmail, classifier = _build_gmail_runtime()
+            report = await run_poll(db, gmail, classifier)
+            sweep.set_counts(report)
     except HTTPException:
         raise
     except Exception as exc:
@@ -3870,6 +3879,12 @@ _HEALTH_MIN_NEW_ROLES = 1
 _HEALTH_LLM_STALE_HOURS = 24
 _HEALTH_LLM_HARD_ERRORS = 25
 
+# Gmail sweep health. The gmail-poll cron fires every 6h, so >13h since the last
+# sweep started = two consecutive polls missed → the Gmail feed has stalled
+# (SOFT/yellow). A last sweep that ended in ``failed`` is also SOFT — a single
+# secondary-feed hiccup shouldn't red the whole dot.
+_HEALTH_GMAIL_STALE_HOURS = 13
+
 
 @app.get("/admin/ingest/health", tags=["admin"])
 async def ingest_health(db: DbSession) -> dict[str, Any]:
@@ -3887,12 +3902,16 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
         (proves the BROAD-ingest cron ran, not just the curated one).
       * ``not_starved`` — at least ``_HEALTH_MIN_NEW_ROLES`` net-new postings over
         the last ``_HEALTH_STARVATION_DAYS`` (catches "the well ran dry").
+      * ``llm_healthy`` — the Gemini classifier sweep ran recently and embeddings
+        aren't piling up exhausted errors.
+      * ``gmail_healthy`` — a Gmail sweep started within ``_HEALTH_GMAIL_STALE_HOURS``
+        and the last one didn't fail (metrics carry its runtime).
     """
     from datetime import timedelta
 
     from sqlalchemy import func, select
 
-    from job_assist.db.models import DiscoveredHandle, IngestRun, JobPosting
+    from job_assist.db.models import DiscoveredHandle, GmailSweepRun, IngestRun, JobPosting
 
     now = datetime.now(tz=UTC)
     recent_cutoff = now - timedelta(hours=_HEALTH_RECENT_HOURS)
@@ -3959,6 +3978,31 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
     llm_failing = llm_errors > 0
     llm_hard_down = llm_errors >= _HEALTH_LLM_HARD_ERRORS
 
+    # ── Gmail sweep health ───────────────────────────────────────────────
+    # The single most-recent gmail_sweep_run is the source of truth: when did the
+    # last sweep start, did it finish, how long did it take, and did it succeed?
+    gmail_stale_cutoff = now - timedelta(hours=_HEALTH_GMAIL_STALE_HOURS)
+    last_gmail = (
+        await db.execute(
+            select(
+                GmailSweepRun.started_at,
+                GmailSweepRun.finished_at,
+                GmailSweepRun.status,
+            )
+            .order_by(GmailSweepRun.started_at.desc())
+            .limit(1)
+        )
+    ).first()
+    gmail_last_sweep_at = last_gmail.started_at if last_gmail else None
+    gmail_last_status = last_gmail.status if last_gmail else None
+    gmail_runtime_seconds: float | None = None
+    if last_gmail and last_gmail.finished_at and last_gmail.started_at:
+        gmail_runtime_seconds = round(
+            (last_gmail.finished_at - last_gmail.started_at).total_seconds(), 1
+        )
+    gmail_fresh = gmail_last_sweep_at is not None and gmail_last_sweep_at >= gmail_stale_cutoff
+    gmail_last_failed = gmail_last_status == "failed"
+
     checks = {
         "recent_success": last_success is not None and last_success >= recent_cutoff,
         "no_hard_failures": failed_recent == 0,
@@ -3968,6 +4012,10 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
         # aren't piling up exhausted errors. Soft (yellow) unless errors are
         # severe (hard_down below escalates to red).
         "llm_healthy": classifier_fresh and not llm_failing,
+        # feat/gmail-health-check: a Gmail sweep started within the last 13h AND
+        # the last one didn't fail. Soft (yellow) — a secondary feed stalling
+        # shouldn't red the dot.
+        "gmail_healthy": gmail_fresh and not gmail_last_failed,
     }
     messages = {
         "recent_success": f"no successful ingest_run in the last {_HEALTH_RECENT_HOURS}h "
@@ -3984,6 +4032,12 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
             if not classifier_fresh
             else f"LLM calls are failing: {llm_errors} postings exhausted their embedding attempts"
         ),
+        "gmail_healthy": (
+            f"Gmail sweep has not run in the last {_HEALTH_GMAIL_STALE_HOURS}h "
+            f"(last sweep: {gmail_last_sweep_at})"
+            if not gmail_fresh
+            else "the last Gmail sweep failed"
+        ),
     }
     problems = [messages[name] for name, passed in checks.items() if not passed]
 
@@ -3997,7 +4051,11 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
     # (red).
     hard_down = not checks["recent_success"] or not checks["no_hard_failures"] or llm_hard_down
     soft_degraded = (
-        not checks["not_starved"] or not checks["broad_fresh"] or not checks["llm_healthy"]
+        not checks["not_starved"]
+        or not checks["broad_fresh"]
+        or not checks["llm_healthy"]
+        # feat/gmail-health-check: a stalled / last-failed Gmail sweep is soft.
+        or not checks["gmail_healthy"]
     )
     severity = "down" if hard_down else ("degraded" if soft_degraded else "ok")
 
@@ -4020,6 +4078,12 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
             "llm_last_embedded_at": last_embedded.isoformat() if last_embedded else None,
             "llm_exhausted_errors": llm_errors,
             "llm_stale_hours": _HEALTH_LLM_STALE_HOURS,
+            # feat/gmail-health-check: the last Gmail sweep's start, status, and
+            # how long it took (None until a finished sweep exists).
+            "gmail_last_sweep_at": gmail_last_sweep_at.isoformat() if gmail_last_sweep_at else None,
+            "gmail_last_sweep_status": gmail_last_status,
+            "gmail_last_sweep_runtime_seconds": gmail_runtime_seconds,
+            "gmail_stale_hours": _HEALTH_GMAIL_STALE_HOURS,
         },
     }
 

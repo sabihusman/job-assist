@@ -28,6 +28,9 @@ export type IngestHealth = {
     // feat/llm-health: classifier ran in the last 24h AND embeddings aren't
     // piling up exhausted errors.
     llm_healthy: boolean;
+    // feat/gmail-health-check: a Gmail sweep started within the last 13h AND the
+    // last one didn't fail.
+    gmail_healthy: boolean;
   };
   metrics: {
     last_success_at: string | null;
@@ -44,6 +47,11 @@ export type IngestHealth = {
     llm_last_embedded_at: string | null;
     llm_exhausted_errors: number;
     llm_stale_hours: number;
+    // feat/gmail-health-check: the last Gmail sweep's start, status, and runtime.
+    gmail_last_sweep_at: string | null;
+    gmail_last_sweep_status: string | null;
+    gmail_last_sweep_runtime_seconds: number | null;
+    gmail_stale_hours: number;
   };
 };
 
