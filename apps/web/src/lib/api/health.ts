@@ -25,6 +25,9 @@ export type IngestHealth = {
     no_hard_failures: boolean;
     broad_fresh: boolean;
     not_starved: boolean;
+    // feat/llm-health: classifier ran in the last 24h AND embeddings aren't
+    // piling up exhausted errors.
+    llm_healthy: boolean;
   };
   metrics: {
     last_success_at: string | null;
@@ -34,6 +37,13 @@ export type IngestHealth = {
     net_new_starvation_window: number;
     window_hours: number;
     starvation_days: number;
+    // feat/llm-health: most recent Gemini activity (classifier or embedding)
+    // and the exhausted-embedding-error count.
+    llm_last_used_at: string | null;
+    llm_last_classified_at: string | null;
+    llm_last_embedded_at: string | null;
+    llm_exhausted_errors: number;
+    llm_stale_hours: number;
   };
 };
 
