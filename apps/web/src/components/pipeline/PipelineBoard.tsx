@@ -1,4 +1,5 @@
 import { PipelineColumn } from '@/components/pipeline/PipelineColumn';
+import type { RepeatSignals } from '@/lib/api/companySignals';
 import { PIPELINE_STAGES, type PipelineStage } from '@/lib/applied/stages';
 import type { Buckets } from '@/lib/pipeline/bucket';
 
@@ -13,11 +14,13 @@ export function PipelineBoard({
   order = PIPELINE_STAGES,
   onSelect,
   onMove,
+  signals,
 }: {
   buckets: Buckets;
   order?: readonly PipelineStage[];
   onSelect?: (cardId: string) => void;
   onMove?: (stage: PipelineStage, dir: 'up' | 'down') => void;
+  signals?: RepeatSignals;
 }) {
   return (
     <div className="overflow-x-auto">
@@ -31,6 +34,7 @@ export function PipelineBoard({
             onMove={onMove ? (dir) => onMove(stage, dir) : undefined}
             canMoveEarlier={i > 0}
             canMoveLater={i < order.length - 1}
+            signals={signals}
           />
         ))}
       </div>

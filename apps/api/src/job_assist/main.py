@@ -3631,6 +3631,24 @@ async def list_companies(
     return {"total": total, "offset": offset, "limit": limit, "items": items}
 
 
+@app.get("/companies/repeat-signals", tags=["public"])
+async def company_repeat_signals(db: DbSession) -> dict[str, Any]:
+    """Per-company repeat signals from the Gmail outcome history
+    (feat/repeat-signal-flags).
+
+    Returns ``{"signals": {company_id: {"rejections": r, "active_apps": a}}}``
+    for every company at/above the repeat threshold (2+) on either axis — used by
+    the UI to badge "N rejections here" / "N active apps here" wherever that
+    company's roles appear (Triage detail + Pipeline). Computed from existing
+    ``outcome_event`` data, keyed by the reliable ``target_company_id`` link.
+
+    TODO: add authentication before exposing publicly. Dev-mode only.
+    """
+    from job_assist.services.company_signals import compute_repeat_signals
+
+    return {"signals": await compute_repeat_signals(db)}
+
+
 @app.get("/outcomes", tags=["public"])
 async def list_outcomes(
     db: DbSession,

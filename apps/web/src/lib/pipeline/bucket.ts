@@ -14,6 +14,9 @@ export type ApplicationCard = {
   // cards (feat/pipeline-outcome-cards) have no tier, so PipelineCard hides
   // the tier badge when it's absent.
   tier?: number;
+  // feat/repeat-signal-flags: the linked target_company_id (NULL for the
+  // unlinked majority), used to look up per-company repeat-signal badges.
+  companyId?: string | null;
   companyName: string;
   roleTitle: string;
   roleFamily: string | null;
@@ -85,9 +88,13 @@ export function bucketOutcomes(outcomes: readonly OutcomeEvent[]): Buckets {
       }
     }
     const label = linked ?? extracted ?? latest.from_domain ?? latest.subject ?? 'Application';
+    // feat/repeat-signal-flags: carry the linked company id (any row in the
+    // group) so the card can show per-company repeat-signal badges.
+    const companyId = rows.find((r) => r.target_company_id)?.target_company_id ?? null;
 
     buckets[stage].push({
       id: key,
+      companyId,
       companyName: label,
       roleTitle: latest.subject ?? '',
       roleFamily: null,

@@ -2345,6 +2345,30 @@
         }
       }
     },
+    "/companies/repeat-signals": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Company Repeat Signals",
+        "description": "Per-company repeat signals from the Gmail outcome history\n(feat/repeat-signal-flags).\n\nReturns ``{\"signals\": {company_id: {\"rejections\": r, \"active_apps\": a}}}``\nfor every company at/above the repeat threshold (2+) on either axis \u2014 used by\nthe UI to badge \"N rejections here\" / \"N active apps here\" wherever that\ncompany's roles appear (Triage detail + Pipeline). Computed from existing\n``outcome_event`` data, keyed by the reliable ``target_company_id`` link.\n\nTODO: add authentication before exposing publicly. Dev-mode only.",
+        "operationId": "company_repeat_signals_companies_repeat_signals_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Company Repeat Signals Companies Repeat Signals Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/outcomes": {
       "get": {
         "tags": [

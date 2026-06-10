@@ -7,12 +7,14 @@ import { useState } from 'react';
 import { ActionButton } from '@/components/shared/ActionButton';
 import { CompanyAvatar } from '@/components/shared/CompanyAvatar';
 import { MarkdownRenderer } from '@/components/shared/MarkdownRenderer';
+import { RepeatSignalBadges } from '@/components/shared/RepeatSignalBadges';
 import { ReasonPicker } from '@/components/triage/ReasonPicker';
 import { ResumeAttach } from '@/components/triage/ResumeAttach';
 import { ScoreBlock } from '@/components/triage/ScoreBlock';
 import { StatusButtons } from '@/components/triage/StatusButtons';
 import type { TriageCardAction } from '@/components/triage/TriageCard';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
+import { useCompanySignals } from '@/lib/api/companySignals';
 import { usePosting } from '@/lib/api/hooks';
 import { STAGE_LABELS, stageOf } from '@/lib/applied/stages';
 import { familyLabel } from '@/lib/triage/family-labels';
@@ -130,6 +132,7 @@ function DetailContentBody({
   onAction: (postingId: string, action: TriageCardAction) => void;
 }) {
   const [reasonOpen, setReasonOpen] = useState(false);
+  const { data: signals } = useCompanySignals();
   const company = posting.company;
   const tier = company.tier ?? 4;
 
@@ -197,6 +200,9 @@ function DetailContentBody({
                 {posting.role.family ? familyLabel(posting.role.family) : 'Role'}
               </span>
             </div>
+            {/* feat/repeat-signal-flags: "N rejections here" / "N active apps
+                here" for this company, from the Gmail outcome history. */}
+            <RepeatSignalBadges companyId={company.id} signals={signals} />
           </div>
         </div>
 

@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react';
 import { AppShell } from '@/components/chrome/AppShell';
 import { PipelineBoard } from '@/components/pipeline/PipelineBoard';
 import { PipelineDetailPanel } from '@/components/pipeline/PipelineDetailPanel';
+import { useCompanySignals } from '@/lib/api/companySignals';
 import { usePipelineData } from '@/lib/api/pipeline';
 import { PIPELINE_STAGES, sanitizeColumnOrder } from '@/lib/applied/stages';
 import { useUiStore } from '@/lib/stores/ui';
@@ -17,6 +18,7 @@ import { useUiStore } from '@/lib/stores/ui';
  */
 export default function PipelinePage() {
   const { buckets, isLoading, isError, error, refetch } = usePipelineData();
+  const { data: signals } = useCompanySignals();
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const rawOrder = useUiStore((s) => s.pipelineColumnOrder);
@@ -41,6 +43,7 @@ export default function PipelinePage() {
               order={order}
               onSelect={setSelectedId}
               onMove={movePipelineColumn}
+              signals={signals}
             />
           </div>
           <PipelineDetailPanel selectedId={selectedId} onClose={() => setSelectedId(null)} />

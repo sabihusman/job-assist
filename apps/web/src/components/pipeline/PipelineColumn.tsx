@@ -1,6 +1,7 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 import { PipelineCard } from '@/components/pipeline/PipelineCard';
+import type { RepeatSignals } from '@/lib/api/companySignals';
 import { type PipelineStage, STAGE_LABELS } from '@/lib/applied/stages';
 import type { ApplicationCard } from '@/lib/pipeline/bucket';
 
@@ -19,6 +20,7 @@ export function PipelineColumn({
   onMove,
   canMoveEarlier = false,
   canMoveLater = false,
+  signals,
 }: {
   stage: PipelineStage;
   cards: readonly ApplicationCard[];
@@ -26,6 +28,7 @@ export function PipelineColumn({
   onMove?: (dir: 'up' | 'down') => void;
   canMoveEarlier?: boolean;
   canMoveLater?: boolean;
+  signals?: RepeatSignals;
 }) {
   // Stages display in the spec's casing (e.g. "Recruiter screen") —
   // map to short uppercase headers per UI_SPEC.md (RECRUITER, PHONE, …).
@@ -91,6 +94,7 @@ export function PipelineColumn({
               key={c.id}
               card={c}
               onSelect={onSelect ? () => onSelect(c.id) : undefined}
+              signals={signals}
             />
           ))}
         </ul>
