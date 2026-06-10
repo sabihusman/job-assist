@@ -37,6 +37,7 @@ const CHECK_LABELS: Record<keyof IngestHealth['checks'], string> = {
   no_hard_failures: 'No failed runs',
   broad_fresh: 'Broad-ingest fresh',
   not_starved: 'New roles flowing in',
+  llm_healthy: 'LLM (Gemini) healthy',
 };
 
 function fmtTime(iso: string | null): string {
@@ -126,9 +127,10 @@ export function HealthDotView({
                   );
                 })}
               </ul>
-              <p className="mt-2 border-t border-border pt-2 font-mono text-[10px] text-muted-foreground">
-                last ingest: {fmtTime(health.metrics.last_success_at)}
-              </p>
+              <div className="mt-2 flex flex-col gap-0.5 border-t border-border pt-2 font-mono text-[10px] text-muted-foreground">
+                <p>last ingest: {fmtTime(health.metrics.last_success_at)}</p>
+                <p>LLM last used: {fmtTime(health.metrics.llm_last_used_at)}</p>
+              </div>
             </>
           )}
         </div>
