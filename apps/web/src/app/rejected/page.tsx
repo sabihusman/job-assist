@@ -1,80 +1,89 @@
 'use client';
 
-import { useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { Suspense, useMemo } from 'react';
 
+import { AppliedSortStrip } from '@/components/applied/AppliedSortStrip';
 import { AppShell } from '@/components/chrome/AppShell';
-import { RejectedRow } from '@/components/rejected/RejectedRow';
+import { UnifiedRejectedList } from '@/components/rejected/UnifiedRejectedList';
+import { useAllOutcomes } from '@/lib/api/applied';
 import { useRejectedPostings } from '@/lib/api/state-views';
+import type { AppliedSort } from '@/lib/applied/types';
+import { entryStage, unifyApplied } from '@/lib/applied/unify';
 
 /**
- * /rejected (PR #50).
+ * /rejected — unified rejection view (feat/rejected-unified).
  *
- * Postings where a Gmail-classified rejection email landed. Empty in v1
- * production until the rejection-detection cron starts producing rows
- * (PR #53 area). The page still ships — empty state is the dominant
- * user experience for now.
- *
- * Pagination (PR #66 / Bestiary 5.11): page 1 (100 rows) renders
- * unconditionally; Load More fires a second hook instance. Mirrors
- * ``OutreachTimeline.tsx``. Same 2-page limitation noted on
- * ``/applied`` applies — migrate to ``useInfiniteQuery`` if/when row
- * volume exceeds ~200.
+ * Mirrors the Applied tab (#163): the union of Gmail-detected rejections
+ * (Pipeline REJECTED stage) and manually-rejected postings, deduped by
+ * posting-link and source-tagged (manual / gmail / both), with the manual
+ * status authoritative — built by the SAME `unifyApplied` pipeline, then
+ * filtered to the rejected stage. The manual rejected funnel is the OVERLAY
+ * (tiny); the Gmail set is the membership source (shared cache with Pipeline /
+ * Applied, so navigating between them doesn't refetch).
  */
 export default function RejectedPage() {
   return (
     <AppShell title="Rejected" subtitle="Closed by the company">
-      <RejectedPageInner />
+      <Suspense fallback={<PageFallback />}>
+        <RejectedPageInner />
+      </Suspense>
     </AppShell>
   );
 }
 
 function RejectedPageInner() {
-  const page1 = useRejectedPostings();
+  const searchParams = useSearchParams();
+  const sort = (searchParams.get('sort') as AppliedSort | null) ?? 'applied';
 
-  const [extraOffset, setExtraOffset] = useState<number | null>(null);
-  const extra = useRejectedPostings(extraOffset ?? 0, extraOffset !== null);
+  const manual = useRejectedPostings();
+  const outcomes = useAllOutcomes(true);
 
-  const page1Items = page1.data?.items ?? [];
-  const items =
-    extraOffset !== null && extra.data ? [...page1Items, ...extra.data.items] : page1Items;
-  const total = page1.data?.total ?? 0;
-  const hasMore = total > items.length;
+  const manualPostings = manual.data?.items ?? [];
+  const count = useMemo(
+    () =>
+      unifyApplied(outcomes.data?.items ?? [], manualPostings).filter(
+        (e) => entryStage(e) === 'rejected',
+      ).length,
+    [outcomes.data, manualPostings],
+  );
 
-  const isError = page1.isError || extra.isError;
+  const isError = manual.isError || outcomes.isError;
   const errorMsg =
-    (page1.error as Error)?.message ?? (extra.error as Error)?.message ?? 'Unknown error';
+    (manual.error as Error)?.message ?? (outcomes.error as Error)?.message ?? 'Unknown error';
+  const isLoading = manual.isLoading || outcomes.isLoading;
 
   return (
     <div className="flex min-w-0 flex-col gap-4 px-4 py-4 md:px-6">
-      <p className="text-[13px] text-muted-foreground">
-        {page1.data ? `${items.length} of ${total} rejected` : '…'}
-      </p>
+      <div className="flex items-center justify-between">
+        <p className="text-[13px] text-muted-foreground">
+          {isLoading ? '…' : `${count} rejection${count === 1 ? '' : 's'}`}
+        </p>
+        <AppliedSortStrip />
+      </div>
 
       {isError ? (
-        <ErrorCard message={errorMsg} onRetry={() => page1.refetch()} />
-      ) : page1.isLoading ? (
+        <ErrorCard
+          message={errorMsg}
+          onRetry={() => {
+            manual.refetch();
+            outcomes.refetch();
+          }}
+        />
+      ) : isLoading ? (
         <LoadingSkeleton />
-      ) : items.length === 0 ? (
-        <EmptyState />
       ) : (
-        <>
-          <ul className="flex list-none flex-col gap-3 p-0">
-            {items.map((p) => (
-              <RejectedRow key={p.id} posting={p} />
-            ))}
-          </ul>
-          {hasMore && (
-            <button
-              type="button"
-              onClick={() => setExtraOffset(items.length)}
-              disabled={extra.isLoading}
-              className="self-center rounded-md border border-border bg-surface px-3 py-1 text-[12px] hover:bg-accent disabled:opacity-50"
-            >
-              {extra.isLoading ? 'Loading…' : `Load more (${total - items.length} remaining)`}
-            </button>
-          )}
-        </>
+        <UnifiedRejectedList manualPostings={manualPostings} sort={sort} />
       )}
+    </div>
+  );
+}
+
+function PageFallback() {
+  return (
+    <div className="flex min-w-0 flex-col gap-4 px-4 py-4 md:px-6">
+      <div className="h-6 w-64 animate-pulse rounded bg-surface-2" />
+      <LoadingSkeleton />
     </div>
   );
 }
@@ -89,20 +98,6 @@ function LoadingSkeleton() {
         />
       ))}
     </div>
-  );
-}
-
-function EmptyState() {
-  return (
-    <section
-      data-testid="rejected-empty"
-      className="flex flex-col items-center gap-2 rounded-md border border-border bg-card px-6 py-12 text-center"
-    >
-      <h2 className="text-sm font-semibold">No rejected postings yet.</h2>
-      <p className="text-[13px] text-muted-foreground">
-        Rejection emails detected from Gmail will surface here.
-      </p>
-    </section>
   );
 }
 
