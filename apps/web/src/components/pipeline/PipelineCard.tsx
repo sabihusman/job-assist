@@ -41,7 +41,7 @@ export function PipelineCard({
     >
       {typeof tier === 'number' && <TierBadge tier={tier} />}
       <span className="truncate text-[13px] font-semibold">{card.companyName}</span>
-      <RepeatSignalBadges companyId={card.companyId} signals={signals} />
+      <RepeatSignalBadges companyName={card.companyName} signals={signals} />
       <span className="truncate text-[12px] text-muted-foreground">
         {card.roleTitle}
         {card.roleFamily && `, ${familyLabel(card.roleFamily)}`}

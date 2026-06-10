@@ -83,11 +83,14 @@ class PostingAction(Base):
         ),
         # Reason vocabulary guard (NULL allowed; specific strings otherwise).
         # PR #43 added ``too_senior`` / ``too_junior``.
+        # feat/company-app-awareness added ``too_many_open_apps`` — a reluctant
+        # portfolio-management pass, deliberately excluded from calibration's
+        # fit-learning aggregates (services/stats.py).
         CheckConstraint(
             "reason IS NULL OR reason IN ("
             "'wrong_role','wrong_location','comp_too_low','wrong_industry',"
             "'wrong_stage','already_rejected_here','just_not_feeling_it',"
-            "'too_senior','too_junior')",
+            "'too_senior','too_junior','too_many_open_apps')",
             name="ck_posting_action_reason",
         ),
         # Reason ↔ action_type cross-rule:

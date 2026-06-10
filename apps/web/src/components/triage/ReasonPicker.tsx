@@ -25,7 +25,7 @@ import { cn } from '@/lib/utils';
 type Choice = {
   reason: ActionReason;
   label: string;
-  hotkey: '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9';
+  hotkey: '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '0';
 };
 
 export const REASON_CHOICES: readonly Choice[] = [
@@ -38,6 +38,9 @@ export const REASON_CHOICES: readonly Choice[] = [
   { reason: 'just_not_feeling_it', label: 'Just not feeling it', hotkey: '7' },
   { reason: 'too_senior', label: 'Too senior', hotkey: '8' },
   { reason: 'too_junior', label: 'Too junior', hotkey: '9' },
+  // feat/company-app-awareness: a reluctant portfolio pass (not a fit signal).
+  // Hotkey 0 — the last single digit left after PR #43 took 8/9.
+  { reason: 'too_many_open_apps', label: 'Too many open apps here', hotkey: '0' },
 ];
 
 function isEditable(target: EventTarget | null): boolean {

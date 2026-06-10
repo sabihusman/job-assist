@@ -200,9 +200,10 @@ function DetailContentBody({
                 {posting.role.family ? familyLabel(posting.role.family) : 'Role'}
               </span>
             </div>
-            {/* feat/repeat-signal-flags: "N rejections here" / "N active apps
-                here" for this company, from the Gmail outcome history. */}
-            <RepeatSignalBadges companyId={company.id} signals={signals} />
+            {/* feat/company-app-awareness: company-level "N active apps" /
+                "N rejections here" from the Gmail outcome history, matched on
+                company name. */}
+            <RepeatSignalBadges companyName={company.name} signals={signals} />
           </div>
         </div>
 

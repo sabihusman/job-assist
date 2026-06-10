@@ -1,4 +1,10 @@
-"""DB-gated tests for per-company repeat signals (feat/repeat-signal-flags)."""
+"""DB-gated tests for company-level application awareness
+(feat/company-app-awareness).
+
+The signal map is now keyed by NORMALIZED company name and counts BOTH linked
+(``target_company_id``) and unlinked outcomes (name extracted from the subject),
+with an ambiguity guard that suppresses subset-colliding names.
+"""
 
 from __future__ import annotations
 
@@ -30,6 +36,7 @@ def _outcome(
     outcome_type: str,
     minutes: int = 0,
     thread: str | None = None,
+    subject: str = "Re: your application",
 ) -> OutcomeEvent:
     suffix = uuid.uuid4().hex[:10]
     return OutcomeEvent(
@@ -37,7 +44,7 @@ def _outcome(
         email_thread_id=thread,
         from_address="recruiter@example.com",
         from_domain="example.com",
-        subject="Re: your application",
+        subject=subject,
         received_at=_BASE + timedelta(minutes=minutes),
         outcome_type=outcome_type,
         classifier_version="test-v1",
@@ -47,7 +54,7 @@ def _outcome(
 
 @_NEEDS_DB
 @pytest.mark.asyncio
-async def test_multiple_rejections_flagged(db_session: Any) -> None:
+async def test_multiple_rejections_flagged_by_name(db_session: Any) -> None:
     co = _company("RejectCo")
     db_session.add(co)
     await db_session.flush()
@@ -58,7 +65,9 @@ async def test_multiple_rejections_flagged(db_session: Any) -> None:
     await db_session.commit()
 
     signals = await compute_repeat_signals(db_session)
-    assert signals[str(co.id)] == {"rejections": 3, "active_apps": 0}
+    assert signals["rejectco"]["rejections"] == 3
+    assert signals["rejectco"]["active_apps"] == 0
+    assert signals["rejectco"]["display_name"] == "RejectCo"
 
 
 @_NEEDS_DB
@@ -67,18 +76,20 @@ async def test_multiple_active_apps_flagged(db_session: Any) -> None:
     co = _company("AliveCo")
     db_session.add(co)
     await db_session.flush()
-    # Two distinct alive threads.
     db_session.add(_outcome(company_id=co.id, outcome_type="application_confirmation", thread="a"))
     db_session.add(_outcome(company_id=co.id, outcome_type="recruiter_screen_invite", thread="b"))
     await db_session.commit()
 
     signals = await compute_repeat_signals(db_session)
-    assert signals[str(co.id)] == {"rejections": 0, "active_apps": 2}
+    assert signals["aliveco"]["active_apps"] == 2
+    assert signals["aliveco"]["rejections"] == 0
 
 
 @_NEEDS_DB
 @pytest.mark.asyncio
-async def test_single_signal_below_threshold_omitted(db_session: Any) -> None:
+async def test_single_count_is_returned(db_session: Any) -> None:
+    """Unlike the old >=2 threshold, a SINGLE app/rejection is now returned - the
+    frontend renders 1-2 as a neutral badge and only >=3 active as amber."""
     co = _company("OnceCo")
     db_session.add(co)
     await db_session.flush()
@@ -86,42 +97,113 @@ async def test_single_signal_below_threshold_omitted(db_session: Any) -> None:
     await db_session.commit()
 
     signals = await compute_repeat_signals(db_session)
-    assert str(co.id) not in signals  # one rejection, one app — below 2 on both
+    assert signals["onceco"] == {
+        "rejections": 1,
+        "active_apps": 0,
+        "display_name": "OnceCo",
+    }
 
 
 @_NEEDS_DB
 @pytest.mark.asyncio
 async def test_latest_wins_excludes_rejected_thread_from_active(db_session: Any) -> None:
-    """A thread that ends in rejection is NOT counted as a still-alive app, even
-    though it began with a confirmation (latest-wins, mirroring the Pipeline)."""
     co = _company("MixedCo")
     db_session.add(co)
     await db_session.flush()
-    # Thread 1: confirmation then a LATER rejection → rejected, not alive.
     db_session.add(
         _outcome(company_id=co.id, outcome_type="application_confirmation", thread="t1", minutes=0)
     )
     db_session.add(
         _outcome(company_id=co.id, outcome_type="rejection_post_screen", thread="t1", minutes=10)
     )
-    # Threads 2 & 3: still alive.
     db_session.add(_outcome(company_id=co.id, outcome_type="application_confirmation", thread="t2"))
     db_session.add(_outcome(company_id=co.id, outcome_type="offer", thread="t3"))
     await db_session.commit()
 
     signals = await compute_repeat_signals(db_session)
-    # active = t2 + t3 (t1 flipped to rejected); rejections = the one t1 reject.
-    assert signals[str(co.id)] == {"rejections": 1, "active_apps": 2}
+    assert signals["mixedco"]["rejections"] == 1
+    assert signals["mixedco"]["active_apps"] == 2
 
 
 @_NEEDS_DB
 @pytest.mark.asyncio
-async def test_unlinked_outcomes_not_counted(db_session: Any) -> None:
-    # No target_company_id → cannot be attributed to a company → never flagged.
-    for i in range(3):
+async def test_unlinked_outcomes_counted_by_subject(db_session: Any) -> None:
+    """The unlinked majority IS counted now — the company is extracted from the
+    subject ("applying to <X>"), capturing what the id-keyed version missed."""
+    for i in range(2):
         db_session.add(
-            _outcome(company_id=None, outcome_type="rejection_pre_screen", thread=f"u{i}")
+            _outcome(
+                company_id=None,
+                outcome_type="rejection_pre_screen",
+                thread=f"u{i}",
+                subject="Thank you for applying to Wealthsimple",
+            )
         )
+    await db_session.commit()
+
+    signals = await compute_repeat_signals(db_session)
+    assert signals["wealthsimple"]["rejections"] == 2
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_linked_and_unlinked_merge_under_one_name(db_session: Any) -> None:
+    """A linked event and an unlinked subject-extracted event for the SAME
+    company collapse to one normalized key (linked name "Stripe, Inc." and
+    subject "applying to Stripe" both → "stripe")."""
+    co = _company("Stripe, Inc.")
+    db_session.add(co)
+    await db_session.flush()
+    db_session.add(_outcome(company_id=co.id, outcome_type="application_confirmation", thread="L"))
+    db_session.add(
+        _outcome(
+            company_id=None,
+            outcome_type="application_confirmation",
+            thread="U",
+            subject="Thanks for applying to Stripe",
+        )
+    )
+    await db_session.commit()
+
+    signals = await compute_repeat_signals(db_session)
+    assert signals["stripe"]["active_apps"] == 2
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_ambiguous_subset_names_suppressed(db_session: Any) -> None:
+    """No-false-badge guard: "John Hancock" and "Manulife John Hancock" — one a
+    token-subset of the other — are BOTH suppressed rather than risk a wrong
+    count."""
+    jh = _company("John Hancock")
+    manulife = _company("Manulife John Hancock")
+    db_session.add_all([jh, manulife])
+    await db_session.flush()
+    db_session.add(_outcome(company_id=jh.id, outcome_type="application_confirmation", thread="j1"))
+    db_session.add(_outcome(company_id=jh.id, outcome_type="application_confirmation", thread="j2"))
+    db_session.add(
+        _outcome(company_id=manulife.id, outcome_type="rejection_pre_screen", thread="m1")
+    )
+    await db_session.commit()
+
+    signals = await compute_repeat_signals(db_session)
+    assert "john hancock" not in signals
+    assert "manulife john hancock" not in signals
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_generic_subject_unlinked_not_counted(db_session: Any) -> None:
+    """An unlinked outcome whose subject yields no company name can't be
+    attributed → not counted (no fan-out)."""
+    db_session.add(
+        _outcome(
+            company_id=None,
+            outcome_type="rejection_pre_screen",
+            thread="g",
+            subject="Update on your application",
+        )
+    )
     await db_session.commit()
 
     signals = await compute_repeat_signals(db_session)

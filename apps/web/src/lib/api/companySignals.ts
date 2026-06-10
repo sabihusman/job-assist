@@ -5,12 +5,18 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api/client';
 
 /**
- * Per-company repeat signals (feat/repeat-signal-flags) — companies where the
- * operator has 2+ rejections or 2+ still-alive applications, computed server-side
- * from the Gmail outcome history and keyed by ``company_id``. One cached fetch
- * feeds every badge (Triage detail + Pipeline) via React Query dedup.
+ * Per-company application-awareness signals (feat/company-app-awareness) —
+ * computed server-side from the Gmail outcome history and keyed by the
+ * NORMALIZED company name (so the unlinked majority of outcomes is captured, and
+ * "Stripe, Inc." / "stripe" collapse). One cached fetch feeds every badge
+ * (Triage list + detail + Pipeline) via React Query dedup. Consumers look a
+ * company up by re-normalizing its display name (see ``normalizeCompanyName``).
  */
-export type CompanySignal = { rejections: number; active_apps: number };
+export type CompanySignal = {
+  rejections: number;
+  active_apps: number;
+  display_name?: string;
+};
 export type RepeatSignals = Record<string, CompanySignal>;
 
 export function useCompanySignals() {

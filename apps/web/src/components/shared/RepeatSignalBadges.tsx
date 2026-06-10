@@ -1,50 +1,72 @@
 import type { RepeatSignals } from '@/lib/api/companySignals';
+import { normalizeCompanyName } from '@/lib/pipeline/normalizeCompanyName';
 import { cn } from '@/lib/utils';
 
 /**
- * Repeat-signal badges for a company (feat/repeat-signal-flags). Pure +
+ * Company-level application-awareness badges (feat/company-app-awareness). Pure +
  * presentational: it takes the already-fetched ``signals`` map (one cached
  * `useCompanySignals` fetch lives at the page / detail-panel level and is passed
- * down), so leaf components like PipelineCard don't each couple to React Query.
- * Renders nothing when the company is unknown or below threshold.
+ * down) so leaf components like TriageCard / PipelineCard don't each couple to
+ * React Query. The map is keyed by NORMALIZED company name, so the badge
+ * re-normalizes ``companyName`` to look it up. Renders nothing when the company
+ * is unknown or has no signal.
  *
- *   • 2+ rejection outcomes  → "N rejections here"  (negative)
- *   • 2+ still-alive apps     → "N active apps here" (pending)
+ * Thresholds (advisory only — never blocking):
+ *   • active apps  1–2  → NEUTRAL "N active apps"   (informational)
+ *   • active apps  ≥3   → AMBER   "N active apps"    (warning: portfolio heavy)
+ *   • rejections   ≥1   → NEUTRAL "N rejections here"
+ *   • 0 on an axis      → no badge for that axis
  */
 export function RepeatSignalBadges({
-  companyId,
+  companyName,
   signals,
   className,
 }: {
-  companyId: string | null | undefined;
+  companyName: string | null | undefined;
   signals: RepeatSignals | undefined;
   className?: string;
 }) {
-  if (!companyId || !signals) return null;
-  const sig = signals[companyId];
+  if (!companyName || !signals) return null;
+  const key = normalizeCompanyName(companyName);
+  if (!key) return null;
+  const sig = signals[key];
   if (!sig) return null;
 
-  const showRejections = sig.rejections >= 2;
-  const showActive = sig.active_apps >= 2;
+  const showRejections = sig.rejections >= 1;
+  const showActive = sig.active_apps >= 1;
   if (!showRejections && !showActive) return null;
+
+  // ≥3 still-alive applications at one company is the advisory "you're stacking
+  // up here" signal — amber. 1–2 is just informational.
+  const activeAmber = sig.active_apps >= 3;
 
   return (
     <span
       data-testid="repeat-signal-badges"
       className={cn('inline-flex flex-wrap items-center gap-1', className)}
     >
-      {showRejections && (
-        <Badge
-          tone="negative"
-          label={`${sig.rejections} rejections here`}
-          title={`You have ${sig.rejections} rejections from this company.`}
-        />
-      )}
       {showActive && (
         <Badge
-          tone="pending"
-          label={`${sig.active_apps} active apps here`}
-          title={`You have ${sig.active_apps} still-alive applications at this company.`}
+          tone={activeAmber ? 'amber' : 'neutral'}
+          dataState={activeAmber ? 'amber' : 'neutral'}
+          label={`${sig.active_apps} active apps`}
+          title={
+            activeAmber
+              ? `You already have ${sig.active_apps} still-alive applications at this company — consider whether to add another.`
+              : `You have ${sig.active_apps} still-alive application${
+                  sig.active_apps === 1 ? '' : 's'
+                } at this company.`
+          }
+        />
+      )}
+      {showRejections && (
+        <Badge
+          tone="neutral"
+          dataState="rejections"
+          label={`${sig.rejections} rejection${sig.rejections === 1 ? '' : 's'} here`}
+          title={`You have ${sig.rejections} rejection${
+            sig.rejections === 1 ? '' : 's'
+          } from this company.`}
         />
       )}
     </span>
@@ -53,19 +75,22 @@ export function RepeatSignalBadges({
 
 function Badge({
   tone,
+  dataState,
   label,
   title,
 }: {
-  tone: 'negative' | 'pending';
+  tone: 'neutral' | 'amber';
+  dataState: string;
   label: string;
   title: string;
 }) {
   const cls =
-    tone === 'negative'
-      ? 'bg-negative/15 text-negative ring-negative/30'
-      : 'bg-pending/15 text-pending ring-pending/30';
+    tone === 'amber'
+      ? 'bg-amber-500/15 text-amber-600 ring-amber-500/30'
+      : 'bg-muted text-muted-foreground ring-border';
   return (
     <span
+      data-signal={dataState}
       title={title}
       className={cn(
         'inline-flex w-fit items-center rounded px-1.5 py-0 font-mono text-[10px] font-medium uppercase tracking-wide ring-1 ring-inset',

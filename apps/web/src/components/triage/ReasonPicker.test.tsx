@@ -5,12 +5,29 @@ import { describe, expect, test, vi } from 'vitest';
 import { REASON_CHOICES, ReasonPicker } from '@/components/triage/ReasonPicker';
 
 describe('ReasonPicker', () => {
-  test('renders all 9 chips with hotkey suffixes', () => {
+  test('renders all 10 chips with hotkey suffixes', () => {
     render(<ReasonPicker onSelect={() => {}} onCancel={() => {}} />);
-    expect(REASON_CHOICES.length).toBe(9);
+    expect(REASON_CHOICES.length).toBe(10);
     for (const c of REASON_CHOICES) {
       expect(screen.getByText(c.label)).toBeInTheDocument();
     }
+  });
+
+  // feat/company-app-awareness: the portfolio pass (hotkey 0)
+  test('chip 0 commits too_many_open_apps on click', async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    render(<ReasonPicker onSelect={onSelect} onCancel={() => {}} />);
+    await user.click(screen.getByText('Too many open apps here'));
+    expect(onSelect).toHaveBeenCalledWith('too_many_open_apps');
+  });
+
+  test('hotkey 0 commits too_many_open_apps without any click', async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    render(<ReasonPicker onSelect={onSelect} onCancel={() => {}} />);
+    await user.keyboard('0');
+    expect(onSelect).toHaveBeenCalledWith('too_many_open_apps');
   });
 
   // PR #43: too_senior / too_junior chips

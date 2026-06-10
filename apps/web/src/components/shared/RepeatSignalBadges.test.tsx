@@ -4,49 +4,65 @@ import { describe, expect, test } from 'vitest';
 import { RepeatSignalBadges } from '@/components/shared/RepeatSignalBadges';
 import type { RepeatSignals } from '@/lib/api/companySignals';
 
+// Keyed by NORMALIZED company name (feat/company-app-awareness).
 const SIGNALS: RepeatSignals = {
-  rejectCo: { rejections: 3, active_apps: 1 },
-  aliveCo: { rejections: 0, active_apps: 2 },
-  bothCo: { rejections: 4, active_apps: 3 },
-  onceCo: { rejections: 1, active_apps: 1 },
+  stripe: { rejections: 2, active_apps: 1, display_name: 'Stripe' },
+  ramp: { rejections: 0, active_apps: 2, display_name: 'Ramp' },
+  plaid: { rejections: 0, active_apps: 3, display_name: 'Plaid' },
+  brex: { rejections: 1, active_apps: 4, display_name: 'Brex' },
+  mercury: { rejections: 0, active_apps: 0, display_name: 'Mercury' },
 };
 
 describe('RepeatSignalBadges', () => {
-  test('renders nothing for a company below threshold', () => {
-    const { container } = render(<RepeatSignalBadges companyId="onceCo" signals={SIGNALS} />);
+  test('renders nothing for a company with no signal', () => {
+    const { container } = render(<RepeatSignalBadges companyName="Unknown Co" signals={SIGNALS} />);
     expect(container).toBeEmptyDOMElement();
   });
 
-  test('renders nothing for an unknown company', () => {
-    const { container } = render(<RepeatSignalBadges companyId="missing" signals={SIGNALS} />);
-    expect(container).toBeEmptyDOMElement();
-  });
-
-  test('renders nothing when companyId is null', () => {
-    const { container } = render(<RepeatSignalBadges companyId={null} signals={SIGNALS} />);
+  test('renders nothing when companyName is null', () => {
+    const { container } = render(<RepeatSignalBadges companyName={null} signals={SIGNALS} />);
     expect(container).toBeEmptyDOMElement();
   });
 
   test('renders nothing when signals are undefined (not yet loaded)', () => {
-    const { container } = render(<RepeatSignalBadges companyId="rejectCo" signals={undefined} />);
+    const { container } = render(<RepeatSignalBadges companyName="Stripe" signals={undefined} />);
     expect(container).toBeEmptyDOMElement();
   });
 
-  test('shows only the rejections badge when active < 2', () => {
-    render(<RepeatSignalBadges companyId="rejectCo" signals={SIGNALS} />);
-    expect(screen.getByText('3 rejections here')).toBeInTheDocument();
-    expect(screen.queryByText(/active apps/)).not.toBeInTheDocument();
+  test('renders nothing when both counts are zero', () => {
+    const { container } = render(<RepeatSignalBadges companyName="Mercury" signals={SIGNALS} />);
+    expect(container).toBeEmptyDOMElement();
   });
 
-  test('shows only the active-apps badge when rejections < 2', () => {
-    render(<RepeatSignalBadges companyId="aliveCo" signals={SIGNALS} />);
-    expect(screen.getByText('2 active apps here')).toBeInTheDocument();
-    expect(screen.queryByText(/rejections/)).not.toBeInTheDocument();
+  test('matches by NORMALIZED name — "Stripe, Inc." resolves to "stripe"', () => {
+    render(<RepeatSignalBadges companyName="Stripe, Inc." signals={SIGNALS} />);
+    expect(screen.getByText('2 rejections here')).toBeInTheDocument();
+    // active_apps = 1 → neutral, no amber.
+    const active = screen.getByText('1 active apps');
+    expect(active).toHaveAttribute('data-signal', 'neutral');
   });
 
-  test('shows both badges when both cross the threshold', () => {
-    render(<RepeatSignalBadges companyId="bothCo" signals={SIGNALS} />);
-    expect(screen.getByText('4 rejections here')).toBeInTheDocument();
-    expect(screen.getByText('3 active apps here')).toBeInTheDocument();
+  test('1–2 active apps → NEUTRAL (not amber)', () => {
+    render(<RepeatSignalBadges companyName="Ramp" signals={SIGNALS} />);
+    const active = screen.getByText('2 active apps');
+    expect(active).toHaveAttribute('data-signal', 'neutral');
+    expect(active.className).not.toContain('amber');
+    expect(screen.queryByText(/rejection/)).not.toBeInTheDocument();
+  });
+
+  test('exactly 3 active apps → AMBER', () => {
+    render(<RepeatSignalBadges companyName="Plaid" signals={SIGNALS} />);
+    const active = screen.getByText('3 active apps');
+    expect(active).toHaveAttribute('data-signal', 'amber');
+    expect(active.className).toContain('amber');
+  });
+
+  test('≥3 active apps amber + rejections shown alongside (neutral)', () => {
+    render(<RepeatSignalBadges companyName="Brex" signals={SIGNALS} />);
+    const active = screen.getByText('4 active apps');
+    expect(active).toHaveAttribute('data-signal', 'amber');
+    const rej = screen.getByText('1 rejection here'); // singular
+    expect(rej).toHaveAttribute('data-signal', 'rejections');
+    expect(rej.className).not.toContain('amber');
   });
 });

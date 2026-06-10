@@ -23,7 +23,12 @@ export type ActionReason =
   | 'just_not_feeling_it'
   // PR #43: seniority-band reasons.
   | 'too_senior'
-  | 'too_junior';
+  | 'too_junior'
+  // feat/company-app-awareness: a reluctant PORTFOLIO pass — nothing wrong with
+  // the role, the operator just already has too many open applications at this
+  // company. Deliberately excluded from calibration's fit-learning aggregates
+  // server-side (services/stats.py), so it never reads as a fit signal.
+  | 'too_many_open_apps';
 
 export type RemoteType = 'remote' | 'hybrid' | 'onsite';
 

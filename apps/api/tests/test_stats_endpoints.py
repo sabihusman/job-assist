@@ -503,6 +503,47 @@ async def test_calibration_top_rejected_role_families_empty_when_no_rejections(
 
 
 @_NEEDS_DB
+async def test_calibration_excludes_too_many_open_apps_reason(db_session: Any) -> None:
+    """feat/company-app-awareness: a ``too_many_open_apps`` pass is PORTFOLIO
+    management, not a fit signal — it must NOT inflate ``rejected_by_you`` nor
+    appear in ``top_rejected_role_families``. A normal ``wrong_role`` pass on the
+    same family still counts, proving only the portfolio reason is excluded."""
+    company = _company()
+    db_session.add(company)
+    await db_session.flush()
+    p_portfolio = _posting(target_company_id=company.id, role_family="product_owner")
+    p_fit = _posting(target_company_id=company.id, role_family="product_owner")
+    db_session.add_all([p_portfolio, p_fit])
+    await db_session.flush()
+    db_session.add(
+        _action(
+            job_posting_id=p_portfolio.id,
+            action_type="not_interested",
+            reason="too_many_open_apps",
+        )
+    )
+    db_session.add(
+        _action(
+            job_posting_id=p_fit.id,
+            action_type="not_interested",
+            reason="wrong_role",
+        )
+    )
+    await db_session.commit()
+
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp = await ac.get("/stats/calibration")
+    finally:
+        await _drop_override()
+    body = resp.json()
+    # Only the fit pass counts toward the fit-learning aggregates.
+    assert body["rejected_by_you"] == 1
+    assert body["top_rejected_role_families"] == [{"role_family": "product_owner", "count": 1}]
+
+
+@_NEEDS_DB
 async def test_calibration_window_excludes_actions_outside(db_session: Any) -> None:
     """Actions stamped pre-since or post-until must not contribute."""
     company = _company()

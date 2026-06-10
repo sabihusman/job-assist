@@ -3633,14 +3633,18 @@ async def list_companies(
 
 @app.get("/companies/repeat-signals", tags=["public"])
 async def company_repeat_signals(db: DbSession) -> dict[str, Any]:
-    """Per-company repeat signals from the Gmail outcome history
-    (feat/repeat-signal-flags).
+    """Per-company application-awareness counts from the Gmail outcome history
+    (feat/company-app-awareness).
 
-    Returns ``{"signals": {company_id: {"rejections": r, "active_apps": a}}}``
-    for every company at/above the repeat threshold (2+) on either axis — used by
-    the UI to badge "N rejections here" / "N active apps here" wherever that
-    company's roles appear (Triage detail + Pipeline). Computed from existing
-    ``outcome_event`` data, keyed by the reliable ``target_company_id`` link.
+    Returns ``{"signals": {norm_name: {"rejections": r, "active_apps": a,
+    "display_name": str}}}`` for every company attributable from the outcome
+    history with ``rejections >= 1`` or ``active_apps >= 1``. Keyed by the
+    NORMALIZED company name (so "Stripe, Inc." and "stripe" collapse); matched on
+    name (linked ``target_company.name`` or the name extracted from the email
+    subject), capturing the unlinked majority. Ambiguous names are suppressed.
+
+    The triage UI keys badges by the posting's normalized company name and
+    applies the 1-2 neutral / >=3 amber threshold client-side.
 
     TODO: add authentication before exposing publicly. Dev-mode only.
     """

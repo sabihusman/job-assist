@@ -12,6 +12,7 @@ import { DetailPanel } from '@/components/triage/DetailPanel';
 import { FilterRow } from '@/components/triage/FilterRow';
 import type { TriageCardAction } from '@/components/triage/TriageCard';
 import { TriageList } from '@/components/triage/TriageList';
+import { useCompanySignals } from '@/lib/api/companySignals';
 import { showErrorToast } from '@/lib/api/error-toast';
 import { useBulkRecordAction, useRecordAction, useTriagePostings } from '@/lib/api/hooks';
 import { useTriageKeyboard } from '@/lib/keyboard/useTriageKeyboard';
@@ -95,6 +96,10 @@ function TriagePageInner() {
   });
   const recordAction = useRecordAction();
   const bulkAction = useBulkRecordAction();
+  // feat/company-app-awareness: one cached fetch of per-company app-awareness
+  // signals, passed down to every card so the badge ("N active apps" / amber at
+  // ≥3) is visible right in the triage list. Undefined while loading → no badge.
+  const { data: companySignals } = useCompanySignals();
 
   const page1Items = data?.items ?? [];
   const items =
@@ -344,6 +349,7 @@ function TriagePageInner() {
             selectedIndex={selectedIndex}
             reasonPickerCardId={reasonPickerCardId}
             selectedIds={selectedIds}
+            signals={companySignals}
             onSelect={(i) => {
               setDeepLinkId(null);
               setSelectedIndex(i);

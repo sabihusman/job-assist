@@ -133,6 +133,12 @@ class ActionReason(enum.StrEnum):
     # calibration card to show why.
     too_senior = "too_senior"
     too_junior = "too_junior"
+    # feat/company-app-awareness: a reluctant PORTFOLIO pass - nothing wrong with
+    # the role, the operator just already has too many open applications at this
+    # company. Stored like any other not_interested reason, but deliberately
+    # EXCLUDED from calibration's fit-learning aggregates (services/stats.py) so
+    # it never reads as a fit signal or feeds any scorer rank-down.
+    too_many_open_apps = "too_many_open_apps"
 
 
 class MessageDirection(enum.StrEnum):
