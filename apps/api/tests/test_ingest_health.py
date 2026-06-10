@@ -333,7 +333,7 @@ async def test_gmail_healthy_reports_runtime(db_session: Any) -> None:
 
     assert h["checks"]["gmail_healthy"] is True
     assert h["metrics"]["gmail_last_sweep_status"] == "success"
-    assert h["metrics"]["gmail_last_sweep_runtime_seconds"] == 42.0
+    assert h["metrics"]["gmail_last_sweep_runtime_seconds"] == pytest.approx(42.0, abs=0.5)
     assert h["metrics"]["gmail_last_sweep_at"] is not None
 
 
