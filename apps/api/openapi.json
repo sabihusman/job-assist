@@ -158,17 +158,85 @@
           "admin"
         ],
         "summary": "Trigger Fantastic Ingest",
-        "description": "Ingest the curated Workday/iCIMS employers via the Fantastic.jobs Apify\nactor (feat/fantastic-jobs-ingest).\n\nThose boards block Railway's datacenter egress IP, so the free Workday/iCIMS\nadapters fetch 0 \u2014 Apify's infra crawls them instead. The PM/PO title filter\nis applied at the API call (a few jobs/employer = pennies/day). Scoped to\ncurated workday/icims rows ONLY; greenhouse/lever/ashby stay on the free\nadapters. Each employer is its own ingest_run; returns per-employer counts.\n\n503 when ``APIFY_API_TOKEN`` is unset (server-side only \u2014 Railway env +\nGitHub secret; never client-exposed).",
+        "description": "Ingest ONE cohort of Workday/iCIMS employers via the Fantastic.jobs\nApify actor (feat/fantastic-jobs-ingest + feat/warm-path-ingest).\n\nThose boards block Railway's datacenter egress IP, so the free Workday/iCIMS\nadapters fetch 0 \u2014 Apify's infra crawls them instead. The PM/PO title filter\nis applied at the API call (a few jobs/employer = pennies/day).\n``?source=curated`` (default) is the daily cron's set; ``?source=warm_path``\nis the weekly alumni-network sweep. greenhouse/lever/ashby stay on the free\nadapters. Each employer is its own ingest_run; returns per-employer counts.\n\n503 when ``APIFY_API_TOKEN`` is unset (server-side only \u2014 Railway env +\nGitHub secret; never client-exposed).",
         "operationId": "trigger_fantastic_ingest_admin_ingest_fantastic_post",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "curated",
+              "title": "Source"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Trigger Fantastic Ingest Admin Ingest Fantastic Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/ingest/fantastic-plan": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Get Fantastic Plan",
+        "description": "List the employers ONE Apify cohort would sweep \u2014 the fantastic-path\nanalog of ``GET /admin/ingest/plan`` (which covers only the free adapters).\n\nRead-only; used to verify the warm-path cohort after seeding without\nspending an Apify call.",
+        "operationId": "get_fantastic_plan_admin_ingest_fantastic_plan_get",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "curated",
+              "title": "Source"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Fantastic Plan Admin Ingest Fantastic Plan Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }

@@ -46,8 +46,16 @@ def apify_domain_for(tc: TargetCompany) -> str | None:
     return str(override) if override else tc.domain
 
 
-async def list_fantastic_targets(session: AsyncSession) -> list[TargetCompany]:
-    """Curated Workday/iCIMS employers the Apify path can source.
+async def list_fantastic_targets(
+    session: AsyncSession, *, source: str = "curated"
+) -> list[TargetCompany]:
+    """Workday/iCIMS employers the Apify path can source, for ONE cohort.
+
+    ``source`` selects the cohort: ``curated`` (the daily cron's set) or
+    ``warm_path`` (feat/warm-path-ingest: alumni-network employers, swept
+    WEEKLY by warm-path-ingest.yml). Keeping the cohorts disjoint at the query
+    level is what keeps the paid-API cadences independent — a warm_path row
+    must never ride the daily cron.
 
     Requires a DOMAIN (Apify targets by ``domainFilter``), NOT an ats_handle —
     so Capital One / John Hancock (NULL handle, never given a Workday tenant)
@@ -56,7 +64,7 @@ async def list_fantastic_targets(session: AsyncSession) -> list[TargetCompany]:
     rows = await session.execute(
         select(TargetCompany)
         .where(TargetCompany.ats.in_(FANTASTIC_SOURCED_ATS))
-        .where(TargetCompany.source == "curated")
+        .where(TargetCompany.source == source)
         .where(TargetCompany.domain.is_not(None))
         .order_by(TargetCompany.name)
     )
@@ -68,15 +76,20 @@ async def ingest_curated_via_fantastic(
     token: str,
     *,
     limit: int = DEFAULT_LIMIT,
+    source: str = "curated",
 ) -> dict[str, Any]:
-    """Run the Apify-sourced ingest for every curated Workday/iCIMS employer.
+    """Run the Apify-sourced ingest for every Workday/iCIMS employer in ONE
+    cohort (``source``: curated = daily cron, warm_path = weekly alumni sweep).
 
     One ``ingest_run`` per employer (``IngestionService.ingest_source`` commits
     per call and swallows per-employer failures into a ``failed`` run), so one
-    bad board never aborts the batch. Returns per-employer counts for the cron
-    log / the verify step.
+    bad board never aborts the batch. Each swept employer gets
+    ``last_swept_at`` stamped (feeds the warm_path_fresh health check). Returns
+    per-employer counts for the cron log / the verify step.
     """
-    targets = await list_fantastic_targets(session)
+    from datetime import UTC, datetime
+
+    targets = await list_fantastic_targets(session, source=source)
     service = IngestionService()
     results: list[dict[str, Any]] = []
 
@@ -103,6 +116,12 @@ async def ingest_curated_via_fantastic(
                 session,
                 target_company=tc,
             )
+        # feat/warm-path-ingest: stamp the sweep time on the company row —
+        # the warm_path_fresh health check reads MAX(last_swept_at) per cohort.
+        # Stamped even on a failed run (the SWEEP visited the employer; a
+        # board-level failure is surfaced via the failed ingest_run, not via
+        # a stale-cohort alarm).
+        tc.last_swept_at = datetime.now(tz=UTC)
         results.append(
             {
                 "company": tc.name,
@@ -115,12 +134,14 @@ async def ingest_curated_via_fantastic(
             }
         )
 
+    await session.commit()  # persist the last_swept_at stamps
     logger.info(
         "fantastic_ingest.complete",
         employers=len(results),
         total_new=sum(r["postings_new"] for r in results),
+        source=source,
     )
-    return {"employers": len(results), "results": results}
+    return {"employers": len(results), "source": source, "results": results}
 
 
 async def probe_fantastic_domain(

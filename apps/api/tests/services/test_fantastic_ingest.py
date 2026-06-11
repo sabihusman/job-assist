@@ -102,3 +102,74 @@ async def test_list_targets_includes_null_handle_with_domain(db_session: Any) ->
     assert "NoDomain" not in names
     assert "GreenhouseCo" not in names
     assert "BroadCo" not in names
+
+
+# ── Cohort selection (feat/warm-path-ingest) ─────────────────────────────────
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_warm_path_rows_excluded_from_curated_default(db_session: Any) -> None:
+    """The DAILY cron's default (source='curated') must never sweep warm-path
+    rows — the cohorts carry different cadences on a paid API."""
+    db_session.add_all(
+        [
+            TargetCompany(
+                name="CuratedCo",
+                tier=2,
+                ats="workday",
+                domain="curated.com",
+                source="curated",
+            ),
+            TargetCompany(
+                name="John Deere",
+                tier=None,
+                ats="workday",
+                domain="deere.com",
+                source="warm_path",
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    curated = {t.name for t in await list_fantastic_targets(db_session)}
+    assert curated == {"CuratedCo"}
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_warm_path_cohort_selected_by_source(db_session: Any) -> None:
+    """source='warm_path' selects exactly the warm-path rows (domain required,
+    tier NULL fine, handle NULL fine)."""
+    db_session.add_all(
+        [
+            TargetCompany(
+                name="John Deere",
+                tier=None,
+                ats="workday",
+                domain="deere.com",
+                source="warm_path",
+            ),
+            TargetCompany(
+                name="Mayo Clinic",
+                tier=None,
+                ats="workday",
+                domain="mayoclinic.org",
+                source="warm_path",
+            ),
+            # No domain → Apify can't target it → excluded.
+            TargetCompany(name="NoDomainCo", tier=None, ats="workday", source="warm_path"),
+            # Curated row → not in this cohort.
+            TargetCompany(
+                name="CuratedCo2",
+                tier=2,
+                ats="workday",
+                domain="curated2.com",
+                source="curated",
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    warm = {t.name for t in await list_fantastic_targets(db_session, source="warm_path")}
+    assert warm == {"John Deere", "Mayo Clinic"}

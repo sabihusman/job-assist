@@ -114,3 +114,30 @@ async def test_backfill_still_inserts_new_rows(db_session: Any) -> None:
         backfill_nullables=True,
     )
     assert (inserted, skipped, backfilled) == (1, 1, 1)
+
+
+# ── feat/warm-path-ingest: seed rows may carry a cohort source ───────────────
+
+
+def test_project_row_accepts_warm_path_source() -> None:
+    from job_assist.seed import _project_row
+
+    row = _project_row(
+        {
+            "name": "John Deere",
+            "tier": None,
+            "ats": "workday",
+            "domain": "deere.com",
+            "source": "warm_path",
+        }
+    )
+    assert row["source"] == "warm_path"
+
+
+def test_project_row_rejects_unknown_source() -> None:
+    import pytest as _pytest
+
+    from job_assist.seed import _project_row
+
+    with _pytest.raises(ValueError, match="source must be one of"):
+        _project_row({"name": "X", "tier": None, "source": "bogus"})

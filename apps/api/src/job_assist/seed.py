@@ -48,7 +48,15 @@ _SEED_FIELDS = {
     "role_filter",
     "domain",
     "notes",
+    # feat/warm-path-ingest: rows may seed directly into a non-default cohort.
+    # Without this, every seeded row lands as 'curated' (server default) and
+    # the DAILY fantastic cron would sweep it — warm-path companies must be
+    # born warm_path so they only ever ride the weekly sweep.
+    "source",
 }
+
+# Mirror of main.py._CRAWL_CONFIG_SOURCES — the provenance vocabulary.
+_SEED_SOURCES = {"curated", "broad", "deactivated", "applied", "warm_path"}
 
 
 def _project_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -56,6 +64,8 @@ def _project_row(row: dict[str, Any]) -> dict[str, Any]:
     projected = {k: v for k, v in row.items() if k in _SEED_FIELDS}
     if "name" not in projected or "tier" not in projected:
         raise ValueError(f"seed row missing required name/tier: {row!r}")
+    if "source" in projected and projected["source"] not in _SEED_SOURCES:
+        raise ValueError(f"seed row source must be one of {sorted(_SEED_SOURCES)}: {row!r}")
     projected.setdefault("ats", "unknown")
     return projected
 

@@ -398,3 +398,93 @@ async def test_gmail_last_sweep_failed_flags_degraded(db_session: Any) -> None:
     assert h["checks"]["gmail_healthy"] is False
     assert h["metrics"]["gmail_last_sweep_status"] == "failed"
     assert any("last Gmail sweep failed" in p for p in h["problems"])
+
+
+# ── feat/warm-path-ingest ─────────────────────────────────────────────────────
+
+
+def _warm_company(*, swept_days_ago: float | None, name_suffix: str = "") -> Any:
+    from job_assist.db.models import TargetCompany
+
+    now = datetime.now(tz=UTC)
+    return TargetCompany(
+        name=f"WarmCo{name_suffix or uuid.uuid4().hex[:6]}",
+        tier=None,
+        ats="workday",  # type: ignore[arg-type]
+        domain="warmco.com",
+        source="warm_path",
+        last_swept_at=(None if swept_days_ago is None else now - timedelta(days=swept_days_ago)),
+    )
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_warm_path_fresh_trivially_true_when_cohort_empty(db_session: Any) -> None:
+    """No warm_path companies (pre-seeding) → the check passes; healthy world
+    stays fully green."""
+    from job_assist.main import app
+
+    db_session.add_all(_healthy_fixtures())
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["checks"]["warm_path_fresh"] is True
+    assert h["metrics"]["warm_path_companies"] == 0
+    assert h["metrics"]["warm_path_last_swept_at"] is None
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_warm_path_fresh_within_window(db_session: Any) -> None:
+    """Cohort swept 2 days ago → fresh (weekly cadence, 9-day window)."""
+    from job_assist.main import app
+
+    db_session.add_all(_healthy_fixtures())
+    db_session.add(_warm_company(swept_days_ago=2))
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["checks"]["warm_path_fresh"] is True
+    assert h["severity"] == "ok"
+    assert h["metrics"]["warm_path_companies"] == 1
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_warm_path_stale_flags_degraded(db_session: Any) -> None:
+    """Cohort exists but last sweep started >9 days ago → SOFT/yellow."""
+    from job_assist.main import app
+
+    db_session.add_all(_healthy_fixtures())
+    db_session.add(_warm_company(swept_days_ago=12))
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["ok"] is False
+    assert h["severity"] == "degraded"
+    assert h["checks"]["warm_path_fresh"] is False
+    assert any("warm-path sweep" in p for p in h["problems"])
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_warm_path_seeded_never_swept_flags_degraded(db_session: Any) -> None:
+    """Cohort seeded but never swept (last_swept_at NULL everywhere) → degraded,
+    so a never-armed weekly cron can't read green forever."""
+    from job_assist.main import app
+
+    db_session.add_all(_healthy_fixtures())
+    db_session.add(_warm_company(swept_days_ago=None))
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["checks"]["warm_path_fresh"] is False
+    assert h["severity"] == "degraded"
