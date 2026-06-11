@@ -17,6 +17,7 @@ function makeHealth(over: Partial<IngestHealth> = {}): IngestHealth {
       not_starved: true,
       llm_healthy: true,
       gmail_healthy: true,
+      warm_path_fresh: true,
     },
     metrics: {
       last_success_at: '2026-06-07T22:00:00Z',
@@ -35,6 +36,9 @@ function makeHealth(over: Partial<IngestHealth> = {}): IngestHealth {
       gmail_last_sweep_status: 'success',
       gmail_last_sweep_runtime_seconds: 12.4,
       gmail_stale_hours: 13,
+      warm_path_companies: 0,
+      warm_path_last_swept_at: null,
+      warm_path_stale_days: 9,
     },
     ...over,
   };
@@ -66,6 +70,7 @@ describe('HealthDotView', () => {
         not_starved: false,
         llm_healthy: true,
         gmail_healthy: true,
+        warm_path_fresh: true,
       },
     });
     render(<HealthDotView state="degraded" health={health} isError={false} />);
@@ -90,6 +95,7 @@ describe('HealthDotView', () => {
         not_starved: true,
         llm_healthy: true,
         gmail_healthy: true,
+        warm_path_fresh: true,
       },
     });
     render(<HealthDotView state="down" health={health} isError={false} />);
@@ -116,6 +122,7 @@ describe('HealthDotView', () => {
         not_starved: true,
         llm_healthy: true,
         gmail_healthy: false,
+        warm_path_fresh: true,
       },
     });
     render(<HealthDotView state="degraded" health={health} isError={false} />);
@@ -174,6 +181,7 @@ describe('HealthDotView', () => {
         not_starved: true,
         llm_healthy: false,
         gmail_healthy: true,
+        warm_path_fresh: true,
       },
     });
     render(<HealthDotView state="degraded" health={health} isError={false} />);

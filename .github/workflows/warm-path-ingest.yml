@@ -1,0 +1,83 @@
+name: Warm-path ingest (weekly)
+
+# feat/warm-path-ingest: weekly Apify sweep of the WARM-PATH cohort — alumni-
+# network employers (target_company.source = 'warm_path'). These are off-domain
+# enterprises (John Deere, Collins Aerospace, Mayo Clinic, …) where the operator
+# has 2+ alumni contacts; warm paths are durable, so weekly cadence is plenty
+# and keeps Apify spend at pennies (50-job cap/employer ≈ $0.06 ceiling each).
+#
+# Deliberately DISJOINT from the daily curated fantastic sweep
+# (ingest-daily.yml hits the same endpoint with the default source=curated);
+# the cohorts never overlap by construction (list_fantastic_targets filters
+# by source). Freshness is watched by the health monitor's ``warm_path_fresh``
+# check (~9-day window — weekly cadence + grace, NOT the 26h ingest window).
+#
+# Secrets required (already configured): API_URL, API_AUTH_TOKEN.
+# Pause: Actions tab → Warm-path ingest → "···" → Disable workflow.
+# Manual trigger (e.g. the one-off test sweep): Actions tab → Run workflow.
+
+on:
+  schedule:
+    # Sundays 13:00 UTC — clear of the weekday 06:00-09:30 cron cluster.
+    - cron: '0 13 * * 0'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warm-path-ingest
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: Sweep warm-path employers via Fantastic.jobs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Trigger warm-path fantastic sweep
+        run: |
+          status=$(curl -sS --max-time 600 \
+            -o /tmp/warm_path.json -w "%{http_code}" \
+            -H "Authorization: Bearer $API_AUTH_TOKEN" \
+            -X POST "$API_URL/admin/ingest/fantastic?source=warm_path")
+
+          if [ "$status" != "200" ]; then
+            echo "Warm-path sweep failed with HTTP $status"
+            python3 -m json.tool < /tmp/warm_path.json || cat /tmp/warm_path.json
+            exit 1
+          fi
+
+          echo "Warm-path sweep succeeded:"
+          python3 -m json.tool < /tmp/warm_path.json
+
+      - name: Surface per-employer counts in the workflow summary
+        if: always() && hashFiles('/tmp/warm_path.json') != ''
+        run: |
+          python3 <<'PYEOF' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          try:
+              d = json.loads(pathlib.Path("/tmp/warm_path.json").read_text())
+          except Exception as exc:
+              print(f"## Warm-path sweep\n\nCould not parse response: {exc}")
+              raise SystemExit(0)
+          results = d.get("results", [])
+          print("## Warm-path sweep")
+          print()
+          print(f"Employers swept: **{d.get('employers', 0)}**")
+          print()
+          print("| Company | Status | Fetched | New | Updated |")
+          print("|---|---|---|---|---|")
+          for r in results:
+              print(
+                  f"| {r.get('company')} | {r.get('status')} "
+                  f"| {r.get('postings_fetched', 0)} | {r.get('postings_new', 0)} "
+                  f"| {r.get('postings_updated', 0)} |"
+              )
+          PYEOF

@@ -451,15 +451,23 @@ async def trigger_ingest(
     }
 
 
+# Cohorts the Apify path may sweep. ``curated`` = the daily cron's set;
+# ``warm_path`` = alumni-network employers (feat/warm-path-ingest), swept
+# WEEKLY by warm-path-ingest.yml. Disjoint by construction — see
+# list_fantastic_targets.
+_FANTASTIC_SOURCES = {"curated", "warm_path"}
+
+
 @app.post("/admin/ingest/fantastic", tags=["admin"])
-async def trigger_fantastic_ingest(db: DbSession) -> dict[str, Any]:
-    """Ingest the curated Workday/iCIMS employers via the Fantastic.jobs Apify
-    actor (feat/fantastic-jobs-ingest).
+async def trigger_fantastic_ingest(db: DbSession, source: str = "curated") -> dict[str, Any]:
+    """Ingest ONE cohort of Workday/iCIMS employers via the Fantastic.jobs
+    Apify actor (feat/fantastic-jobs-ingest + feat/warm-path-ingest).
 
     Those boards block Railway's datacenter egress IP, so the free Workday/iCIMS
     adapters fetch 0 — Apify's infra crawls them instead. The PM/PO title filter
-    is applied at the API call (a few jobs/employer = pennies/day). Scoped to
-    curated workday/icims rows ONLY; greenhouse/lever/ashby stay on the free
+    is applied at the API call (a few jobs/employer = pennies/day).
+    ``?source=curated`` (default) is the daily cron's set; ``?source=warm_path``
+    is the weekly alumni-network sweep. greenhouse/lever/ashby stay on the free
     adapters. Each employer is its own ingest_run; returns per-employer counts.
 
     503 when ``APIFY_API_TOKEN`` is unset (server-side only — Railway env +
@@ -467,13 +475,50 @@ async def trigger_fantastic_ingest(db: DbSession) -> dict[str, Any]:
     """
     from job_assist.services.fantastic_ingest import ingest_curated_via_fantastic
 
+    if source not in _FANTASTIC_SOURCES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"source must be one of {sorted(_FANTASTIC_SOURCES)}",
+        )
     token = settings.apify_api_token
     if not token:
         raise HTTPException(
             status_code=503,
             detail="APIFY_API_TOKEN is not configured (server-side Apify credential).",
         )
-    return await ingest_curated_via_fantastic(db, token)
+    return await ingest_curated_via_fantastic(db, token, source=source)
+
+
+@app.get("/admin/ingest/fantastic-plan", tags=["admin"])
+async def get_fantastic_plan(db: DbSession, source: str = "curated") -> dict[str, Any]:
+    """List the employers ONE Apify cohort would sweep — the fantastic-path
+    analog of ``GET /admin/ingest/plan`` (which covers only the free adapters).
+
+    Read-only; used to verify the warm-path cohort after seeding without
+    spending an Apify call.
+    """
+    from job_assist.services.fantastic_ingest import apify_domain_for, list_fantastic_targets
+
+    if source not in _FANTASTIC_SOURCES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"source must be one of {sorted(_FANTASTIC_SOURCES)}",
+        )
+    targets = await list_fantastic_targets(db, source=source)
+    return {
+        "source": source,
+        "count": len(targets),
+        "companies": [
+            {
+                "name": tc.name,
+                "ats": tc.ats.value if hasattr(tc.ats, "value") else str(tc.ats),
+                "domain": tc.domain,
+                "apify_domain": apify_domain_for(tc),
+                "last_swept_at": tc.last_swept_at.isoformat() if tc.last_swept_at else None,
+            }
+            for tc in targets
+        ],
+    }
 
 
 # Single-segment path (``fantastic-probe``, not ``fantastic/probe``) so it
@@ -783,7 +828,7 @@ async def seed_target_companies(
     }
 
 
-_CRAWL_CONFIG_SOURCES = {"curated", "broad", "deactivated", "applied"}
+_CRAWL_CONFIG_SOURCES = {"curated", "broad", "deactivated", "applied", "warm_path"}
 
 
 def _validate_crawl_config_row(row: dict[str, Any]) -> None:
@@ -3896,6 +3941,13 @@ _HEALTH_LLM_HARD_ERRORS = 25
 # secondary-feed hiccup shouldn't red the whole dot.
 _HEALTH_GMAIL_STALE_HOURS = 13
 
+# Warm-path sweep health (feat/warm-path-ingest). The warm-path cohort is swept
+# WEEKLY (warm-path-ingest.yml, Sundays) — so its freshness window is ~9 days
+# (7-day cadence + grace), NOT the 26h ingest window. Deliberately its own
+# check: the broad_fresh logic must never false-alarm on a weekly cadence, and
+# the check passes trivially when no warm_path companies exist (pre-seeding).
+_HEALTH_WARM_PATH_STALE_DAYS = 9
+
 
 @app.get("/admin/ingest/health", tags=["admin"])
 async def ingest_health(db: DbSession) -> dict[str, Any]:
@@ -3922,7 +3974,13 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
 
     from sqlalchemy import func, select
 
-    from job_assist.db.models import DiscoveredHandle, GmailSweepRun, IngestRun, JobPosting
+    from job_assist.db.models import (
+        DiscoveredHandle,
+        GmailSweepRun,
+        IngestRun,
+        JobPosting,
+        TargetCompany,
+    )
 
     now = datetime.now(tz=UTC)
     recent_cutoff = now - timedelta(hours=_HEALTH_RECENT_HOURS)
@@ -4014,6 +4072,23 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
     gmail_fresh = gmail_last_sweep_at is not None and gmail_last_sweep_at >= gmail_stale_cutoff
     gmail_last_failed = gmail_last_status == "failed"
 
+    # ── Warm-path sweep health (feat/warm-path-ingest) ───────────────────
+    # Weekly cadence → ~9-day freshness window over the cohort's last_swept_at.
+    # Trivially healthy when the cohort is empty (feature unseeded/retired).
+    warm_path_cutoff = now - timedelta(days=_HEALTH_WARM_PATH_STALE_DAYS)
+    warm_path_count, warm_path_last_swept = (
+        await db.execute(
+            select(
+                func.count(),
+                func.max(TargetCompany.last_swept_at),
+            ).where(TargetCompany.source == "warm_path")
+        )
+    ).one()
+    warm_path_count = int(warm_path_count or 0)
+    warm_path_fresh = warm_path_count == 0 or (
+        warm_path_last_swept is not None and warm_path_last_swept >= warm_path_cutoff
+    )
+
     checks = {
         "recent_success": last_success is not None and last_success >= recent_cutoff,
         "no_hard_failures": failed_recent == 0,
@@ -4027,6 +4102,9 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
         # the last one didn't fail. Soft (yellow) — a secondary feed stalling
         # shouldn't red the dot.
         "gmail_healthy": gmail_fresh and not gmail_last_failed,
+        # feat/warm-path-ingest: the weekly alumni-cohort sweep ran within
+        # ~9 days (trivially true while the cohort is empty). Soft (yellow).
+        "warm_path_fresh": warm_path_fresh,
     }
     messages = {
         "recent_success": f"no successful ingest_run in the last {_HEALTH_RECENT_HOURS}h "
@@ -4049,6 +4127,10 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
             if not gmail_fresh
             else "the last Gmail sweep failed"
         ),
+        "warm_path_fresh": (
+            f"warm-path sweep has not run in the last {_HEALTH_WARM_PATH_STALE_DAYS} days "
+            f"({warm_path_count} warm-path companies; last swept: {warm_path_last_swept})"
+        ),
     }
     problems = [messages[name] for name, passed in checks.items() if not passed]
 
@@ -4067,6 +4149,8 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
         or not checks["llm_healthy"]
         # feat/gmail-health-check: a stalled / last-failed Gmail sweep is soft.
         or not checks["gmail_healthy"]
+        # feat/warm-path-ingest: a stalled weekly warm-path sweep is soft.
+        or not checks["warm_path_fresh"]
     )
     severity = "down" if hard_down else ("degraded" if soft_degraded else "ok")
 
@@ -4095,6 +4179,12 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
             "gmail_last_sweep_status": gmail_last_status,
             "gmail_last_sweep_runtime_seconds": gmail_runtime_seconds,
             "gmail_stale_hours": _HEALTH_GMAIL_STALE_HOURS,
+            # feat/warm-path-ingest: weekly alumni-cohort sweep freshness.
+            "warm_path_companies": warm_path_count,
+            "warm_path_last_swept_at": (
+                warm_path_last_swept.isoformat() if warm_path_last_swept else None
+            ),
+            "warm_path_stale_days": _HEALTH_WARM_PATH_STALE_DAYS,
         },
     }
 

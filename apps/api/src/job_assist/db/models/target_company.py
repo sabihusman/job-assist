@@ -47,11 +47,15 @@ class TargetCompany(Base):
     # company — so a matched-company-with-NULL-tier renders identically.
     tier: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Provenance discriminator (feat/applied-company-tracking):
-    #   curated — hand-seeded target with a pedigree tier (daily-cron source).
-    #   broad   — thin shell auto-created by broad-ingest (tier NULL, handle SET).
-    #   applied — tracking-only row from a Gmail application_confirmation
-    #             (tier NULL, ats_handle NULL); NEVER ingested. The ingest plan
-    #             excludes these explicitly (belt-and-suspenders on tier NULL).
+    #   curated   — hand-seeded target with a pedigree tier (daily-cron source).
+    #   broad     — thin shell auto-created by broad-ingest (tier NULL, handle SET).
+    #   applied   — tracking-only row from a Gmail application_confirmation
+    #               (tier NULL, ats_handle NULL); NEVER ingested. The ingest plan
+    #               excludes these explicitly (belt-and-suspenders on tier NULL).
+    #   warm_path — alumni-network employer (feat/warm-path-ingest): tier NULL,
+    #               swept WEEKLY via the Apify path (warm-path-ingest.yml), never
+    #               by the daily curated cron.
+    #   deactivated — operator-paused; excluded from every sweep.
     source: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=text("'curated'")
     )
@@ -72,6 +76,12 @@ class TargetCompany(Base):
     enrichment_attempt_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
+    # feat/warm-path-ingest: when the Apify (fantastic) path last swept this
+    # company. Stamped per employer on every fantastic sweep regardless of
+    # cohort; the health monitor's ``warm_path_fresh`` check reads
+    # MAX(last_swept_at) over source='warm_path' rows against a ~9-day window
+    # (weekly cadence + grace) — deliberately NOT the 26h broad_fresh logic.
+    last_swept_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

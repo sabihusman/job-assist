@@ -31,6 +31,9 @@ export type IngestHealth = {
     // feat/gmail-health-check: a Gmail sweep started within the last 13h AND the
     // last one didn't fail.
     gmail_healthy: boolean;
+    // feat/warm-path-ingest: the weekly alumni-cohort sweep ran within ~9 days
+    // (trivially true while no warm-path companies exist).
+    warm_path_fresh: boolean;
   };
   metrics: {
     last_success_at: string | null;
@@ -52,6 +55,10 @@ export type IngestHealth = {
     gmail_last_sweep_status: string | null;
     gmail_last_sweep_runtime_seconds: number | null;
     gmail_stale_hours: number;
+    // feat/warm-path-ingest: weekly alumni-cohort sweep freshness.
+    warm_path_companies: number;
+    warm_path_last_swept_at: string | null;
+    warm_path_stale_days: number;
   };
 };
 
