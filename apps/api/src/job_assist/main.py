@@ -296,6 +296,12 @@ async def get_ingest_plan(db: DbSession) -> list[dict[str, str]]:
         this clause would pull the broad shells into the unfiltered
         daily cron, flooding the DB with the non-PM long tail this
         whole effort exists to avoid.
+      * ``source = 'curated'`` — a POSITIVE provenance filter
+        (fix/plan-source-filter). Rows reactivated into other cohorts can
+        keep a leftover tier+handle: Athene (``warm_path``) leaked into this
+        plan as a guaranteed-zero free-adapter fetch — its board blocks our
+        egress IP, which is exactly why it lives on the weekly Apify sweep.
+        ``deactivated`` rows with leftover tier+handle had the same hole.
       * No active ``closed_channel`` row exists for the target_company
         (``unsealed_at IS NULL`` denotes "currently sealed")
 
@@ -328,10 +334,15 @@ async def get_ingest_plan(db: DbSession) -> list[dict[str, str]]:
             .where(TargetCompany.ats_handle.isnot(None))
             # Curated only — exclude broad-ingest shells (tier IS NULL).
             .where(TargetCompany.tier.isnot(None))
-            # feat/applied-company-tracking: never ingest tracking-only rows.
-            # Redundant with the tier/handle guards above (applied rows have
-            # both NULL), but explicit so the intent survives future edits.
-            .where(TargetCompany.source != "applied")
+            # fix/plan-source-filter: POSITIVE source filter. The old
+            # ``source != 'applied'`` let any non-curated row with a leftover
+            # tier+handle ride the daily plan: Athene (reactivated as
+            # ``warm_path``, kept tier=2 + handle from its carrier days)
+            # leaked in as a guaranteed-zero free-adapter fetch — its board
+            # blocks our egress IP, which is exactly why it lives on the
+            # weekly Apify sweep. Same latent hole for ``deactivated`` rows.
+            # The daily plan's intent is CURATED — say so.
+            .where(TargetCompany.source == "curated")
             .where(~active_closed)
             .order_by(TargetCompany.tier.asc(), TargetCompany.name.asc())
         )

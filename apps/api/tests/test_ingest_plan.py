@@ -198,3 +198,25 @@ async def test_excludes_broad_ingest_shells_tier_null(db_session: Any) -> None:
 async def test_empty_db_returns_empty_list(db_session: Any) -> None:
     plan = await _call_plan(db_session)
     assert plan == []
+
+
+@_NEEDS_DB
+async def test_excludes_non_curated_sources_with_leftover_tier_handle(db_session: Any) -> None:
+    """fix/plan-source-filter: a row reactivated into another cohort can keep
+    its old tier+handle — Athene (source='warm_path', tier=2, handle set)
+    leaked into the daily plan as a guaranteed-zero free-adapter fetch. The
+    plan now filters POSITIVELY on source='curated', closing the same hole
+    for 'deactivated' rows too."""
+    curated = _tc("CuratedCo2", ats="greenhouse", handle="curatedco2", tier=1)
+    warm = _tc("Athene", ats="workday", handle="athene", tier=2)
+    warm.source = "warm_path"
+    deactivated = _tc("PausedCo", ats="greenhouse", handle="pausedco", tier=2)
+    deactivated.source = "deactivated"
+    db_session.add_all([curated, warm, deactivated])
+    await db_session.commit()
+
+    plan = await _call_plan(db_session)
+    handles = {item["handle"] for item in plan}
+    assert "curatedco2" in handles
+    assert "athene" not in handles, "warm_path rows must never ride the daily plan"
+    assert "pausedco" not in handles, "deactivated rows must never ride the daily plan"
