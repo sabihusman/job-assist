@@ -115,8 +115,10 @@ export function TriageCard({
           </div>
         )}
 
-        {/* SCORE BLOCK — the dominant left rail (score-forward restyle). */}
-        <ScoreBlock score={posting.score} size="md" className="self-stretch" />
+        {/* SCORE BLOCK — the dominant left rail (score-forward restyle).
+          shrink-0: the rail is fixed-width; any horizontal squeeze must hit
+          the min-w-0 title (which truncates) — never the rail. */}
+        <ScoreBlock score={posting.score} size="md" className="shrink-0 self-stretch" />
 
         {/* Card body — clicking selects, but the action column is excluded
           via stopPropagation in its own buttons. */}
@@ -171,9 +173,15 @@ export function TriageCard({
         </button>
 
         {/* Action column — hover-reveals (kept in the DOM + focusable so
-          keyboard and tests still reach it). */}
+          keyboard and tests still reach it). hidden below md
+          (fix/mobile-card-title): opacity-0 removes paint but NOT layout —
+          on a ~400px viewport these four buttons (~240px) plus the 72px
+          score rail starved the min-w-0 title down to a single clipped
+          character. They were also invisible-but-tappable there (no hover
+          on touch ⇒ never revealed ⇒ accidental-Pass hazard). Mobile
+          actions live in the detail panel; md+ behavior unchanged. */}
         <div
-          className="flex items-start gap-1.5 px-3 py-3 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100"
+          className="hidden items-start gap-1.5 px-3 py-3 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 md:flex"
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
           role="toolbar"
