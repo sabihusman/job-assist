@@ -48,11 +48,11 @@ def test_classifier_version_is_llm_era() -> None:
     assert "gemini" in CLASSIFIER_VERSION.lower()
 
 
-def test_classifier_version_is_v4_profile_aware() -> None:
-    """v4 injects the operator's looking_for_text/role_keywords as
-    disambiguation context; tracking which rows were classified under it is
-    the whole point of the version bump."""
-    assert "v4" in CLASSIFIER_VERSION
+def test_classifier_version_is_v5_strategy_aware() -> None:
+    """v5 adds the strategy_ops family (feat/strategy-spine); tracking which
+    rows were classified under it is what lets the reclassify sweep revisit
+    pre-v5 rows so strategy roles self-heal out of other/program_management."""
+    assert "v5" in CLASSIFIER_VERSION
 
 
 # ── _SYSTEM_PROMPT precision criteria (regression guard, Bestiary 5.21) ───────
@@ -386,3 +386,35 @@ def test_valid_seniority_levels_match_python_enum() -> None:
 
     db_values = {e.value for e in SeniorityLevel}
     assert db_values == _VALID_SENIORITY_LEVELS
+
+
+# ── feat/strategy-spine: strategy_ops bucket guards ───────────────────────────
+
+
+def test_prompt_has_strategy_test_discriminator() -> None:
+    """The strategy bucket must carry its own discriminator (business direction
+    vs execution) so bare 'Operations' titles don't ride into strategy_ops."""
+    assert "THE STRATEGY TEST" in _SYSTEM_PROMPT
+    assert "strategy_ops" in _SYSTEM_PROMPT
+
+
+@pytest.mark.parametrize(
+    "anchor",
+    [
+        "Strategy & Operations Manager",
+        "Corporate Strategy",
+        "Chief of Staff",
+        "BizOps",
+        "IT Project Manager",
+        "Plant Operations Manager",
+    ],
+)
+def test_prompt_lists_strategy_boundary_anchors(anchor: str) -> None:
+    """Both sides of the strategy boundary appear as explicit anchors."""
+    assert anchor in _SYSTEM_PROMPT
+
+
+def test_valid_role_families_includes_strategy_ops() -> None:
+    from job_assist.services.classifier import _VALID_ROLE_FAMILIES
+
+    assert "strategy_ops" in _VALID_ROLE_FAMILIES

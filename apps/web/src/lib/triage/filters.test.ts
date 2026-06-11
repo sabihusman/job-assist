@@ -134,6 +134,21 @@ describe('encodeFilters', () => {
 });
 
 describe('resolveRoleFamilies', () => {
+  // feat/strategy-spine: the no-leak guarantee. The default PM queue
+  // (pm_only) must never include strategy_ops; the Strategy chip is an
+  // explicit selection that overrides the gate.
+  test('pm_only default EXCLUDES strategy_ops (no leak into the PM queue)', () => {
+    const resolved = resolveRoleFamilies({ role_family: [], pm_only: true });
+    expect(resolved).not.toContain('strategy_ops');
+    expect(resolved).toEqual(['product_management', 'product_owner']);
+  });
+
+  test('explicit strategy_ops chip resolves to the strategy view', () => {
+    expect(resolveRoleFamilies({ role_family: ['strategy_ops'], pm_only: true })).toEqual([
+      'strategy_ops',
+    ]);
+  });
+
   test('default-on pm_only with no chips → PM + PO', () => {
     expect(resolveRoleFamilies({ role_family: [], pm_only: true })).toEqual([
       'product_management',

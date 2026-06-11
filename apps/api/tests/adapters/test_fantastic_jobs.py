@@ -180,3 +180,28 @@ async def test_fetch_postings_without_token_raises() -> None:
     async with adapter:
         with pytest.raises(RuntimeError, match="APIFY_API_TOKEN"):
             await adapter.fetch_postings("athene")
+
+
+# ── feat/strategy-spine: per-track actor input ────────────────────────────────
+
+
+def test_build_actor_input_strategy_track_widens_search() -> None:
+    body = build_actor_input(organization="John Deere", domain="deere.com", track="strategy")
+    # PM/PO terms still present; strategy family added.
+    for term in ["Product Manager", "Product Owner", "Corporate Strategy", "Chief of Staff"]:
+        assert term in body["titleSearch"]
+    # The strategy-safe exclusion list — none of the bare seniority tokens
+    # that would tsquery-kill "Chief of Staff" / "Strategy Lead".
+    for tok in ["Chief", "Staff", "Lead", "Director", "Head", "VP", "Principal", "Group"]:
+        assert tok not in body["titleExclusionSearch"]
+    # PM seniority + wrong-family exclusions survive.
+    assert "Senior Product Manager" in body["titleExclusionSearch"]
+    assert "Program Manager" in body["titleExclusionSearch"]
+
+
+def test_build_actor_input_default_track_unchanged() -> None:
+    """The curated (pm) track is byte-identical to the pre-strategy filter."""
+    body = build_actor_input(organization="Athene", domain="athene.com")
+    assert body["titleSearch"] == ["Product Manager", "Product Owner"]
+    assert "Chief" in body["titleExclusionSearch"]  # the locked PM band exclusions
+    assert "Corporate Strategy" not in body["titleSearch"]

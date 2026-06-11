@@ -93,6 +93,10 @@ async def ingest_curated_via_fantastic(
     service = IngestionService()
     results: list[dict[str, Any]] = []
 
+    # feat/strategy-spine: warm-path (off-domain) employers ALSO keep the
+    # strategy title family; the curated cohort stays on the locked PM/PO band.
+    track = "strategy" if source == "warm_path" else "pm"
+
     for tc in targets:
         ats_value = tc.ats.value if hasattr(tc.ats, "value") else str(tc.ats)
         adapter = FantasticJobsAdapter(
@@ -101,6 +105,7 @@ async def ingest_curated_via_fantastic(
             ats=ats_value,
             token=token,
             limit=limit,
+            track=track,
         )
         async with adapter:
             # FantasticJobsAdapter satisfies Adapter structurally; the only

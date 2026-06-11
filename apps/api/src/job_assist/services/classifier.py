@@ -62,13 +62,25 @@ logger = logging.getLogger(__name__)
 
 # ── Version / model constants ─────────────────────────────────────────────────
 
-CLASSIFIER_VERSION = "gemini-flash-lite-v4"
+# v5 (feat/strategy-spine): adds the ``strategy_ops`` family — Strategy & Ops /
+# Corporate Strategy / BizOps / Chief of Staff at warm-path employers. Bumping
+# the version makes the reclassify sweep revisit existing rows, so strategy
+# roles previously bucketed other/program_management self-heal into the new
+# family.
+CLASSIFIER_VERSION = "gemini-flash-lite-v5"
 _MODEL_NAME = "gemini-2.5-flash-lite"
 
 # Valid enum values — kept in sync with db/enums.py. The defensive parser
 # below rejects any value not in these sets and falls back to the safe default.
 _VALID_ROLE_FAMILIES = frozenset(
-    {"product_management", "product_owner", "product_marketing", "program_management", "other"}
+    {
+        "product_management",
+        "product_owner",
+        "product_marketing",
+        "program_management",
+        "strategy_ops",
+        "other",
+    }
 )
 _VALID_SENIORITY_LEVELS = frozenset(
     {"intern", "apm", "pm", "senior_pm", "lead_pm", "principal_pm", "unknown"}
@@ -89,7 +101,7 @@ bucket — a precise ``other`` is far better than a wrong ``product_management``
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DIMENSION 1 — role_family
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Choose one of these FIVE values. Do not invent a sixth.
+Choose one of these SIX values. Do not invent a seventh.
 
 THE DISCRIMINATOR: does the role OWN a product — its strategy, roadmap,
 discovery, and prioritization for a product or feature area — and decide
@@ -117,7 +129,21 @@ even when their title contains the word "Product".
                         "... Operations" or ops-manager roles whose JD is
                         about process + coordination rather than product
                         ownership.
-  other               — anything that is not one of the four above. This is
+  strategy_ops        — corporate / business STRATEGY and strategy-execution
+                        roles: shapes business- or org-level strategy, runs
+                        internal strategy projects, or operates the executive
+                        cadence. Includes "Strategy & Operations Manager",
+                        "Corporate Strategy", "Business Strategy Manager",
+                        "Business Operations" / "BizOps" (strategy-flavored),
+                        in-house "Strategy Consultant", "Chief of Staff".
+                        THE STRATEGY TEST: the role advises or decides on
+                        BUSINESS direction (markets, growth initiatives,
+                        operating model) — NOT a product roadmap (that is
+                        product_management) and NOT day-to-day operations
+                        execution or process coordination (that is
+                        program_management). A bare "Operations" title with
+                        no strategy scope is NOT strategy_ops.
+  other               — anything that is not one of the five above. This is
                         the CORRECT answer for the majority of non-PM roles,
                         not a last resort.
 
@@ -141,6 +167,18 @@ NEGATIVE CRITERIA — these are NOT product_management. Classify as shown:
 A title containing "Product" (Product Designer, Product Operations, Product
 Engineer) is NOT automatically product_management — apply the discriminator.
 
+NEGATIVE CRITERIA for strategy_ops — these are NOT strategy_ops:
+  • Generic operations EXECUTION roles — "Operations Manager", "Plant
+    Operations Manager", "Warehouse / Clinical / Network Operations" — have
+    no business-strategy scope → program_management (or other for site /
+    facilities execution), per the rules above.
+  • "IT Project Manager", construction / facilities project managers →
+    other (delivery coordination, not business strategy).
+  • "Sales Operations" / "Revenue Operations" ANALYST roles about CRM and
+    reporting hygiene → other.
+A title containing "Operations" is NOT automatically strategy_ops — apply
+THE STRATEGY TEST (business direction vs execution).
+
 FEW-SHOT EXAMPLES (role_family):
   POSITIVE:
   "Senior PMM, Growth" + JD about messaging → product_marketing
@@ -148,7 +186,16 @@ FEW-SHOT EXAMPLES (role_family):
   "Growth PM" + JD about A/B tests and funnel metrics → product_management
   "AI Product Strategist" + JD about owning the ML platform roadmap → product_management
   "Product Owner" + JD about sprint backlog → product_owner
-  NEGATIVE (do NOT mislabel these as product_management):
+  "Strategy & Operations Manager" + JD about growth initiatives → strategy_ops
+  "Manager, Corporate Strategy" + JD about market analysis for the exec team → strategy_ops
+  "Business Operations Lead (BizOps)" + JD about cross-functional strategy projects → strategy_ops
+  "Chief of Staff to the COO" + JD about operating cadence + strategic initiatives → strategy_ops
+  "Strategy Consultant, Internal Strategy Group" + JD about corporate growth strategy → strategy_ops
+  NEGATIVE (do NOT mislabel these as product_management OR strategy_ops):
+  "Operations Manager" + JD about day-to-day site operations → program_management
+  "Plant Operations Manager" + JD about manufacturing lines / safety → other
+  "IT Project Manager" + JD about infrastructure delivery timelines → other
+  "Sales Operations Analyst" + JD about CRM hygiene / reporting → other
   "Senior Product Designer" + JD about design systems / Figma → other
   "Design Engineer, Brand" + JD about building UI → other
   "Software Engineer, AI Workflows" + JD about writing code → other

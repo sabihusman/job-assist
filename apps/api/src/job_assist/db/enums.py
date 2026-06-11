@@ -54,6 +54,11 @@ class RoleFamily(enum.StrEnum):
     product_owner = "product_owner"
     product_marketing = "product_marketing"
     program_management = "program_management"
+    # feat/strategy-spine: the MBA-grad-suited strategy family — Strategy & Ops,
+    # Corporate Strategy, BizOps, Chief of Staff. Kept OUT of the PM queue
+    # (pm_only) and OUT of the scorer's PREFERRED_FAMILIES (cap-40 stands until
+    # the full strategy scoring track lands); surfaced via its own triage view.
+    strategy_ops = "strategy_ops"
     other = "other"
 
 
