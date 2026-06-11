@@ -43,6 +43,9 @@ export type ContactsListResponse = {
 export type ContactsFilters = {
   source_type: ContactSourceType[];
   search: string;
+  // feat/warm-path-badge: company filter for the badge click-through
+  // (/contacts?company=…) — substring-matches current_employer server-side.
+  employer: string;
   include_archived: boolean;
   limit: number;
   offset: number;
@@ -51,6 +54,7 @@ export type ContactsFilters = {
 export const DEFAULT_CONTACTS_FILTERS: ContactsFilters = {
   source_type: [],
   search: '',
+  employer: '',
   include_archived: false,
   limit: 50,
   offset: 0,

@@ -202,8 +202,10 @@ function DetailContentBody({
             </div>
             {/* feat/company-app-awareness: company-level "N active apps" /
                 "N rejections here" from the Gmail outcome history, matched on
-                company name. */}
-            <RepeatSignalBadges companyName={company.name} signals={signals} />
+                company name. feat/warm-path-badge: + "N alumni here", clickable
+                here (the hero is not inside a button, unlike the list cards) —
+                lands on /contacts filtered to this company. */}
+            <RepeatSignalBadges companyName={company.name} signals={signals} linkToContacts />
           </div>
         </div>
 

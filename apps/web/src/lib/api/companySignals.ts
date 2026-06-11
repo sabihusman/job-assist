@@ -15,6 +15,9 @@ import { api } from '@/lib/api/client';
 export type CompanySignal = {
   rejections: number;
   active_apps: number;
+  // feat/warm-path-badge: non-archived contacts whose current_employer is this
+  // company — the operator's warm path in. Optional so older fixtures stay valid.
+  contact_count?: number;
   display_name?: string;
 };
 export type RepeatSignals = Record<string, CompanySignal>;
