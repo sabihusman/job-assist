@@ -186,9 +186,7 @@ async def test_fetch_postings_without_token_raises() -> None:
 
 
 def test_build_actor_input_strategy_track_widens_search() -> None:
-    body = build_actor_input(
-        organization="John Deere", domain="deere.com", track="strategy"
-    )
+    body = build_actor_input(organization="John Deere", domain="deere.com", track="strategy")
     # PM/PO terms still present; strategy family added.
     for term in ["Product Manager", "Product Owner", "Corporate Strategy", "Chief of Staff"]:
         assert term in body["titleSearch"]
