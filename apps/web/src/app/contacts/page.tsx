@@ -63,6 +63,11 @@ function ContactsPageInner() {
       .filter((s): s is ContactSourceType => VALID_SOURCES.has(s as ContactSourceType));
   }, [searchParams]);
 
+  // feat/warm-path-badge: ?company=<name> from the "N alumni here" badge
+  // click-through. A company name is a public entity (not PII), so it follows
+  // source_type into the URL — shareable and refresh-stable.
+  const companyFromUrl = searchParams.get('company')?.trim() ?? '';
+
   // The non-PII fields that DON'T go to the URL stay in component
   // state. Default include_archived=false, default search="".
   const [stateBits, setStateBits] = useState({
@@ -75,8 +80,9 @@ function ContactsPageInner() {
       ...DEFAULT_CONTACTS_FILTERS,
       ...stateBits,
       source_type: sourceFromUrl,
+      employer: companyFromUrl,
     }),
-    [stateBits, sourceFromUrl],
+    [stateBits, sourceFromUrl, companyFromUrl],
   );
 
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
@@ -106,8 +112,36 @@ function ContactsPageInner() {
     router.replace(qs ? `/contacts?${qs}` : '/contacts', { scroll: false });
   };
 
+  const clearCompany = () => {
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete('company');
+    const qs = next.toString();
+    router.replace(qs ? `/contacts?${qs}` : '/contacts', { scroll: false });
+  };
+
   return (
     <div className="flex min-w-0 flex-col gap-4 px-6 py-4">
+      {/* feat/warm-path-badge: scoped-to-one-company pill (same pattern as the
+          Triage company-filter pill). Clicking × strips ?company= and lands
+          back on the full contacts list. */}
+      {companyFromUrl && (
+        <div className="flex items-center gap-2">
+          <span
+            data-testid="contacts-company-pill"
+            className="inline-flex h-6 items-center gap-2 rounded-full border border-border bg-accent/40 px-2 font-mono text-[11px] text-foreground"
+          >
+            Company: {companyFromUrl}
+            <button
+              type="button"
+              aria-label="Clear company filter"
+              onClick={clearCompany}
+              className="inline-flex h-4 w-4 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              ×
+            </button>
+          </span>
+        </div>
+      )}
       {/* Filter row */}
       <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
         <FilterGroup label="SOURCE">

@@ -32,7 +32,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from job_assist.db.models import OutcomeEvent, TargetCompany
+from job_assist.db.models import Contact, OutcomeEvent, TargetCompany
 from job_assist.services.company_name_match import (
     ambiguous_keys,
     company_from_subject,
@@ -71,7 +71,8 @@ async def compute_repeat_signals(session: AsyncSession) -> dict[str, dict[str, A
     """Return per-company application-awareness counts, keyed by NORMALIZED
     company name::
 
-        {norm_name: {"rejections": r, "active_apps": a, "display_name": str}}
+        {norm_name: {"rejections": r, "active_apps": a, "contact_count": c,
+                     "display_name": str}}
 
     * ``rejections`` — count of rejection ``outcome_event`` rows for the company.
     * ``active_apps`` — count of distinct still-alive applications. An
@@ -79,10 +80,16 @@ async def compute_repeat_signals(session: AsyncSession) -> dict[str, dict[str, A
       stand alone, matching the Pipeline's bucketing); its stage is its LATEST
       event's stage (latest-wins, so a rejection after a confirmation flips the
       thread out of "alive").
+    * ``contact_count`` — feat/warm-path-badge: how many NON-ARCHIVED contacts
+      list this company as ``current_employer`` (normalized the same way). The
+      warm-path signal: alumni who can intro/refer the operator there.
     * ``display_name`` — the most common human-readable name seen for the key.
 
     Companies whose normalized key is ambiguous (a proper token-subset of another
-    company's key) are omitted entirely.
+    company's key) are omitted entirely — the guard runs over the UNION of
+    outcome-derived and contact-derived keys, so a contact at "John Hancock" and
+    outcomes at "Manulife John Hancock" suppress each other the same as two
+    outcome sources would.
     """
     rows = (
         await session.execute(
@@ -134,9 +141,30 @@ async def compute_repeat_signals(session: AsyncSession) -> dict[str, dict[str, A
         if otype in _ALIVE_TYPES:
             active[key] += 1
 
-    candidate_keys = set(rejections) | set(active)
+    # ── Warm-path contacts (feat/warm-path-badge) ────────────────────────
+    # Non-archived contacts grouped by normalized current_employer. Freeform
+    # operator/alumni-directory text, so it goes through the same normalizer
+    # as the outcome names ("John Deere" / "john deere " collapse).
+    contact_rows = (
+        await session.execute(
+            select(Contact.current_employer)
+            .where(Contact.archived_at.is_(None))
+            .where(Contact.current_employer.is_not(None))
+        )
+    ).scalars()
+    contacts: Counter[str] = Counter()
+    for employer in contact_rows:
+        raw = (employer or "").strip()
+        key = normalize_company_name(raw)
+        if not key:
+            continue
+        contacts[key] += 1
+        display_names.setdefault(key, Counter())[raw] += 1
+
+    candidate_keys = set(rejections) | set(active) | set(contacts)
     # No-false-badge guard: drop any key whose tokens are a subset/superset of
-    # another's — we can't safely attribute the shorter name.
+    # another's — we can't safely attribute the shorter name. Runs over the
+    # union, so contact-derived and outcome-derived names guard each other.
     suppressed = ambiguous_keys(candidate_keys)
 
     signals: dict[str, dict[str, Any]] = {}
@@ -145,11 +173,17 @@ async def compute_repeat_signals(session: AsyncSession) -> dict[str, dict[str, A
             continue
         r = rejections.get(key, 0)
         a = active.get(key, 0)
-        if r < 1 and a < 1:
+        c = contacts.get(key, 0)
+        if r < 1 and a < 1 and c < 1:
             continue
         names = display_names.get(key)
         display = names.most_common(1)[0][0] if names else key
-        signals[key] = {"rejections": r, "active_apps": a, "display_name": display}
+        signals[key] = {
+            "rejections": r,
+            "active_apps": a,
+            "contact_count": c,
+            "display_name": display,
+        }
     return signals
 
 

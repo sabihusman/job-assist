@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from job_assist.db.models import OutcomeEvent, TargetCompany
+from job_assist.db.models import Contact, OutcomeEvent, TargetCompany
 from job_assist.services.company_signals import compute_repeat_signals
 
 _NEEDS_DB = pytest.mark.skipif(
@@ -28,6 +28,19 @@ _BASE = datetime(2026, 1, 1, tzinfo=UTC)
 
 def _company(name: str) -> TargetCompany:
     return TargetCompany(name=name, ats="unknown")
+
+
+def _contact(employer: str | None, *, archived: bool = False) -> Contact:
+    """Minimal valid contact (reachability CHECK needs email or LinkedIn)."""
+    suffix = uuid.uuid4().hex[:8]
+    return Contact(
+        first_name="Test",
+        last_name=f"Alum{suffix}",
+        email_primary=f"alum-{suffix}@example.com",
+        current_employer=employer,
+        source_type="tippie_alumni",
+        archived_at=_BASE if archived else None,
+    )
 
 
 def _outcome(
@@ -100,6 +113,7 @@ async def test_single_count_is_returned(db_session: Any) -> None:
     assert signals["onceco"] == {
         "rejections": 1,
         "active_apps": 0,
+        "contact_count": 0,
         "display_name": "OnceCo",
     }
 
@@ -204,6 +218,102 @@ async def test_generic_subject_unlinked_not_counted(db_session: Any) -> None:
             subject="Update on your application",
         )
     )
+    await db_session.commit()
+
+    signals = await compute_repeat_signals(db_session)
+    assert signals == {}
+
+
+# ── feat/warm-path-badge ──────────────────────────────────────────────────────
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_contact_counts_collapse_by_normalized_name(db_session: Any) -> None:
+    """Contacts at 'John Deere' / ' john deere ' / 'John Deere Inc.' collapse to
+    one normalized key with contact_count=3; a contact-ONLY company is emitted
+    even with zero outcomes."""
+    db_session.add_all(
+        [
+            _contact("John Deere"),
+            _contact(" john deere "),
+            _contact("John Deere Inc."),
+        ]
+    )
+    await db_session.commit()
+
+    signals = await compute_repeat_signals(db_session)
+    sig = signals["john deere"]
+    assert sig["contact_count"] == 3
+    assert sig["rejections"] == 0
+    assert sig["active_apps"] == 0
+    assert sig["display_name"] == "John Deere"
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_archived_and_employerless_contacts_excluded(db_session: Any) -> None:
+    db_session.add_all(
+        [
+            _contact("Collins Aerospace"),
+            _contact("Collins Aerospace", archived=True),  # archived → not counted
+            _contact(None),  # no employer → can't attribute
+            _contact("   "),  # whitespace employer → can't attribute
+        ]
+    )
+    await db_session.commit()
+
+    signals = await compute_repeat_signals(db_session)
+    assert signals["collins aerospace"]["contact_count"] == 1
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_contacts_merge_with_outcome_counts(db_session: Any) -> None:
+    """A company with BOTH outcome history and contacts carries all three counts
+    on one entry (same normalized key)."""
+    co = _company("Athene")
+    db_session.add(co)
+    await db_session.flush()
+    db_session.add(_outcome(company_id=co.id, outcome_type="application_confirmation", thread="a"))
+    db_session.add(_contact("Athene"))
+    db_session.add(_contact("ATHENE"))
+    await db_session.commit()
+
+    signals = await compute_repeat_signals(db_session)
+    assert signals["athene"] == {
+        "rejections": 0,
+        "active_apps": 1,
+        "contact_count": 2,
+        "display_name": "Athene",
+    }
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_ambiguity_guard_spans_contact_and_outcome_names(db_session: Any) -> None:
+    """No-false-badge guard over the UNION of sources: a CONTACT at 'John
+    Hancock' and OUTCOMES at 'Manulife John Hancock' suppress each other —
+    neither key is emitted."""
+    manulife = _company("Manulife John Hancock")
+    db_session.add(manulife)
+    await db_session.flush()
+    db_session.add(
+        _outcome(company_id=manulife.id, outcome_type="rejection_pre_screen", thread="m")
+    )
+    db_session.add(_contact("John Hancock"))
+    await db_session.commit()
+
+    signals = await compute_repeat_signals(db_session)
+    assert "john hancock" not in signals
+    assert "manulife john hancock" not in signals
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_vendor_employer_not_counted(db_session: Any) -> None:
+    """An employer string that normalizes to a vendor/empty key is skipped."""
+    db_session.add(_contact("greenhouse.io"))
     await db_session.commit()
 
     signals = await compute_repeat_signals(db_session)

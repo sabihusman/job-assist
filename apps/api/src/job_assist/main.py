@@ -978,6 +978,7 @@ async def list_contacts(
     db: DbSession,
     source_type: Annotated[list[str] | None, Query()] = None,
     search: str | None = None,
+    employer: str | None = None,
     include_archived: bool = False,
     limit: int = 50,
     offset: int = 0,
@@ -1028,6 +1029,13 @@ async def list_contacts(
         where_clauses.append(Contact.archived_at.is_(None))
     if source_type:
         where_clauses.append(Contact.source_type.in_(source_type))
+    # feat/warm-path-badge: ``?employer=Acme`` filters to contacts whose
+    # ``current_employer`` substring-matches (case-insensitive). The warm-path
+    # badge's click-through lands here (/contacts?company=<name>). ILIKE, not
+    # normalized-equality, so "Citi" finds "Citibank" — at click-through scale
+    # an over-match beats a silent under-match.
+    if employer and employer.strip():
+        where_clauses.append(Contact.current_employer.ilike(f"%{employer.strip()}%"))
     if search:
         pattern = f"%{search.strip().lower()}%"
         if pattern.strip("%"):
@@ -3646,11 +3654,14 @@ async def company_repeat_signals(db: DbSession) -> dict[str, Any]:
     (feat/company-app-awareness).
 
     Returns ``{"signals": {norm_name: {"rejections": r, "active_apps": a,
-    "display_name": str}}}`` for every company attributable from the outcome
-    history with ``rejections >= 1`` or ``active_apps >= 1``. Keyed by the
-    NORMALIZED company name (so "Stripe, Inc." and "stripe" collapse); matched on
-    name (linked ``target_company.name`` or the name extracted from the email
-    subject), capturing the unlinked majority. Ambiguous names are suppressed.
+    "contact_count": c, "display_name": str}}}`` for every company attributable
+    from the outcome history or the contacts book with any count >= 1. Keyed by
+    the NORMALIZED company name (so "Stripe, Inc." and "stripe" collapse);
+    matched on name (linked ``target_company.name``, the name extracted from the
+    email subject, or a contact's ``current_employer``), capturing the unlinked
+    majority. Ambiguous names are suppressed. ``contact_count``
+    (feat/warm-path-badge) counts non-archived contacts whose current employer is
+    this company — the operator's warm path in.
 
     The triage UI keys badges by the posting's normalized company name and
     applies the 1-2 neutral / >=3 amber threshold client-side.

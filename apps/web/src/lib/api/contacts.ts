@@ -49,6 +49,8 @@ function toFilterQuery(filters: ContactsFilters): Record<string, unknown> {
   const q: Record<string, unknown> = {};
   if (filters.source_type.length) q.source_type = filters.source_type;
   if (filters.search.trim()) q.search = filters.search.trim();
+  // feat/warm-path-badge: company filter from the badge click-through.
+  if (filters.employer.trim()) q.employer = filters.employer.trim();
   if (filters.include_archived) q.include_archived = true;
   return q;
 }

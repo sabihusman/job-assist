@@ -582,6 +582,22 @@
             }
           },
           {
+            "name": "employer",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Employer"
+            }
+          },
+          {
             "name": "include_archived",
             "in": "query",
             "required": false,
@@ -2351,7 +2367,7 @@
           "public"
         ],
         "summary": "Company Repeat Signals",
-        "description": "Per-company application-awareness counts from the Gmail outcome history\n(feat/company-app-awareness).\n\nReturns ``{\"signals\": {norm_name: {\"rejections\": r, \"active_apps\": a,\n\"display_name\": str}}}`` for every company attributable from the outcome\nhistory with ``rejections >= 1`` or ``active_apps >= 1``. Keyed by the\nNORMALIZED company name (so \"Stripe, Inc.\" and \"stripe\" collapse); matched on\nname (linked ``target_company.name`` or the name extracted from the email\nsubject), capturing the unlinked majority. Ambiguous names are suppressed.\n\nThe triage UI keys badges by the posting's normalized company name and\napplies the 1-2 neutral / >=3 amber threshold client-side.\n\nTODO: add authentication before exposing publicly. Dev-mode only.",
+        "description": "Per-company application-awareness counts from the Gmail outcome history\n(feat/company-app-awareness).\n\nReturns ``{\"signals\": {norm_name: {\"rejections\": r, \"active_apps\": a,\n\"contact_count\": c, \"display_name\": str}}}`` for every company attributable\nfrom the outcome history or the contacts book with any count >= 1. Keyed by\nthe NORMALIZED company name (so \"Stripe, Inc.\" and \"stripe\" collapse);\nmatched on name (linked ``target_company.name``, the name extracted from the\nemail subject, or a contact's ``current_employer``), capturing the unlinked\nmajority. Ambiguous names are suppressed. ``contact_count``\n(feat/warm-path-badge) counts non-archived contacts whose current employer is\nthis company \u2014 the operator's warm path in.\n\nThe triage UI keys badges by the posting's normalized company name and\napplies the 1-2 neutral / >=3 amber threshold client-side.\n\nTODO: add authentication before exposing publicly. Dev-mode only.",
         "operationId": "company_repeat_signals_companies_repeat_signals_get",
         "responses": {
           "200": {
