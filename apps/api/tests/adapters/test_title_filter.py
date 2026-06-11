@@ -154,3 +154,75 @@ def test_case_insensitivity() -> None:
     assert should_keep_title("senior product manager")
     assert should_keep_title("Senior Product Manager")
     assert not should_keep_title("SENIOR PRODUCT MARKETING MANAGER")
+
+
+# ── feat/strategy-spine: per-track keep-lists ─────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Strategy & Operations Manager",
+        "Senior Strategy and Operations Manager",
+        "Strategy Manager",
+        "Manager, Corporate Strategy",
+        "Business Strategy Lead",
+        "Strategy Consultant",
+        "Business Operations Manager",
+        "BizOps Associate",
+        "Biz Ops Lead",
+        "Chief of Staff",
+        "Chief of Staff to the CEO",
+        "Strategy & Planning Manager",
+    ],
+)
+def test_strategy_track_keeps_strategy_family(title: str) -> None:
+    assert should_keep_title(title, track="strategy") is True
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Strategy & Operations Manager",
+        "Chief of Staff",
+        "Corporate Strategy Manager",
+        "BizOps Associate",
+    ],
+)
+def test_pm_track_still_drops_strategy_family(title: str) -> None:
+    """The default (pm) track is byte-identical — strategy titles stay out of
+    the on-domain pipeline."""
+    assert should_keep_title(title) is False
+    assert should_keep_title(title, track="pm") is False
+
+
+@pytest.mark.parametrize(
+    "title",
+    ["Product Manager", "Senior Product Owner", "Associate Product Manager"],
+)
+def test_strategy_track_also_keeps_pm_po(title: str) -> None:
+    """strategy track = PM/PO keep-list PLUS the strategy family."""
+    assert should_keep_title(title, track="strategy") is True
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Operations Manager",
+        "Plant Operations Manager",
+        "Warehouse Operations Supervisor",
+        "IT Project Manager",
+        "Software Engineer",
+        "Network Operations Engineer",
+        "Sales Operations Analyst",
+    ],
+)
+def test_strategy_track_still_drops_generic_ops(title: str) -> None:
+    """Bare operations / delivery titles don't ride the strategy keep-list."""
+    assert should_keep_title(title, track="strategy") is False
+
+
+def test_strategy_track_ignores_pm_exclusions_for_strategy_titles() -> None:
+    """A strategy title is kept even if it brushes a product-flavored
+    exclusion phrase (the strategy keep-list is checked first)."""
+    assert should_keep_title("Strategy & Operations Manager, Product Marketing", track="strategy")

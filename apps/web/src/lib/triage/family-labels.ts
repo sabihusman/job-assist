@@ -13,6 +13,10 @@ export const FAMILY_LABELS: Record<RoleFamilyWire, string> = {
   product_owner: 'Product Owner',
   product_marketing: 'Product Marketing',
   program_management: 'Program Mgmt',
+  // feat/strategy-spine: the warm-path strategy lane. Clicking this chip IS
+  // the "strategy view" — an explicit family selection overrides the pm_only
+  // gate, so the queue shows strategy_ops roles only (date-sorted by default).
+  strategy_ops: 'Strategy/Ops',
   other: 'Other',
 };
 
@@ -28,6 +32,7 @@ export const FAMILY_CHIPS: readonly RoleFamilyWire[] = [
   'product_owner',
   'product_marketing',
   'program_management',
+  'strategy_ops',
   'other',
 ] as const;
 

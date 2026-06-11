@@ -86,6 +86,37 @@ TITLE_EXCLUSION_SEARCH: list[str] = [
     "Product Marketing",
 ]
 
+# ── The warm-path (strategy) track filter (feat/strategy-spine) ──────────────
+# Warm-path / off-domain employers ALSO keep the MBA-grad strategy family on
+# top of PM/PO. tsquery semantics: a multi-word term matches as tokenized AND
+# ("Strategy Operations" matches "Strategy & Operations Manager"; stop-words
+# like "of" drop out of "Chief of Staff").
+STRATEGY_TITLE_SEARCH: list[str] = [
+    "Strategy Operations",
+    "Strategy Manager",
+    "Corporate Strategy",
+    "Business Strategy",
+    "Strategy Consultant",
+    "Business Operations",
+    "BizOps",
+    "Chief of Staff",
+]
+
+# The PM exclusion list CANNOT be reused for the strategy track: its bare
+# seniority tokens would tsquery-kill wanted strategy titles ("Chief" +
+# "Staff" → Chief of Staff; "Lead" → Strategy Lead; "Director" → Director,
+# Corporate Strategy). The warm-path exclusions keep only the terms that
+# can't collide with EITHER family's wanted titles; seniority control for
+# the strategy lane is the classifier + operator eyeball (the lane is small).
+WARM_PATH_TITLE_EXCLUSION_SEARCH: list[str] = [
+    "Senior Product Manager",
+    "Sr Product Manager",
+    "Project Manager",
+    "Program Manager",
+    "Product Marketing",
+    "Intern",
+]
+
 # Per-employer result cap → the hard cost backstop. At $1.20 / 1,000 jobs,
 # 50 jobs ≈ $0.06; with the PM/PO filter the real count is ~1-4/employer.
 DEFAULT_LIMIT = 50
@@ -97,9 +128,15 @@ def build_actor_input(
     domain: str | None,
     limit: int = DEFAULT_LIMIT,
     include_title_filter: bool = True,
+    track: str = "pm",
 ) -> dict[str, Any]:
-    """Build the actor input JSON: target one employer + (optionally) the PM/PO
-    title filter.
+    """Build the actor input JSON: target one employer + (optionally) the
+    track's title filter.
+
+    ``track``: ``pm`` (curated cohort — the locked PM/PO band, unchanged) or
+    ``strategy`` (warm-path cohort — PM/PO PLUS the strategy family, with the
+    strategy-safe exclusion list; see WARM_PATH_TITLE_EXCLUSION_SEARCH for why
+    the PM exclusions can't be reused).
 
     Targets by ``domainFilter`` (exact, most reliable) when a domain is known,
     else falls back to ``organizationSearch`` (token match on the name).
@@ -110,8 +147,12 @@ def build_actor_input(
     """
     body: dict[str, Any] = {"limit": limit}
     if include_title_filter:
-        body["titleSearch"] = TITLE_SEARCH
-        body["titleExclusionSearch"] = TITLE_EXCLUSION_SEARCH
+        if track == "strategy":
+            body["titleSearch"] = TITLE_SEARCH + STRATEGY_TITLE_SEARCH
+            body["titleExclusionSearch"] = WARM_PATH_TITLE_EXCLUSION_SEARCH
+        else:
+            body["titleSearch"] = TITLE_SEARCH
+            body["titleExclusionSearch"] = TITLE_EXCLUSION_SEARCH
     if domain:
         body["domainFilter"] = [domain]
     else:
@@ -288,6 +329,7 @@ class FantasticJobsAdapter:
         token: str,
         limit: int = DEFAULT_LIMIT,
         title_filter: bool = True,
+        track: str = "pm",
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.organization = organization
@@ -296,6 +338,10 @@ class FantasticJobsAdapter:
         self._token = token
         self._limit = limit
         self._title_filter = title_filter
+        # feat/strategy-spine: 'pm' (curated) or 'strategy' (warm-path cohort —
+        # PM/PO plus the strategy title family). Selects the filter pair in
+        # build_actor_input.
+        self._track = track
         # run-sync can take a while (the actor runs end-to-end); generous timeout.
         self._client = client or httpx.AsyncClient(timeout=180.0)
         self._owns_client = client is None
@@ -322,6 +368,7 @@ class FantasticJobsAdapter:
             domain=self.domain,
             limit=self._limit,
             include_title_filter=self._title_filter,
+            track=self._track,
         )
         resp = await self._client.post(
             _RUN_SYNC_URL,

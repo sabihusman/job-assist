@@ -42,6 +42,11 @@ export type RoleFamilyWire =
   | 'product_owner'
   | 'product_marketing'
   | 'program_management'
+  // feat/strategy-spine: the MBA-grad strategy family (Strategy & Ops,
+  // Corporate Strategy, BizOps, Chief of Staff) at warm-path employers.
+  // Surfaced via its own FAMILY chip — pm_only (PM_PO_FAMILIES) deliberately
+  // excludes it, so it never appears in the default PM queue.
+  | 'strategy_ops'
   | 'other';
 
 // PR #50: ``rejected`` joins the StateFilter union as a frontend-vocabulary

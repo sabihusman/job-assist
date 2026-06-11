@@ -158,12 +158,38 @@ def _has_excluded_phrase(lowered: str) -> bool:
     return False
 
 
-def should_keep_title(raw_title: str | None) -> bool:
-    """True iff *raw_title* is a plausible PM role worth ingesting.
+# ── Strategy-track keep-list (feat/strategy-spine) ──────────────────────────
+#
+# Warm-path / off-domain employers ALSO keep the MBA-grad strategy family:
+# Strategy & Operations, Strategy Manager, Business Operations, Corporate
+# Strategy, Strategy Consultant, BizOps, Chief of Staff. Same philosophy as
+# the PM keep-list: conservative on the keep side — the v5 classifier is the
+# precision pass that buckets survivors into strategy_ops (or not).
+_STRATEGY_ROLE_RE = re.compile(
+    r"(?:"
+    r"\b(?:corporate|business|enterprise)\s+strategy\b"
+    r"|\bstrategy\s*(?:&|and|\+)\s*(?:operations|ops|planning)\b"
+    r"|\bstrategy\s+(?:manager|lead|director|consultant|analyst|associate|officer)\b"
+    r"|\bbiz\s*ops\b"
+    r"|\bbusiness\s+operations\b"
+    r"|\bchief\s+of\s+staff\b"
+    r")",
+    re.IGNORECASE,
+)
 
-    Conservative keep: anything that looks PM-ish passes (the
-    classifier is the precision pass downstream). Empty, None, or
-    whitespace-only titles fail — there's no signal to keep.
+
+def should_keep_title(raw_title: str | None, track: str = "pm") -> bool:
+    """True iff *raw_title* is worth ingesting for the given track.
+
+    ``track="pm"`` (default) — the original PM/PO keep-list, byte-identical
+    behavior. ``track="strategy"`` (warm-path / off-domain employers) — the
+    PM/PO keep-list PLUS the strategy family (Strategy & Operations, Strategy
+    Manager, Business Operations, Corporate Strategy, Strategy Consultant,
+    BizOps, Chief of Staff).
+
+    Conservative keep: anything that looks family-ish passes (the classifier
+    is the precision pass downstream). Empty, None, or whitespace-only titles
+    fail — there's no signal to keep.
 
     Cheap: pure regex over the raw title. Roughly 1-3 µs per call.
     Safe to run on every fetched posting before paying the cost of
@@ -173,6 +199,13 @@ def should_keep_title(raw_title: str | None) -> bool:
         return False
 
     lowered = raw_title.lower()
+
+    # feat/strategy-spine: the strategy keep-list is checked BEFORE the PM
+    # exclusions — "Strategy & Operations Manager" must not be vulnerable to
+    # any product-flavored carve-out, and the strategy family has no
+    # exclusion list of its own (the classifier handles precision).
+    if track == "strategy" and _STRATEGY_ROLE_RE.search(lowered):
+        return True
 
     # Exclusion comes first: even a positive match is dropped when the
     # title is clearly a distinct role family ("product marketing
