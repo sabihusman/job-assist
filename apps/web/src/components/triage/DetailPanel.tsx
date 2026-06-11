@@ -205,7 +205,14 @@ function DetailContentBody({
                 company name. feat/warm-path-badge: + "N alumni here", clickable
                 here (the hero is not inside a button, unlike the list cards) —
                 lands on /contacts filtered to this company. */}
-            <RepeatSignalBadges companyName={company.name} signals={signals} linkToContacts />
+            {/* size="lg": the hero badges are a primary signal here — ~1.5x the
+                dense list-card scale (which stays sm). */}
+            <RepeatSignalBadges
+              companyName={company.name}
+              signals={signals}
+              linkToContacts
+              size="lg"
+            />
           </div>
         </div>
 
