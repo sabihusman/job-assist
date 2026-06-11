@@ -150,15 +150,18 @@ async def ingest_curated_via_fantastic(
 
 
 async def probe_fantastic_domain(
-    token: str, *, domain: str, limit: int = 5, title_filter: bool = False
+    token: str, *, domain: str, limit: int = 5, title_filter: bool = False, track: str = "pm"
 ) -> dict[str, Any]:
     """Diagnostic: a probe pull for one employer domain. Does NOT persist.
 
-    ``title_filter=False`` (default) drops the PM/PO filter to tell "no PM/PO
-    roles here" (domain returns jobs unfiltered, none match) from "domain
-    targeting is off" (0 even unfiltered). ``title_filter=True`` keeps the
-    filter (a known-valid query) — useful to fetch a real matching record for
-    field inspection.
+    ``title_filter=False`` (default) drops the title filter to tell "no
+    matching roles here" (domain returns jobs unfiltered, none match) from
+    "domain targeting is off" (0 even unfiltered). ``title_filter=True`` keeps
+    the filter (a known-valid query) — useful to fetch a real matching record
+    for field inspection. ``track`` (feat/strategy-spine) selects WHICH filter
+    pair the filtered probe uses — ``pm`` (curated) or ``strategy`` (warm-path:
+    PM/PO + strategy family) — so the widened warm-path search can be A/B'd
+    per employer without persisting anything.
 
     On an Apify HTTP error the error is SURFACED (status + body) instead of
     bubbling to a generic 500. On success it returns the count, sample titles,
@@ -172,6 +175,7 @@ async def probe_fantastic_domain(
         token=token,
         limit=limit,
         title_filter=title_filter,
+        track=track,
     )
     try:
         async with adapter:
@@ -185,6 +189,7 @@ async def probe_fantastic_domain(
         return {
             "domain": domain,
             "title_filter": title_filter,
+            "track": track,
             "error": True,
             "apify_status": exc.response.status_code,
             "apify_body": body,
@@ -204,6 +209,7 @@ async def probe_fantastic_domain(
     return {
         "domain": domain,
         "title_filter": title_filter,
+        "track": track,
         "count": len(raws),
         "sample_titles": titles[:limit],
         "field_keys": field_keys,

@@ -457,6 +457,10 @@ async def trigger_ingest(
 # list_fantastic_targets.
 _FANTASTIC_SOURCES = {"curated", "warm_path"}
 
+# Title-filter tracks the probe may exercise (feat/strategy-spine): the
+# curated PM/PO band vs the warm-path PM/PO + strategy-family band.
+_FANTASTIC_TRACKS = {"pm", "strategy"}
+
 
 @app.post("/admin/ingest/fantastic", tags=["admin"])
 async def trigger_fantastic_ingest(db: DbSession, source: str = "curated") -> dict[str, Any]:
@@ -526,7 +530,7 @@ async def get_fantastic_plan(db: DbSession, source: str = "curated") -> dict[str
 # two-segment ``fantastic/probe`` matches that catch-all as ats='fantastic'.
 @app.post("/admin/ingest/fantastic-probe", tags=["admin"])
 async def probe_fantastic(
-    domain: str, limit: int = 5, title_filter: bool = False
+    domain: str, limit: int = 5, title_filter: bool = False, track: str = "pm"
 ) -> dict[str, Any]:
     """Diagnostic Apify pull for one employer ``domain`` — count + sample titles
     + the first record's ``field_keys``/``sample_record``, NO persist.
@@ -544,8 +548,12 @@ async def probe_fantastic(
         raise HTTPException(status_code=503, detail="APIFY_API_TOKEN is not configured.")
     if limit < 1 or limit > 50:
         raise HTTPException(status_code=422, detail="limit must be 1..50")
+    if track not in _FANTASTIC_TRACKS:
+        raise HTTPException(
+            status_code=422, detail=f"track must be one of {sorted(_FANTASTIC_TRACKS)}"
+        )
     return await probe_fantastic_domain(
-        token, domain=domain, limit=limit, title_filter=title_filter
+        token, domain=domain, limit=limit, title_filter=title_filter, track=track
     )
 
 
