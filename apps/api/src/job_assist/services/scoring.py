@@ -384,14 +384,16 @@ def is_disguised_senior(posting: JobPosting) -> bool:
     """True when a posting looks like a mislabeled mid-senior PM role.
 
     A ``product_management`` posting bucketed ``pm`` or ``unknown`` whose
-    USD salary FLOOR (``salary_min``) is >= $180k is almost always a
+    USD salary FLOOR (``salary_min``) is >= $175k is almost always a
     senior+ role the title/seniority parser under-leveled — the comp
     floor betrays the altitude. ``score_posting`` caps these (career-
-    changer correction).
+    changer correction). (Floor retuned $180k → $175k in #158; the
+    constant ``_DISGUISED_SENIOR_SALARY_FLOOR_USD`` + its test are the
+    source of truth.)
 
     Precision choices to avoid false-positives:
-      * FLOOR not max — a ``$130k-$180k`` band has min 130 (plausibly
-        mid) and is NOT flagged; a ``$180k-$250k`` band has min 180 and
+      * FLOOR not max — a ``$130k-$175k`` band has min 130 (plausibly
+        mid) and is NOT flagged; a ``$175k-$250k`` band has min 175 and
         IS. The minimum being senior-level is the strong signal.
       * Requires PARSED USD comp — unparsed / non-USD never flags (we
         don't FX-convert and won't guess).
