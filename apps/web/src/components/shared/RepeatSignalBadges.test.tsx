@@ -115,6 +115,24 @@ describe('RepeatSignalBadges', () => {
     expect(screen.getByText('21 alumni here').tagName).toBe('SPAN');
   });
 
+  test('size defaults to sm: dense list-card classes on every badge', () => {
+    render(<RepeatSignalBadges companyName="Athene" signals={SIGNALS} />);
+    for (const text of ['3 alumni here', '1 active apps', '1 rejection here']) {
+      expect(screen.getByText(text).className).toContain('text-[10px]');
+      expect(screen.getByText(text).className).toContain('px-1.5');
+    }
+  });
+
+  test('size="lg": ~1.5x classes on ALL badges in the row (detail panel)', () => {
+    render(<RepeatSignalBadges companyName="Athene" signals={SIGNALS} size="lg" />);
+    for (const text of ['3 alumni here', '1 active apps', '1 rejection here']) {
+      expect(screen.getByText(text).className).toContain('text-[15px]');
+      expect(screen.getByText(text).className).toContain('px-2.5');
+      expect(screen.getByText(text).className).not.toContain('text-[10px]');
+    }
+    expect(screen.getByTestId('repeat-signal-badges').className).toContain('gap-1.5');
+  });
+
   test('linkToContacts: alumni badge links to /contacts?company=<display name>', () => {
     render(<RepeatSignalBadges companyName="John Deere" signals={SIGNALS} linkToContacts />);
     const alumni = screen.getByText('21 alumni here');

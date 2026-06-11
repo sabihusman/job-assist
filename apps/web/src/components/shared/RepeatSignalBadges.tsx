@@ -25,16 +25,24 @@ import { cn } from '@/lib/utils';
  * sets it — on TriageCard/PipelineCard the badges sit INSIDE an interactive
  * card (a <button> / li[role=button]), where a nested anchor is invalid, so
  * those surfaces render the same badge as a plain span.
+ *
+ * ``size``: the two surfaces deliberately differ — ``sm`` (default) is the
+ * dense list/pipeline-card scale; ``lg`` is ~1.5x (font, padding, gap) for
+ * the DetailPanel hero where the badges are a primary signal, not a hint.
+ * The variant applies to the WHOLE row so the alumni/apps/rejections badges
+ * stay visually consistent.
  */
 export function RepeatSignalBadges({
   companyName,
   signals,
   linkToContacts = false,
+  size = 'sm',
   className,
 }: {
   companyName: string | null | undefined;
   signals: RepeatSignals | undefined;
   linkToContacts?: boolean;
+  size?: 'sm' | 'lg';
   className?: string;
 }) {
   if (!companyName || !signals) return null;
@@ -56,11 +64,16 @@ export function RepeatSignalBadges({
   return (
     <span
       data-testid="repeat-signal-badges"
-      className={cn('inline-flex flex-wrap items-center gap-1', className)}
+      className={cn(
+        'inline-flex flex-wrap items-center',
+        size === 'lg' ? 'gap-1.5' : 'gap-1',
+        className,
+      )}
     >
       {showAlumni && (
         <Badge
           tone="positive"
+          size={size}
           dataState="alumni"
           label={`${contactCount} ${contactCount === 1 ? 'alum' : 'alumni'} here`}
           title={`You have ${contactCount} alumni contact${
@@ -76,6 +89,7 @@ export function RepeatSignalBadges({
       {showActive && (
         <Badge
           tone={activeAmber ? 'amber' : 'neutral'}
+          size={size}
           dataState={activeAmber ? 'amber' : 'neutral'}
           label={`${sig.active_apps} active apps`}
           title={
@@ -90,6 +104,7 @@ export function RepeatSignalBadges({
       {showRejections && (
         <Badge
           tone="neutral"
+          size={size}
           dataState="rejections"
           label={`${sig.rejections} rejection${sig.rejections === 1 ? '' : 's'} here`}
           title={`You have ${sig.rejections} rejection${
@@ -107,21 +122,31 @@ const TONE_CLASSES = {
   neutral: 'bg-muted text-muted-foreground ring-border',
 } as const;
 
+// Size variants — sm is the dense list/pipeline-card scale (the original);
+// lg is ~1.5x for the DetailPanel hero (15px font, 10px x-pad, real y-pad).
+const SIZE_CLASSES = {
+  sm: 'rounded px-1.5 py-0 text-[10px]',
+  lg: 'rounded-md px-2.5 py-0.5 text-[15px]',
+} as const;
+
 function Badge({
   tone,
+  size,
   dataState,
   label,
   title,
   href,
 }: {
   tone: keyof typeof TONE_CLASSES;
+  size: keyof typeof SIZE_CLASSES;
   dataState: string;
   label: string;
   title: string;
   href?: string;
 }) {
   const cls = cn(
-    'inline-flex w-fit items-center rounded px-1.5 py-0 font-mono text-[10px] font-medium uppercase tracking-wide ring-1 ring-inset',
+    'inline-flex w-fit items-center font-mono font-medium uppercase tracking-wide ring-1 ring-inset',
+    SIZE_CLASSES[size],
     TONE_CLASSES[tone],
     href && 'underline-offset-2 hover:underline',
   );
