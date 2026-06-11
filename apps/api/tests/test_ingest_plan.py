@@ -212,11 +212,16 @@ async def test_excludes_non_curated_sources_with_leftover_tier_handle(db_session
     warm.source = "warm_path"
     deactivated = _tc("PausedCo", ats="greenhouse", handle="pausedco", tier=2)
     deactivated.source = "deactivated"
-    db_session.add_all([curated, warm, deactivated])
+    # Promoted broad shell: tier set via crawl-config, source stays 'broad'
+    # by contract (test_promote_broad_shell_into_plan) — must stay IN.
+    promoted = _tc("PromotedShell", ats="ashby", handle="promotedshell", tier=2)
+    promoted.source = "broad"
+    db_session.add_all([curated, warm, deactivated, promoted])
     await db_session.commit()
 
     plan = await _call_plan(db_session)
     handles = {item["handle"] for item in plan}
     assert "curatedco2" in handles
+    assert "promotedshell" in handles, "promoted broad shells belong in the plan"
     assert "athene" not in handles, "warm_path rows must never ride the daily plan"
     assert "pausedco" not in handles, "deactivated rows must never ride the daily plan"
