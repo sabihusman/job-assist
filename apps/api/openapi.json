@@ -281,6 +281,16 @@
               "default": false,
               "title": "Title Filter"
             }
+          },
+          {
+            "name": "track",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "pm",
+              "title": "Track"
+            }
           }
         ],
         "responses": {
