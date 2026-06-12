@@ -177,7 +177,11 @@ async def compute_repeat_signals(session: AsyncSession) -> dict[str, dict[str, A
         if r < 1 and a < 1 and c < 1:
             continue
         names = display_names.get(key)
-        display = names.most_common(1)[0][0] if names else key
+        # fix(audit): deterministic tiebreak. Counter.most_common breaks ties
+        # by insertion order — DB row order — so equal-count name variants
+        # ("Acme" vs "Acme Corp") flipped the badge label between runs.
+        # Highest count wins; ties resolve lexicographically.
+        display = min(names.items(), key=lambda kv: (-kv[1], kv[0]))[0] if names else key
         signals[key] = {
             "rejections": r,
             "active_apps": a,

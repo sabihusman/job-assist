@@ -318,3 +318,25 @@ async def test_vendor_employer_not_counted(db_session: Any) -> None:
 
     signals = await compute_repeat_signals(db_session)
     assert signals == {}
+
+
+# ── fix(audit): deterministic display_name on tied counts ─────────────────────
+
+
+@_NEEDS_DB
+async def test_display_name_tiebreak_is_deterministic(db_session: Any) -> None:
+    """Counter.most_common breaks ties by insertion (DB row) order, so
+    equal-count name variants flipped the badge label between runs. Ties now
+    resolve lexicographically: 'Acme' beats 'Acme Corp' at 1-1."""
+    # Two contacts whose employers normalize to the same key with one raw
+    # spelling each — a guaranteed 1-1 tie.
+    db_session.add(_contact("Acme Corp"))
+    db_session.add(_contact("Acme"))
+    await db_session.commit()
+
+    from job_assist.services.company_signals import compute_repeat_signals
+
+    for _ in range(3):  # stable across repeated computes
+        signals = await compute_repeat_signals(db_session)
+        assert signals["acme"]["display_name"] == "Acme"
+        assert signals["acme"]["contact_count"] == 2

@@ -23,6 +23,22 @@ from job_assist.services.company_name_match import (
         ("Update on Your Application", None),
         ("", None),
         (None, None),
+        # ── fix(audit): the exact failing cases from the audit ────────────
+        # Separator split fired only with whitespace BEFORE the separator —
+        # "Acme: Senior Product Manager" never split and the full string
+        # shipped as the company label (its own documented example failed).
+        ("Thank you for applying to Acme: Senior Product Manager", "Acme"),
+        ("Thank you for applying to Acme- Senior PM", "Acme"),
+        # POSSESSIVE_RE's lazy prefix swallowed leading words: these produced
+        # junk labels "An update from Acme" / "Your application" that ranked
+        # ABOVE the from_domain fallback on Pipeline cards. Now None → the
+        # caller falls back.
+        ("An update from Acme's Recruiting Team", None),
+        ("Your application's status has been updated", None),
+        # Multi-token company possessives still work.
+        ("Greenhouse Software's hiring team", "Greenhouse Software"),
+        # Hyphenated company names must NOT split on their own hyphen.
+        ("Thank you for applying to Coca-Cola", "Coca-Cola"),
     ],
 )
 def test_company_from_subject(subject: str | None, expected: str | None) -> None:

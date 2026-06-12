@@ -31,6 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from job_assist.config import settings
+from job_assist.db.enums import ATS
 from job_assist.db.models import TargetCompany
 
 # Allowed TargetCompany fields the seed file may set. Anything else is
@@ -59,13 +60,32 @@ _SEED_FIELDS = {
 _SEED_SOURCES = {"curated", "broad", "deactivated", "applied", "warm_path"}
 
 
+# Valid ATS strings — the DB enum's values. Validated here so a typo'd seed
+# row fails with a 422 naming the field instead of a 500 at the SAEnum cast.
+_SEED_ATS_VALUES = frozenset(a.value for a in ATS)
+
+# Hand-assigned pedigree tiers are 1-4; None = broad/warm-path shell.
+_SEED_TIER_RANGE = range(1, 5)
+
+
 def _project_row(row: dict[str, Any]) -> dict[str, Any]:
-    """Drop unknown keys and require the bare minimum (name, tier)."""
+    """Drop unknown keys, require the bare minimum (name, tier key), and
+    validate the ats/tier/source vocabularies (fix/audit: out-of-range tiers
+    used to insert silently and bad ats strings 500'd at the enum cast —
+    both now raise a ValueError naming the bad field, surfaced as a 422)."""
     projected = {k: v for k, v in row.items() if k in _SEED_FIELDS}
     if "name" not in projected or "tier" not in projected:
         raise ValueError(f"seed row missing required name/tier: {row!r}")
     if "source" in projected and projected["source"] not in _SEED_SOURCES:
         raise ValueError(f"seed row source must be one of {sorted(_SEED_SOURCES)}: {row!r}")
+    tier = projected["tier"]
+    if tier is not None and (not isinstance(tier, int) or tier not in _SEED_TIER_RANGE):
+        raise ValueError(f"seed row tier must be null or an integer 1-4, got {tier!r}: {row!r}")
+    if "ats" in projected and projected["ats"] not in _SEED_ATS_VALUES:
+        raise ValueError(
+            f"seed row ats must be one of {sorted(_SEED_ATS_VALUES)}, "
+            f"got {projected['ats']!r}: {row!r}"
+        )
     projected.setdefault("ats", "unknown")
     return projected
 

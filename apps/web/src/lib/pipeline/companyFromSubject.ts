@@ -19,7 +19,16 @@
 const APPLY_RE = /appl(?:ying|ication)\s+(?:to|at|with)\s+(.+)$/i;
 
 // Possessive lead: "<X>'s Recruiting Team", "<X>'s hiring team".
-const POSSESSIVE_RE = /^(.+?)['’`]s\s+\S+/;
+//
+// fix(audit): the old lazy ^(.+?) expanded across ANY leading words to the
+// first apostrophe-s anywhere — "An update from Acme's Recruiting Team"
+// captured "An update from Acme" and "Your application's status…" captured
+// "Your application", shipping junk company labels on the exact vague
+// subjects this fallback exists for. The prefix is now a short run (≤4) of
+// capitalized/numeric tokens anchored at the start — a sentence-y lead fails
+// the run and falls through to the from_domain fallback instead. Kept in
+// lockstep with the backend mirror (services/company_name_match.py).
+const POSSESSIVE_RE = /^((?:[A-Z0-9][\w&.-]*\s+){0,3}[A-Z0-9][\w&.-]*)['’`]s\s+\S+/;
 
 export function companyFromSubject(subject: string | null | undefined): string | null {
   if (!subject) return null;
@@ -72,8 +81,12 @@ function cleanCompany(raw: string): string | null {
   let c = raw.trim();
 
   // Cut role/qualifier tails at a separator: "Acme - Senior PM" → "Acme",
-  // "Acme | Product" → "Acme", "Acme: Reqs" → "Acme".
-  c = c.split(/\s+[-–—|:]\s+/)[0]?.trim() ?? c;
+  // "Acme | Product" → "Acme", "Acme: Reqs" → "Acme". fix(audit): leading
+  // whitespace is OPTIONAL — the old \s+ prefix meant "Acme: Reqs" (no space
+  // before the colon, the common ATS shape — and this comment's own example)
+  // never split. Trailing \s+ stays required so hyphenated names
+  // ("Coca-Cola") don't split.
+  c = c.split(/\s*[-–—|:]\s+/)[0]?.trim() ?? c;
 
   // "Acme for the Product Manager role" → "Acme".
   c = c.replace(/\s+for\s+(?:the\s+|our\s+|a\s+)?.*$/i, '');

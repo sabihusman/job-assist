@@ -1154,6 +1154,9 @@
               }
             }
           },
+          "409": {
+            "description": "Another Gmail sweep (poll or backfill) is already running"
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -1184,6 +1187,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Another Gmail sweep (poll or backfill) is already running"
           }
         }
       }
@@ -2732,29 +2738,6 @@
         }
       }
     },
-    "/admin/cron-status": {
-      "get": {
-        "summary": "Cron Status",
-        "description": "Cron health-check endpoint.  Returns ok when the API is reachable.",
-        "operationId": "cron_status_admin_cron_status_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "type": "object",
-                  "title": "Response Cron Status Admin Cron Status Get"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/admin/ingest/runs": {
       "get": {
         "tags": [
@@ -2979,6 +2962,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "A resume_version with this label already exists"
           },
           "422": {
             "description": "Validation Error",

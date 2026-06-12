@@ -33,7 +33,18 @@ _APPLY_RE = re.compile(r"appl(?:ying|ication)\s+(?:to|at|with)\s+(.+)$", re.IGNO
 
 # Possessive lead: "<X>'s Recruiting Team", "<X>'s hiring team". The character
 # class matches both straight and curly apostrophes (mirrors the TS original).
-_POSSESSIVE_RE = re.compile(r"^(.+?)['’`]s\s+\S+")  # noqa: RUF001
+#
+# fix(audit): the old lazy ``^(.+?)`` expanded across ANY leading words to the
+# first apostrophe-s anywhere — "An update from Acme's Recruiting Team"
+# captured "An update from Acme" and "Your application's status…" captured
+# "Your application", shipping junk company labels on the exact vague subjects
+# this fallback exists for. The prefix is now a short run (≤4) of
+# capitalized/numeric tokens anchored at the start — a sentence-y lead
+# ("An update…", "Your application…") fails the run and falls through to the
+# from_domain fallback instead.
+_POSSESSIVE_RE = re.compile(
+    r"^((?:[A-Z0-9][\w&.-]*\s+){0,3}[A-Z0-9][\w&.-]*)['’`]s\s+\S+"  # noqa: RUF001
+)
 
 # Legal-entity suffix tokens dropped during normalization so "Stripe, Inc." and
 # "Stripe" collapse. Conservative on purpose — "Technologies" / "Labs" / "Group"
@@ -83,8 +94,10 @@ _VENDOR_TOKENS = frozenset(
         "breezy",
         "breezyhr",
         "bamboohr",
+        # fix(audit): "no-reply" deleted — _tokens() strips all non-
+        # alphanumerics, so a token can never contain a hyphen and the entry
+        # was unreachable dead weight ("noreply"/"donotreply" do the work).
         "noreply",
-        "no-reply",
         "donotreply",
     }
 )
@@ -117,8 +130,13 @@ def company_from_subject(subject: str | None) -> str | None:
 def _clean_company(raw: str) -> str | None:
     c = raw.strip()
 
-    # Cut role/qualifier tails at a separator: "Acme - Senior PM" -> "Acme".
-    c = re.split(r"\s+[-–—|:]\s+", c)[0].strip()  # noqa: RUF001
+    # Cut role/qualifier tails at a separator: "Acme - Senior PM" -> "Acme",
+    # "Acme: Reqs" -> "Acme". fix(audit): leading whitespace is OPTIONAL —
+    # the old \s+ prefix meant "Acme: Senior PM" (no space before the colon,
+    # the common ATS shape) never split and the full string shipped as the
+    # company label. Trailing \s+ stays required so hyphenated names
+    # ("Coca-Cola") don't split.
+    c = re.split(r"\s*[-–—|:]\s+", c)[0].strip()  # noqa: RUF001
 
     # "Acme for the Product Manager role" → "Acme".
     c = re.sub(r"\s+for\s+(?:the\s+|our\s+|a\s+)?.*$", "", c, flags=re.IGNORECASE)

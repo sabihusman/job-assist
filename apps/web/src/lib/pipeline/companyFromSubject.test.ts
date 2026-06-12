@@ -40,6 +40,32 @@ describe('companyFromSubject', () => {
     expect(companyFromSubject(null)).toBeNull();
     expect(companyFromSubject(undefined)).toBeNull();
   });
+
+  // ── fix(audit): the exact failing cases from the audit ─────────────────────
+
+  test('separator with no leading space still splits ("Acme: Reqs" → "Acme")', () => {
+    // cleanCompany's own documented example used to fail: the split required
+    // whitespace BEFORE the separator, so the full string shipped as the label.
+    expect(companyFromSubject('Thank you for applying to Acme: Senior Product Manager')).toBe(
+      'Acme',
+    );
+    expect(companyFromSubject('Thank you for applying to Acme- Senior PM')).toBe('Acme');
+  });
+
+  test('hyphenated company names do not split on their own hyphen', () => {
+    expect(companyFromSubject('Thank you for applying to Coca-Cola')).toBe('Coca-Cola');
+  });
+
+  test('non-leading possessives return null instead of junk labels', () => {
+    // The lazy prefix used to capture "An update from Acme" / "Your
+    // application" — junk that ranked above the from_domain fallback.
+    expect(companyFromSubject("An update from Acme's Recruiting Team")).toBeNull();
+    expect(companyFromSubject("Your application's status has been updated")).toBeNull();
+  });
+
+  test('multi-token company possessives still extract', () => {
+    expect(companyFromSubject("Greenhouse Software's hiring team")).toBe('Greenhouse Software');
+  });
 });
 
 describe('roleFromSubject', () => {
