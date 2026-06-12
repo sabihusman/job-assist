@@ -4,14 +4,15 @@
  * Outreach message timeline (PR #52).
  *
  * Renders the per-contact outreach history fetched via
- * ``useContactOutreach`` (newest first). Append-only model — no
+ * ``useContactOutreachInfinite`` (newest first). Append-only model — no
  * edit/delete affordances. If the operator logged the wrong thing
  * they log a correction as a new row.
  *
- * Pagination is operator-driven via "Load more" — react-query keeps
- * the cumulative page state per contact. Initial page is 50 rows
- * (matches the backend's default ``limit``); each Load More fetches
- * the next 50.
+ * Pagination is operator-driven via "Load more" — an accumulating
+ * ``useInfiniteQuery`` (fix/audit #5) keeps every loaded page, so a
+ * second Load More appends rather than replacing the previous extra
+ * window. Initial page is 50 rows (matches the backend's default
+ * ``limit``); each Load More fetches the next 50.
  *
  * Layout note: each entry is a flex row — direction icon + channel
  * chip + relative ``sent_at`` + subject (if any) + body preview.
@@ -25,9 +26,8 @@
  */
 
 import { ArrowDownLeft, ArrowUpRight, Link2, Mail, MessageSquare } from 'lucide-react';
-import { useState } from 'react';
 
-import { useContactOutreach } from '@/lib/api/contacts';
+import { useContactOutreachInfinite } from '@/lib/api/contacts';
 import {
   MESSAGE_CHANNEL_LABELS,
   MESSAGE_DIRECTION_LABELS,
@@ -37,32 +37,18 @@ import {
 } from '@/lib/contacts/types';
 import { cn } from '@/lib/utils';
 
-const PAGE_SIZE = 50;
-
-export function OutreachTimeline({
-  contactId,
-  items,
-  total,
-  isLoading,
-}: {
-  contactId: string;
-  items: readonly OutreachMessage[];
-  total: number;
-  isLoading: boolean;
-}) {
-  // The first page lives in the parent's ``useContactOutreach`` query.
-  // Operator-driven pagination layers on top: we fetch additional
-  // pages via separate queries and concatenate locally.
-  const [extraOffset, setExtraOffset] = useState<number | null>(null);
-  const extra = useContactOutreach(extraOffset !== null ? contactId : null, {
-    limit: PAGE_SIZE,
-    offset: extraOffset ?? 0,
-  });
-
-  const allItems: readonly OutreachMessage[] =
-    extraOffset !== null && extra.data ? [...items, ...extra.data.items] : items;
-
-  const hasMore = total > allItems.length;
+export function OutreachTimeline({ contactId }: { contactId: string }) {
+  // fix/audit #5: self-fetched accumulating timeline. The component owns the
+  // infinite query so Load More appends pages instead of replacing a single
+  // extra slot (which dropped the middle page).
+  const {
+    items: allItems,
+    total,
+    isLoading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useContactOutreachInfinite(contactId);
 
   if (isLoading) {
     return (
@@ -95,14 +81,14 @@ export function OutreachTimeline({
           <OutreachRow key={m.id} message={m} />
         ))}
       </ol>
-      {hasMore && (
+      {hasNextPage && (
         <button
           type="button"
-          onClick={() => setExtraOffset(allItems.length)}
-          disabled={extra.isLoading}
+          onClick={() => fetchNextPage()}
+          disabled={isFetchingNextPage}
           className="self-center rounded-md border border-border bg-surface px-3 py-1 text-[12px] hover:bg-accent disabled:opacity-50"
         >
-          {extra.isLoading ? 'Loading…' : `Load more (${total - allItems.length} remaining)`}
+          {isFetchingNextPage ? 'Loading…' : `Load more (${total - allItems.length} remaining)`}
         </button>
       )}
     </div>

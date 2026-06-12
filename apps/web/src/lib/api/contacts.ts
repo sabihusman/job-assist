@@ -100,6 +100,51 @@ export function useContacts(filters: ContactsFilters) {
   return { ...query, items, total };
 }
 
+// Per-page size for the infinite outreach timeline (matches the backend's
+// default ``limit``).
+const OUTREACH_PAGE_SIZE = 50;
+
+/**
+ * Per-contact outreach timeline as an accumulating ``useInfiniteQuery``
+ * (fix/audit #5). The OutreachTimeline previously layered a single extra
+ * page on top of the parent's first page via a moving ``offset`` — so a
+ * second Load More REPLACED the extra window and dropped the page between.
+ * This pages by offset and flattens, matching ``useContacts``.
+ *
+ * Returns the raw infinite-query object plus convenience ``items``
+ * (flattened) and ``total`` (server-reported full count).
+ */
+export function useContactOutreachInfinite(contactId: string | null) {
+  const query = useInfiniteQuery({
+    queryKey: contactId
+      ? outreachKeys.forContact(contactId, { infinite: true })
+      : [OUTREACH_KEY, '__none__', { infinite: true }],
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) => {
+      if (!contactId) throw new Error('useContactOutreachInfinite called without id');
+      const { data, error } = await api.GET('/contacts/{contact_id}/outreach', {
+        params: {
+          path: { contact_id: contactId },
+          query: { limit: OUTREACH_PAGE_SIZE, offset: pageParam } as never,
+        },
+      });
+      if (error) throw error;
+      return data as unknown as OutreachMessageListResponse;
+    },
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((n, page) => n + page.items.length, 0);
+      return loaded < lastPage.total ? loaded : undefined;
+    },
+    enabled: !!contactId,
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+  });
+
+  const items = query.data?.pages.flatMap((page) => page.items) ?? [];
+  const total = query.data?.pages[0]?.total ?? 0;
+  return { ...query, items, total };
+}
+
 // ── PR #52 — detail query + CRUD + outreach mutations ──────────────────────
 
 /** Single contact detail. */

@@ -2,7 +2,7 @@
 
 import { ArrowLeft, ExternalLink, Mail, X } from 'lucide-react';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { ActionButton } from '@/components/shared/ActionButton';
 import { CompanyAvatar } from '@/components/shared/CompanyAvatar';
@@ -40,10 +40,15 @@ export function DetailPanel({
   selectedId,
   onClose,
   onAction,
+  onReasonOpenChange,
 }: {
   selectedId: string | null;
   onClose: () => void;
   onAction: (postingId: string, action: TriageCardAction) => void;
+  // fix/audit #4: report the in-panel reason picker's open state up so the
+  // page can pause its keyboard handler while it's open (otherwise a
+  // keypress fires both the picker and the triage shortcut).
+  onReasonOpenChange?: (open: boolean) => void;
 }) {
   const { data, isLoading } = usePosting(selectedId);
   const isLgUp = useIsLgUp();
@@ -52,7 +57,15 @@ export function DetailPanel({
   let body: React.ReactNode;
   if (!selectedId) body = <DetailEmptyBody />;
   else if (isLoading || !data) body = <DetailLoadingBody />;
-  else body = <DetailContentBody posting={data} onClose={onClose} onAction={onAction} />;
+  else
+    body = (
+      <DetailContentBody
+        posting={data}
+        onClose={onClose}
+        onAction={onAction}
+        onReasonOpenChange={onReasonOpenChange}
+      />
+    );
 
   // Gate the Sheet ``open`` prop by viewport, not just CSS. Radix
   // Dialog (under Sheet) marks every sibling of its open content
@@ -126,12 +139,21 @@ function DetailContentBody({
   posting,
   onClose,
   onAction,
+  onReasonOpenChange,
 }: {
   posting: PostingDetail;
   onClose: () => void;
   onAction: (postingId: string, action: TriageCardAction) => void;
+  onReasonOpenChange?: (open: boolean) => void;
 }) {
   const [reasonOpen, setReasonOpen] = useState(false);
+  // fix/audit #4: mirror the picker state up to the page keyboard gate.
+  // The cleanup resets it to false when this body unmounts (panel closed
+  // while the picker was open) so the gate can't get stuck.
+  useEffect(() => {
+    onReasonOpenChange?.(reasonOpen);
+  }, [reasonOpen, onReasonOpenChange]);
+  useEffect(() => () => onReasonOpenChange?.(false), [onReasonOpenChange]);
   const { data: signals } = useCompanySignals();
   const company = posting.company;
   const tier = company.tier ?? 4;

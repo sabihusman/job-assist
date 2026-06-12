@@ -34,12 +34,7 @@ import { ContactEditForm } from '@/components/contacts/ContactEditForm';
 import { CONTACT_SOURCE_LABELS } from '@/components/contacts/ContactsTable';
 import { LogOutreachForm } from '@/components/contacts/LogOutreachForm';
 import { OutreachTimeline } from '@/components/contacts/OutreachTimeline';
-import {
-  useContactArchive,
-  useContactDetail,
-  useContactOutreach,
-  useContactUnarchive,
-} from '@/lib/api/contacts';
+import { useContactArchive, useContactDetail, useContactUnarchive } from '@/lib/api/contacts';
 import type { ContactSourceType } from '@/lib/contacts/types';
 import { cn } from '@/lib/utils';
 
@@ -52,7 +47,6 @@ export type ContactDetailPanelProps = {
 export function ContactDetailPanel({ contactId, onClose }: ContactDetailPanelProps) {
   const open = contactId !== null;
   const { data, isLoading, isError, error } = useContactDetail(contactId);
-  const outreachQuery = useContactOutreach(contactId);
   const archive = useContactArchive();
   const unarchive = useContactUnarchive();
 
@@ -174,19 +168,18 @@ export function ContactDetailPanel({ contactId, onClose }: ContactDetailPanelPro
           </div>
         ) : (
           <>
-            <ContactEditForm contact={data} />
+            {/* fix(audit #3): key by contact id so switching the selected
+                contact REMOUNTS the form. Without it the form's local `edits`
+                state persisted across contacts, so an in-flight edit could be
+                PATCHed onto whichever contact was selected next. */}
+            <ContactEditForm key={data.id} contact={data} />
 
             <section className="flex flex-col gap-2">
               <h3 className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
                 Outreach
               </h3>
               <LogOutreachForm contactId={data.id} />
-              <OutreachTimeline
-                contactId={data.id}
-                items={outreachQuery.data?.items ?? []}
-                total={outreachQuery.data?.total ?? 0}
-                isLoading={outreachQuery.isLoading}
-              />
+              <OutreachTimeline contactId={data.id} />
             </section>
           </>
         )}

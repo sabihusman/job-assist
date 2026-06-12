@@ -14,7 +14,12 @@ import type { TriageCardAction } from '@/components/triage/TriageCard';
 import { TriageList } from '@/components/triage/TriageList';
 import { useCompanySignals } from '@/lib/api/companySignals';
 import { showErrorToast } from '@/lib/api/error-toast';
-import { useBulkRecordAction, useRecordAction, useTriagePostings } from '@/lib/api/hooks';
+import {
+  useBulkRecordAction,
+  useRecordAction,
+  useTriagePostings,
+  useTriagePostingsInfinite,
+} from '@/lib/api/hooks';
 import { useTriageKeyboard } from '@/lib/keyboard/useTriageKeyboard';
 import { parseFilters } from '@/lib/triage/filters';
 import { computeSubtitle } from '@/lib/triage/subtitle';
@@ -61,26 +66,22 @@ function TriagePageInner() {
   // Memoize so equality-based effects don't re-fire on every render.
   const filters: TriageFilters = useMemo(() => parseFilters(searchParams), [searchParams]);
 
-  const page1 = useTriagePostings(filters);
-  const { data, isLoading, isError, error, refetch } = page1;
+  // fix/audit #5: Load More now accumulates via useInfiniteQuery (mirrors
+  // the contacts list). The old single-extra-slot pattern dropped the
+  // middle page on the second Load More click.
+  const list = useTriagePostingsInfinite(filters);
+  const { items, total, isLoading, isError, error, refetch, fetchNextPage } = list;
+  const hasMore = list.hasNextPage;
 
-  // PR #70 / Bestiary 5.13: Load More pagination. Mirrors /applied,
-  // /passed, /rejected. Second hook instance fetches the next page
-  // (limit=100) when the operator clicks Load more. No URL persistence —
-  // refresh resets to page 1.
-  const [extraOffset, setExtraOffset] = useState<number | null>(null);
-  // Reset extra-page state whenever the filter set changes (re-applying
-  // sort or chips invalidates the previous Load More'd window). The
-  // effect body only calls setState, so biome's useExhaustiveDependencies
-  // misreads ``filters`` as unnecessary — but ``filters`` IS the trigger.
+  // Drop any stale checkbox selection when the filter set changes — the
+  // infinite query resets its own pages on the new key, but selectedIds
+  // (posting ids) may no longer be visible. The effect body only calls
+  // setState, so biome's useExhaustiveDependencies misreads ``filters`` as
+  // unnecessary — but ``filters`` IS the trigger.
   // biome-ignore lint/correctness/useExhaustiveDependencies: filters is the intentional reset trigger
   useEffect(() => {
-    setExtraOffset(null);
-    // feat/bulk-triage-actions: a new filter set means a new result window —
-    // drop any stale checkbox selection (ids may no longer be visible).
     setSelectedIds(new Set());
   }, [filters]);
-  const extra = useTriagePostings({ ...filters, offset: extraOffset ?? 0 }, extraOffset !== null);
   // PR #43: fire a second light query to drive the dynamic subtitle's
   // applied count. limit=1 is enough — we only need ``total`` on the
   // response. The query is cached separately from the main triage list.
@@ -101,12 +102,6 @@ function TriagePageInner() {
   // ≥3) is visible right in the triage list. Undefined while loading → no badge.
   const { data: companySignals } = useCompanySignals();
 
-  const page1Items = data?.items ?? [];
-  const items =
-    extraOffset !== null && extra.data ? [...page1Items, ...extra.data.items] : page1Items;
-  const total = data?.total ?? 0;
-  const hasMore = total > items.length;
-
   // PR #43: subtitle reads from the live query state. Both queries
   // start loading on first paint; render a placeholder until at least
   // the pending one resolves so the operator doesn't see a flash of
@@ -114,7 +109,9 @@ function TriagePageInner() {
   // string that used to be hardcoded — preserves the legacy behavior
   // when the API is unreachable.
   const subtitle = computeSubtitle({
-    pendingTotal: data?.total ?? null,
+    // null (not 0) while the first page is loading so the subtitle shows a
+    // placeholder rather than a flash of "0 pending".
+    pendingTotal: list.data?.pages[0]?.total ?? null,
     appliedTotal: appliedQuery.data?.total ?? null,
     isPendingLoading: isLoading,
     isError: isError || appliedQuery.isError,
@@ -136,6 +133,13 @@ function TriagePageInner() {
   const handleToggleReason = useCallback((postingId: string) => {
     setReasonPickerCardId((prev) => (prev === postingId ? null : postingId));
   }, []);
+
+  // fix/audit #4: the DetailPanel has its OWN reason picker (separate from
+  // the list-card picker tracked above). Its open state must also pause the
+  // page keyboard, or a number/Esc keypress fires BOTH the picker's handler
+  // and the triage shortcut — a double action. DetailPanel reports its
+  // picker state up via onReasonOpenChange.
+  const [detailReasonOpen, setDetailReasonOpen] = useState(false);
 
   // feat/bulk-triage-actions: checkbox multi-select. A Set of posting ids,
   // independent of the keyboard ``selectedIndex`` cursor.
@@ -307,7 +311,10 @@ function TriagePageInner() {
         setDeepLinkId(null);
       },
     },
-    /* enabled */ !recordAction.isPending && reasonPickerCardId === null,
+    /* enabled */ !recordAction.isPending &&
+      reasonPickerCardId === null &&
+      // fix/audit #4: also pause while the DetailPanel's own picker is open.
+      !detailReasonOpen,
   );
 
   return (
@@ -361,11 +368,13 @@ function TriagePageInner() {
           {hasMore && (
             <button
               type="button"
-              onClick={() => setExtraOffset(items.length)}
-              disabled={extra.isLoading}
+              onClick={() => fetchNextPage()}
+              disabled={list.isFetchingNextPage}
               className="self-center rounded-md border border-border bg-surface px-3 py-1 text-[12px] hover:bg-accent disabled:opacity-50"
             >
-              {extra.isLoading ? 'Loading…' : `Load more (${total - items.length} remaining)`}
+              {list.isFetchingNextPage
+                ? 'Loading…'
+                : `Load more (${total - items.length} remaining)`}
             </button>
           )}
         </MainColumn>
@@ -377,6 +386,7 @@ function TriagePageInner() {
             setDeepLinkId(null);
           }}
           onAction={handleAction}
+          onReasonOpenChange={setDetailReasonOpen}
         />
       </div>
     </AppShell>

@@ -44,15 +44,20 @@ function diffPatch(original: ContactDetail, edits: Partial<ContactDetail>): Cont
   ];
   for (const k of keys) {
     if (!(k in edits)) continue;
-    const next = edits[k as keyof ContactDetail];
+    // fix(audit #6): normalize (trim → null) at DIFF time, not on every
+    // keystroke. Trimming in onChange ate typed spaces ("Vice President" →
+    // "VicePresident"); edits now hold the raw string and are trimmed only here.
+    const next = normalizeEdit(edits[k as keyof ContactDetail]);
     if (next === original[k as keyof ContactDetail]) continue;
     out[k] = next;
   }
   return out as ContactUpdate;
 }
 
-function emptyToNull(v: string): string | null {
-  return v.trim() ? v.trim() : null;
+/** Trim string edits to null/clean at save time; pass non-strings through. */
+function normalizeEdit(v: unknown): unknown {
+  if (typeof v === 'string') return v.trim() ? v.trim() : null;
+  return v;
 }
 
 export function ContactEditForm({ contact }: { contact: ContactDetail }) {
@@ -97,9 +102,7 @@ export function ContactEditForm({ contact }: { contact: ContactDetail }) {
         <input
           type="text"
           value={(value('current_position') as string) ?? ''}
-          onChange={(e) =>
-            setEdits((s) => ({ ...s, current_position: emptyToNull(e.target.value) }))
-          }
+          onChange={(e) => setEdits((s) => ({ ...s, current_position: e.target.value }))}
           className={inputCls}
         />
       </Field>
@@ -108,9 +111,7 @@ export function ContactEditForm({ contact }: { contact: ContactDetail }) {
         <input
           type="text"
           value={(value('current_employer') as string) ?? ''}
-          onChange={(e) =>
-            setEdits((s) => ({ ...s, current_employer: emptyToNull(e.target.value) }))
-          }
+          onChange={(e) => setEdits((s) => ({ ...s, current_employer: e.target.value }))}
           className={inputCls}
         />
       </Field>
@@ -120,9 +121,7 @@ export function ContactEditForm({ contact }: { contact: ContactDetail }) {
           <input
             type="email"
             value={(value('email_primary') as string) ?? ''}
-            onChange={(e) =>
-              setEdits((s) => ({ ...s, email_primary: emptyToNull(e.target.value) }))
-            }
+            onChange={(e) => setEdits((s) => ({ ...s, email_primary: e.target.value }))}
             className={inputCls}
           />
         </Field>
@@ -130,9 +129,7 @@ export function ContactEditForm({ contact }: { contact: ContactDetail }) {
           <input
             type="email"
             value={(value('email_secondary') as string) ?? ''}
-            onChange={(e) =>
-              setEdits((s) => ({ ...s, email_secondary: emptyToNull(e.target.value) }))
-            }
+            onChange={(e) => setEdits((s) => ({ ...s, email_secondary: e.target.value }))}
             className={inputCls}
           />
         </Field>
@@ -143,7 +140,7 @@ export function ContactEditForm({ contact }: { contact: ContactDetail }) {
           <input
             type="url"
             value={(value('linkedin_url') as string) ?? ''}
-            onChange={(e) => setEdits((s) => ({ ...s, linkedin_url: emptyToNull(e.target.value) }))}
+            onChange={(e) => setEdits((s) => ({ ...s, linkedin_url: e.target.value }))}
             className={inputCls}
           />
         </Field>
@@ -151,7 +148,7 @@ export function ContactEditForm({ contact }: { contact: ContactDetail }) {
           <input
             type="tel"
             value={(value('phone') as string) ?? ''}
-            onChange={(e) => setEdits((s) => ({ ...s, phone: emptyToNull(e.target.value) }))}
+            onChange={(e) => setEdits((s) => ({ ...s, phone: e.target.value }))}
             className={inputCls}
           />
         </Field>
@@ -160,7 +157,7 @@ export function ContactEditForm({ contact }: { contact: ContactDetail }) {
       <Field label="Notes">
         <textarea
           value={(value('notes') as string) ?? ''}
-          onChange={(e) => setEdits((s) => ({ ...s, notes: emptyToNull(e.target.value) }))}
+          onChange={(e) => setEdits((s) => ({ ...s, notes: e.target.value }))}
           rows={3}
           className={`${inputCls} resize-y`}
         />
