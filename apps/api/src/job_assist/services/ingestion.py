@@ -451,6 +451,24 @@ class IngestionService:
             )
             session.add(posting_source)
         else:
+            # fix/ingest-lifecycle (audit HIGH #7): JobPosting is deduped by
+            # content_hash (company+title+locations) but PostingSource by
+            # (ats, source_job_id). When an ATS edits a live posting's title or
+            # locations (e.g. adds a remote option), content_hash changes →
+            # _upsert_job_posting inserts a NEW JobPosting, but THIS source row
+            # still points at the OLD one. Re-point it: otherwise the new
+            # posting has no PostingSource forever (no apply URL, invisible to
+            # the ats filter) and this row's provenance points at a stale
+            # posting. Also refresh the provenance URLs — a moved posting can
+            # change them.
+            if posting_source.job_posting_id != job_posting.id:
+                posting_source.job_posting_id = job_posting.id
+                # Refresh the apply/source links so the re-pointed (new) posting
+                # has a correct apply URL; parser_version tracks the producing
+                # parser. (fetch_status left as-is — not load-bearing here.)
+                posting_source.source_url = norm.source_url
+                posting_source.apply_url = norm.apply_url
+                posting_source.parser_version = norm.parser_version
             posting_source.raw_payload = norm.raw_payload
             posting_source.fetched_at = now
 
@@ -464,6 +482,13 @@ class IngestionService:
 # days (transient ATS outage) without wrongly closing its postings — they
 # only close after a full week of no sighting.
 STALE_AFTER_DAYS = 7
+
+# fix/ingest-lifecycle (audit HIGH #2): the warm-path cohort is swept WEEKLY,
+# not daily, so a 7-day floor leaves it ~0 margin — one missed/late/failed
+# Sunday sweep would wrongly close every warm-path posting. Give it a window
+# that spans a full week plus grace (and aligns with the warm_path_fresh
+# health window) so a single skipped sweep can't close the cohort.
+WARM_PATH_STALE_AFTER_DAYS = 10
 
 
 async def mark_stale_postings(
@@ -485,16 +510,48 @@ async def mark_stale_postings(
 
     Returns the number of rows newly marked closed.
     """
+    from sqlalchemy import or_
+
     now = datetime.now(tz=UTC)
     cutoff = now - timedelta(days=stale_after_days)
-    result = await session.execute(
+    warm_cutoff = now - timedelta(days=WARM_PATH_STALE_AFTER_DAYS)
+    # Warm-path postings = those whose matched company has source='warm_path'.
+    # Postings with no matched company (target_company_id NULL — the bulk) are
+    # never warm-path and stay on the daily cutoff. When the cohort is empty
+    # the warm UPDATE is a harmless no-op and the daily UPDATE behaves exactly
+    # as before this change.
+    warm_company_ids = (
+        select(TargetCompany.id).where(TargetCompany.source == "warm_path").scalar_subquery()
+    )
+
+    daily_result = await session.execute(
         update(JobPosting)
         .where(JobPosting.closed_at.is_(None))
         .where(JobPosting.last_seen_at < cutoff)
+        .where(
+            or_(
+                JobPosting.target_company_id.is_(None),
+                JobPosting.target_company_id.not_in(warm_company_ids),
+            )
+        )
+        .values(closed_at=now)
+    )
+    warm_result = await session.execute(
+        update(JobPosting)
+        .where(JobPosting.closed_at.is_(None))
+        .where(JobPosting.last_seen_at < warm_cutoff)
+        .where(JobPosting.target_company_id.in_(warm_company_ids))
         .values(closed_at=now)
     )
     await session.commit()
     # An UPDATE yields a CursorResult; .rowcount isn't on the base Result type.
-    marked = cast("CursorResult[Any]", result).rowcount or 0
-    logger.info("mark_stale_postings.done", marked=marked, stale_after_days=stale_after_days)
+    marked = (cast("CursorResult[Any]", daily_result).rowcount or 0) + (
+        cast("CursorResult[Any]", warm_result).rowcount or 0
+    )
+    logger.info(
+        "mark_stale_postings.done",
+        marked=marked,
+        stale_after_days=stale_after_days,
+        warm_path_stale_after_days=WARM_PATH_STALE_AFTER_DAYS,
+    )
     return marked

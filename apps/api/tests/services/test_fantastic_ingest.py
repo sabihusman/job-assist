@@ -173,3 +173,45 @@ async def test_warm_path_cohort_selected_by_source(db_session: Any) -> None:
 
     warm = {t.name for t in await list_fantastic_targets(db_session, source="warm_path")}
     assert warm == {"John Deere", "Mayo Clinic"}
+
+
+# ── fix/ingest-lifecycle (audit HIGH #2): no last_swept_at stamp on failure ──
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_failed_sweep_does_not_stamp_last_swept_at(db_session: Any, monkeypatch: Any) -> None:
+    """A FAILED per-employer run must leave last_swept_at stale, so a dead
+    Sunday sweep trips warm_path_fresh instead of reading green while the
+    employer's postings actually went un-refreshed."""
+    from job_assist.services import fantastic_ingest as fi
+    from job_assist.services.ingestion import IngestionService
+
+    co = TargetCompany(
+        name="DeadBoard", tier=None, ats="workday", domain="dead.com", source="warm_path"
+    )
+    db_session.add(co)
+    await db_session.commit()
+
+    class _Run:
+        def __init__(self, status: str) -> None:
+            self.status = status
+            self.postings_fetched = 0
+            self.postings_new = 0
+            self.postings_updated = 0
+
+    async def _fail(self: Any, adapter: Any, handle: Any, session: Any, **kw: Any) -> Any:
+        return _Run("failed")
+
+    monkeypatch.setattr(IngestionService, "ingest_source", _fail)
+    await fi.ingest_curated_via_fantastic(db_session, token="tok", source="warm_path")
+    await db_session.refresh(co)
+    assert co.last_swept_at is None, "failed run must NOT stamp last_swept_at"
+
+    async def _ok(self: Any, adapter: Any, handle: Any, session: Any, **kw: Any) -> Any:
+        return _Run("success")
+
+    monkeypatch.setattr(IngestionService, "ingest_source", _ok)
+    await fi.ingest_curated_via_fantastic(db_session, token="tok", source="warm_path")
+    await db_session.refresh(co)
+    assert co.last_swept_at is not None, "successful run stamps last_swept_at"
