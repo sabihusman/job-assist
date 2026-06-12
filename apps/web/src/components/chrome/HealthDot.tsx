@@ -33,7 +33,7 @@ const STATE_LABEL: Record<DotState, string> = {
 };
 
 const CHECK_LABELS: Record<keyof IngestHealth['checks'], string> = {
-  recent_success: 'Ingest ran recently',
+  curated_fresh: 'Curated cron fresh',
   no_hard_failures: 'No failed runs',
   broad_fresh: 'Broad-ingest fresh',
   not_starved: 'New roles flowing in',

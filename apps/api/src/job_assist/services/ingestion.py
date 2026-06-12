@@ -147,6 +147,15 @@ class IngestionService:
             run.postings_fetched = postings_fetched
             run.postings_new = postings_new
             run.postings_updated = postings_updated
+            # fix(audit per-pipeline health): stamp the sweep time on the
+            # company row for EVERY adapter path, not just the Apify one —
+            # the curated_fresh health check reads
+            # MAX(last_swept_at WHERE source='curated'), so the free-adapter
+            # daily cron must leave the same footprint fantastic_ingest does.
+            # Never stamped on a generic failure (see the except below) so a
+            # dead/erroring sweep still trips the freshness alarm.
+            if target_company is not None:
+                target_company.last_swept_at = datetime.now(tz=UTC)
             await session.commit()
 
             logger.info(
@@ -177,6 +186,11 @@ class IngestionService:
             run.postings_fetched = 0
             run.postings_new = 0
             run.postings_updated = 0
+            # The sweep DID visit this employer — a stale board (404) is
+            # surfaced via the run status, not via the stale-cohort alarm.
+            # Same contract as fantastic_ingest's status != 'failed' guard.
+            if target_company is not None:
+                target_company.last_swept_at = datetime.now(tz=UTC)
             await session.commit()
             logger.warning(
                 "ingestion.handle_not_found",

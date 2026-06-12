@@ -21,8 +21,12 @@ export type IngestHealth = {
   severity: HealthSeverity;
   problems: string[];
   checks: {
-    recent_success: boolean;
+    // fix(audit health split): per-pipeline freshness. curated_fresh replaced
+    // recent_success — pre-split, any broad/warm-path success masked a dead
+    // curated cron.
+    curated_fresh: boolean;
     no_hard_failures: boolean;
+    // Ran-without-error semantics: a weekly-cap no-op reads GREEN.
     broad_fresh: boolean;
     not_starved: boolean;
     // feat/llm-health: classifier ran in the last 24h AND embeddings aren't
@@ -39,7 +43,14 @@ export type IngestHealth = {
     last_success_at: string | null;
     failed_runs_recent: number;
     handle_not_found_recent: number;
+    // fix(audit health split): per-pipeline freshness metrics.
+    curated_companies: number;
+    curated_last_swept_at: string | null;
     broad_last_swept_at: string | null;
+    broad_qualified_this_week: number;
+    broad_weekly_cap: number;
+    broad_cap_met: boolean;
+    reclassify_pending: number;
     net_new_starvation_window: number;
     window_hours: number;
     starvation_days: number;

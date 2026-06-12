@@ -3997,18 +3997,26 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
 
     The ``ingest-health`` cron curls this daily and alerts when ``ok`` is false,
     so the operator never has to manually check whether crawling still works.
-    Four checks, each mapping to a real failure mode:
+    Per-pipeline checks (fix/audit health split — each cron gets its OWN
+    freshness check, so a dead curated cron goes red even while broad
+    succeeds), each mapping to a real failure mode:
 
-      * ``recent_success`` — a successful ``ingest_run`` finished within
-        ``_HEALTH_RECENT_HOURS`` (proves the daily curated cron actually ran).
+      * ``curated_fresh`` — a curated-cohort company was swept within
+        ``_HEALTH_RECENT_HOURS`` (MAX(last_swept_at) over source='curated';
+        proves the daily CURATED cron specifically ran). HARD/red.
       * ``no_hard_failures`` — zero ``failed`` runs in that window
         (``handle_not_found`` is a stale-board signal — surfaced, not a failure).
-      * ``broad_fresh`` — a ``discovered_handle`` was swept in that window
-        (proves the BROAD-ingest cron ran, not just the curated one).
+      * ``broad_fresh`` — the broad pipeline RAN WITHOUT ERROR: a
+        ``discovered_handle`` was swept in the window, OR the weekly qualified
+        cap is already met (the runner's cap no-op is healthy by design —
+        "did it find work" is the starvation check's job, not this one's).
+      * ``warm_path_fresh`` — the weekly alumni-cohort sweep ran within
+        ~9 days (its own cadence, its own check).
       * ``not_starved`` — at least ``_HEALTH_MIN_NEW_ROLES`` net-new postings over
         the last ``_HEALTH_STARVATION_DAYS`` (catches "the well ran dry").
-      * ``llm_healthy`` — the Gemini classifier sweep ran recently and embeddings
-        aren't piling up exhausted errors.
+      * ``llm_healthy`` — the classifier stamped recently OR its candidate
+        bucket is empty (a no-op day is GREEN — yellow only when work is
+        pending and nothing ran), AND embeddings aren't piling up errors.
       * ``gmail_healthy`` — a Gmail sweep started within ``_HEALTH_GMAIL_STALE_HOURS``
         and the last one didn't fail (metrics carry its runtime).
     """
@@ -4033,6 +4041,24 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
             select(func.max(IngestRun.finished_at)).where(IngestRun.status == "success")
         )
     ).scalar_one_or_none()
+    # fix(audit health split): the curated pipeline gets its OWN freshness
+    # check — pre-split, ANY successful ingest_run (broad, warm-path)
+    # satisfied "the daily curated cron ran", a false-green. Mirrors the
+    # warm_path_fresh pattern: MAX(last_swept_at) over the cohort, trivially
+    # healthy while the cohort is empty. Every adapter path stamps
+    # last_swept_at now (services/ingestion.py).
+    curated_count_raw, curated_last_swept = (
+        await db.execute(
+            select(
+                func.count(),
+                func.max(TargetCompany.last_swept_at),
+            ).where(TargetCompany.source == "curated")
+        )
+    ).one()
+    curated_count = int(curated_count_raw or 0)
+    curated_fresh = curated_count == 0 or (
+        curated_last_swept is not None and curated_last_swept >= recent_cutoff
+    )
     failed_recent = (
         await db.execute(
             select(func.count())
@@ -4052,6 +4078,18 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
     broad_last_swept = (
         await db.execute(select(func.max(DiscoveredHandle.last_ingested_at)))
     ).scalar_one_or_none()
+    # fix(audit health semantics): broad_fresh = the pipeline RAN WITHOUT
+    # ERROR. Once the weekly qualified cap is met, the runner no-ops by
+    # design and stamps nothing — pre-fix that false-alarmed yellow every
+    # day until the ISO week reset. Cap met ⇒ a run would have been a no-op
+    # anyway ⇒ GREEN. "Did it find work" stays the starvation check's job.
+    from job_assist.services.broad_ingest import (
+        _DEFAULT_WEEKLY_CAP,
+        count_qualified_broad_this_week,
+    )
+
+    broad_qualified_this_week = await count_qualified_broad_this_week(db)
+    broad_cap_met = broad_qualified_this_week >= _DEFAULT_WEEKLY_CAP
     net_new = (
         await db.execute(
             select(func.count())
@@ -4085,7 +4123,30 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
         )
     ).scalar_one() or 0
 
+    # fix(audit health semantics): the daily reclassify sweep only stamps
+    # classified_at when its candidate bucket (open rows the regex left as
+    # 'other'/'unknown') is non-empty — so a no-op day used to read
+    # "classifier stalled". Healthy = ran without error: a stale stamp is
+    # only a problem when there IS pending work the sweep should have taken.
+    # Mirrors the sweep's own only_unclassified WHERE clause.
+    from sqlalchemy import or_ as _or
+
+    reclassify_pending = (
+        await db.execute(
+            select(func.count())
+            .select_from(JobPosting)
+            .where(JobPosting.closed_at.is_(None))
+            .where(
+                _or(
+                    cast(JobPosting.role_family, Text) == "other",
+                    cast(JobPosting.seniority_level, Text) == "unknown",
+                )
+            )
+        )
+    ).scalar_one() or 0
+
     classifier_fresh = last_classified is not None and last_classified >= llm_stale_cutoff
+    classifier_idle_ok = reclassify_pending == 0
     llm_failing = llm_errors > 0
     llm_hard_down = llm_errors >= _HEALTH_LLM_HARD_ERRORS
 
@@ -4132,14 +4193,21 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
     )
 
     checks = {
-        "recent_success": last_success is not None and last_success >= recent_cutoff,
+        # fix(audit health split): per-pipeline freshness — the curated cron's
+        # own check (HARD). Pre-split, any broad/warm-path success satisfied
+        # the old recent_success and a dead curated cron read green.
+        "curated_fresh": curated_fresh,
         "no_hard_failures": failed_recent == 0,
-        "broad_fresh": broad_last_swept is not None and broad_last_swept >= recent_cutoff,
+        # fix(audit health semantics): swept in-window OR weekly cap met
+        # (cap no-op = ran-without-error = green).
+        "broad_fresh": broad_cap_met
+        or (broad_last_swept is not None and broad_last_swept >= recent_cutoff),
         "not_starved": net_new >= _HEALTH_MIN_NEW_ROLES,
-        # feat/llm-health: the classifier sweep ran in the last 24h AND embeddings
-        # aren't piling up exhausted errors. Soft (yellow) unless errors are
-        # severe (hard_down below escalates to red).
-        "llm_healthy": classifier_fresh and not llm_failing,
+        # feat/llm-health + fix(audit health semantics): fresh stamp OR empty
+        # candidate bucket (a no-op day is green), AND embeddings aren't
+        # piling up exhausted errors. Soft (yellow) unless errors are severe
+        # (hard_down below escalates to red).
+        "llm_healthy": (classifier_fresh or classifier_idle_ok) and not llm_failing,
         # feat/gmail-health-check: a Gmail sweep started within the last 13h AND
         # the last one didn't fail. Soft (yellow) — a secondary feed stalling
         # shouldn't red the dot.
@@ -4149,18 +4217,20 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
         "warm_path_fresh": warm_path_fresh,
     }
     messages = {
-        "recent_success": f"no successful ingest_run in the last {_HEALTH_RECENT_HOURS}h "
-        f"(last success: {last_success})",
+        "curated_fresh": f"curated cron has not swept in the last {_HEALTH_RECENT_HOURS}h "
+        f"({curated_count} curated companies; last swept: {curated_last_swept})",
         "no_hard_failures": f"{failed_recent} failed ingest_run(s) in the last "
         f"{_HEALTH_RECENT_HOURS}h",
         "broad_fresh": f"broad-ingest has not swept in the last {_HEALTH_RECENT_HOURS}h "
-        f"(last sweep: {broad_last_swept})",
+        f"(last sweep: {broad_last_swept}; {broad_qualified_this_week}/{_DEFAULT_WEEKLY_CAP} "
+        f"qualified this week — under cap, so the cron should have run)",
         "not_starved": f"starvation: only {net_new} net-new posting(s) in the last "
         f"{_HEALTH_STARVATION_DAYS} days",
         "llm_healthy": (
             f"classifier sweep has not run in the last {_HEALTH_LLM_STALE_HOURS}h "
+            f"with {reclassify_pending} candidate row(s) pending "
             f"(LLM last used: {llm_last_used})"
-            if not classifier_fresh
+            if not (classifier_fresh or classifier_idle_ok)
             else f"LLM calls are failing: {llm_errors} postings exhausted their embedding attempts"
         ),
         "gmail_healthy": (
@@ -4184,7 +4254,9 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
     # feat/llm-health: a stale classifier or some failing LLM calls are SOFT
     # (yellow); a large pile of exhausted embedding errors is a hard LLM outage
     # (red).
-    hard_down = not checks["recent_success"] or not checks["no_hard_failures"] or llm_hard_down
+    # fix(audit health split): a dead CURATED cron is hard/red — even while
+    # broad and warm-path succeed.
+    hard_down = not checks["curated_fresh"] or not checks["no_hard_failures"] or llm_hard_down
     soft_degraded = (
         not checks["not_starved"]
         or not checks["broad_fresh"]
@@ -4205,7 +4277,16 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
             "last_success_at": last_success.isoformat() if last_success else None,
             "failed_runs_recent": failed_recent,
             "handle_not_found_recent": not_found_recent,
+            # fix(audit health split): per-pipeline freshness metrics.
+            "curated_companies": curated_count,
+            "curated_last_swept_at": (
+                curated_last_swept.isoformat() if curated_last_swept else None
+            ),
             "broad_last_swept_at": broad_last_swept.isoformat() if broad_last_swept else None,
+            "broad_qualified_this_week": broad_qualified_this_week,
+            "broad_weekly_cap": _DEFAULT_WEEKLY_CAP,
+            "broad_cap_met": broad_cap_met,
+            "reclassify_pending": reclassify_pending,
             "net_new_starvation_window": net_new,
             "window_hours": _HEALTH_RECENT_HOURS,
             "starvation_days": _HEALTH_STARVATION_DAYS,
