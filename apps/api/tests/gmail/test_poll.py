@@ -196,3 +196,55 @@ def test_unused_imports_smoke() -> None:
     # ruff's F401 doesn't flag them.
     assert ClassificationResult.__name__ == "ClassificationResult"
     assert RawEmail.__name__ == "RawEmail"
+
+
+@_NEEDS_DB
+async def test_poll_clamps_future_watermark_and_flags_anomaly(db_session: Any) -> None:
+    """fix/gmail-watermark: a pre-existing future-dated outcome_event must NOT
+    freeze the poll. The watermark is clamped to ~now (so after: matches real
+    mail) and report.watermark_in_future is set so the sweep reads unhealthy."""
+    future = datetime.now(tz=UTC) + timedelta(days=3650)  # decade in the future
+    db_session.add(
+        OutcomeEvent(
+            email_message_id="future_dated_spam",
+            from_address="spam@x.com",
+            from_domain="x.com",
+            subject="You won",
+            received_at=future,
+            outcome_type="unrelated",
+            classifier_version="gemini-flash-lite-v1",
+        )
+    )
+    await db_session.commit()
+
+    new_email = _email("msg_after_clamp", from_address="hr@realco.com")
+    gmail = _FakeGmail([new_email])
+    classifier = _FakeClassifier({"msg_after_clamp": _verdict("application_confirmation")})
+
+    before = datetime.now(tz=UTC)
+    report = await run_poll(db_session, gmail, classifier)
+
+    assert report.watermark_in_future is True
+    # Watermark used is clamped to ~now, NOT the decade-ahead value.
+    assert report.watermark_used is not None
+    assert report.watermark_used <= datetime.now(tz=UTC)
+    assert report.watermark_used >= before - timedelta(seconds=5)
+    # after:<clamped-now> still lets real new mail through.
+    parsed = _after_seconds(gmail.list_queries[0])
+    assert parsed is not None and parsed <= int(datetime.now(tz=UTC).timestamp())
+    assert report.outcome_events_inserted == 1  # the real message still ingests
+
+
+def test_sweep_handle_flags_future_watermark_as_failed_anomaly() -> None:
+    """fix/gmail-watermark: set_counts on a report with watermark_in_future sets
+    the anomaly, so the sweep finalizes 'failed' (gmail_healthy surfaces it)."""
+    from job_assist.gmail.models import BackfillReport
+    from job_assist.services.gmail_sweep_run import SweepHandle
+
+    h = SweepHandle(run_id=__import__("uuid").uuid4())
+    h.set_counts(BackfillReport(outcome_events_inserted=0, watermark_in_future=True))
+    assert h.anomaly is not None and "future" in h.anomaly
+
+    h2 = SweepHandle(run_id=__import__("uuid").uuid4())
+    h2.set_counts(BackfillReport(outcome_events_inserted=3))
+    assert h2.anomaly is None
