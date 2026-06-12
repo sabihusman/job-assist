@@ -11,7 +11,7 @@ function makeHealth(over: Partial<IngestHealth> = {}): IngestHealth {
     severity: 'ok',
     problems: [],
     checks: {
-      recent_success: true,
+      curated_fresh: true,
       no_hard_failures: true,
       broad_fresh: true,
       not_starved: true,
@@ -23,7 +23,13 @@ function makeHealth(over: Partial<IngestHealth> = {}): IngestHealth {
       last_success_at: '2026-06-07T22:00:00Z',
       failed_runs_recent: 0,
       handle_not_found_recent: 0,
+      curated_companies: 30,
+      curated_last_swept_at: '2026-06-07T22:00:00Z',
       broad_last_swept_at: '2026-06-07T21:00:00Z',
+      broad_qualified_this_week: 12,
+      broad_weekly_cap: 100,
+      broad_cap_met: false,
+      reclassify_pending: 0,
       net_new_starvation_window: 12,
       window_hours: 26,
       starvation_days: 3,
@@ -54,7 +60,7 @@ describe('HealthDotView', () => {
 
     await userEvent.click(dot);
     expect(screen.getByTestId('health-popover')).toBeInTheDocument();
-    expect(screen.getByTestId('health-check-recent_success')).toHaveAttribute('data-pass', 'true');
+    expect(screen.getByTestId('health-check-curated_fresh')).toHaveAttribute('data-pass', 'true');
     expect(screen.getByTestId('health-check-not_starved')).toHaveAttribute('data-pass', 'true');
   });
 
@@ -64,7 +70,7 @@ describe('HealthDotView', () => {
       severity: 'degraded',
       problems: ['starvation: only 0 net-new posting(s) in the last 3 days'],
       checks: {
-        recent_success: true,
+        curated_fresh: true,
         no_hard_failures: true,
         broad_fresh: true,
         not_starved: false,
@@ -80,7 +86,7 @@ describe('HealthDotView', () => {
 
     await userEvent.click(dot);
     expect(screen.getByTestId('health-check-not_starved')).toHaveAttribute('data-pass', 'false');
-    expect(screen.getByTestId('health-check-recent_success')).toHaveAttribute('data-pass', 'true');
+    expect(screen.getByTestId('health-check-curated_fresh')).toHaveAttribute('data-pass', 'true');
   });
 
   test('RED: down state → red dot, hard check failing', async () => {
@@ -89,7 +95,7 @@ describe('HealthDotView', () => {
       severity: 'down',
       problems: ['1 failed ingest_run(s) in the last 26h'],
       checks: {
-        recent_success: true,
+        curated_fresh: true,
         no_hard_failures: false,
         broad_fresh: true,
         not_starved: true,
@@ -116,7 +122,7 @@ describe('HealthDotView', () => {
       severity: 'degraded',
       problems: ['Gmail sweep has not run in the last 13h (last sweep: None)'],
       checks: {
-        recent_success: true,
+        curated_fresh: true,
         no_hard_failures: true,
         broad_fresh: true,
         not_starved: true,
@@ -175,7 +181,7 @@ describe('HealthDotView', () => {
       severity: 'degraded',
       problems: ['classifier sweep has not run in the last 24h'],
       checks: {
-        recent_success: true,
+        curated_fresh: true,
         no_hard_failures: true,
         broad_fresh: true,
         not_starved: true,

@@ -139,6 +139,74 @@ async def test_handle_not_found_is_recorded_as_distinct_status(db_session: Any) 
     assert "ghost-handle" in (run.error_message or "")
 
 
+# ── last_swept_at stamping (fix/audit per-pipeline health) ────────────────────
+
+
+@_NEEDS_DB
+async def test_ingest_source_stamps_last_swept_at_on_success(db_session: Any) -> None:
+    """A successful run stamps the resolved company's last_swept_at — the
+    curated_fresh health check reads MAX(last_swept_at WHERE source='curated'),
+    so the free-adapter daily cron must leave the same footprint the Apify
+    path does."""
+    from job_assist.db.models.target_company import TargetCompany
+
+    tc = TargetCompany(
+        name="StampCo",
+        tier=1,
+        ats="greenhouse",  # type: ignore[arg-type]
+        ats_handle="stripe",
+        domain="stampco.com",
+        source="curated",
+        last_swept_at=None,
+    )
+    db_session.add(tc)
+    await db_session.commit()
+
+    service = IngestionService()
+    run = await service.ingest_source(_make_adapter(), "stripe", db_session)
+    assert run.status == "success"
+
+    await db_session.refresh(tc)
+    assert tc.last_swept_at is not None
+
+
+@_NEEDS_DB
+async def test_ingest_source_does_not_stamp_last_swept_at_on_failure(db_session: Any) -> None:
+    """A FAILED run must NOT stamp last_swept_at — otherwise a dead/erroring
+    sweep keeps the curated_fresh alarm green (same contract PR #196 pinned
+    for the Apify path)."""
+    from job_assist.db.models.target_company import TargetCompany
+
+    class _BoomAdapter:
+        ats = "greenhouse"
+        parser_version = "stub-v1"
+
+        async def fetch_postings(self, handle: str) -> list[Any]:
+            raise RuntimeError("simulated board failure")
+
+        def normalize(self, raw: Any, canonical_company_name: str) -> Any:
+            raise AssertionError("normalize should never be called when fetch raises")
+
+    tc = TargetCompany(
+        name="BoomCo",
+        tier=1,
+        ats="greenhouse",  # type: ignore[arg-type]
+        ats_handle="boomco",
+        domain="boomco.com",
+        source="curated",
+        last_swept_at=None,
+    )
+    db_session.add(tc)
+    await db_session.commit()
+
+    service = IngestionService()
+    run = await service.ingest_source(_BoomAdapter(), "boomco", db_session)  # type: ignore[arg-type]
+    assert run.status == "failed"
+
+    await db_session.refresh(tc)
+    assert tc.last_swept_at is None
+
+
 # ── Salary self-heal on re-ingest (Greenhouse salary fix) ─────────────────────
 
 

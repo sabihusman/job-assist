@@ -56,6 +56,9 @@ def _posting(
     embedded_hours_ago: float | None = None,
     embedding_error: str | None = None,
     embedding_attempt_count: int = 0,
+    role_family: str = "product_management",
+    fit_score: int | None = None,
+    target_company_id: Any = None,
 ) -> JobPosting:
     now = datetime.now(tz=UTC)
     seen = now - timedelta(days=first_seen_days_ago)
@@ -65,7 +68,7 @@ def _posting(
         normalized_title="senior product manager",
         raw_title="Senior Product Manager",
         remote_type="remote",  # type: ignore[arg-type]
-        role_family="product_management",  # type: ignore[arg-type]
+        role_family=role_family,  # type: ignore[arg-type]
         seniority_level="senior_pm",  # type: ignore[arg-type]
         jd_text="JD",
         jd_text_hash="0" * 64,
@@ -80,6 +83,24 @@ def _posting(
         ),
         embedding_error=embedding_error,
         embedding_attempt_count=embedding_attempt_count,
+        fit_score=fit_score,
+        target_company_id=target_company_id,
+    )
+
+
+def _curated_company(*, swept_hours_ago: float | None, name_suffix: str = "") -> Any:
+    """A curated-cohort company row — drives the curated_fresh check."""
+    from job_assist.db.models import TargetCompany
+
+    now = datetime.now(tz=UTC)
+    return TargetCompany(
+        name=f"CuratedCo{name_suffix or uuid.uuid4().hex[:6]}",
+        tier=1,
+        ats="greenhouse",  # type: ignore[arg-type]
+        ats_handle=f"curated-{uuid.uuid4().hex[:8]}",
+        domain="curatedco.com",
+        source="curated",
+        last_swept_at=(None if swept_hours_ago is None else now - timedelta(hours=swept_hours_ago)),
     )
 
 
@@ -108,10 +129,12 @@ async def _health(client: AsyncClient) -> dict[str, Any]:
 
 
 def _healthy_fixtures() -> list[Any]:
-    """A fully-healthy world: a recent successful run, a fresh broad sweep,
-    net-new postings inside the starvation window, a recent classifier run
-    (so the LLM check passes), and a recent successful Gmail sweep."""
+    """A fully-healthy world: a freshly-swept curated company, a recent
+    successful run, a fresh broad sweep, net-new postings inside the
+    starvation window, a recent classifier run (so the LLM check passes),
+    and a recent successful Gmail sweep."""
     return [
+        _curated_company(swept_hours_ago=2),
         _run(status="success", finished_hours_ago=2, started_hours_ago=2.1),
         _handle(last_ingested_hours_ago=2),
         _posting(first_seen_days_ago=0.5, classified_hours_ago=2),
@@ -195,21 +218,85 @@ async def test_stale_broad_sweep_flags_not_ok(db_session: Any) -> None:
 
 @_NEEDS_DB
 @pytest.mark.asyncio
-async def test_no_recent_success_flags_not_ok(db_session: Any) -> None:
-    """Last success was 3 days ago → recent_success fails (cron stopped running)."""
+async def test_broad_cap_met_noop_is_green(db_session: Any, monkeypatch: Any) -> None:
+    """fix(audit health semantics): once the weekly qualified cap is met the
+    broad runner no-ops by design and stamps nothing — that must read GREEN
+    (ran without error), not yellow-until-the-ISO-week-resets."""
+    from job_assist.main import app
+    from job_assist.services import broad_ingest
+
+    # Cap of 1 so a single qualified broad posting meets it.
+    monkeypatch.setattr(broad_ingest, "_DEFAULT_WEEKLY_CAP", 1)
+
+    # A broad shell company (tier=NULL) with one qualified posting THIS week.
+    shell = _warm_company(swept_days_ago=1)  # tier=None — counts as broad shell
+    shell.source = "broad"
+    db_session.add(shell)
+    await db_session.flush()
+    # first_seen NOW (0 days ago) so the row is unambiguously inside the
+    # current ISO week even when CI runs just after Monday midnight UTC.
+    db_session.add(_posting(first_seen_days_ago=0.0, fit_score=95, target_company_id=shell.id))
+
+    db_session.add(_run(status="success", finished_hours_ago=2, started_hours_ago=2.1))
+    db_session.add(_handle(last_ingested_hours_ago=72))  # STALE — cap is what saves it
+    db_session.add(_posting(first_seen_days_ago=0.5, classified_hours_ago=2))
+    db_session.add(_gmail_sweep(started_hours_ago=2))
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["checks"]["broad_fresh"] is True, h["problems"]
+    assert h["metrics"]["broad_cap_met"] is True
+    assert h["metrics"]["broad_qualified_this_week"] >= 1
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_dead_curated_cron_goes_red_even_while_broad_succeeds(db_session: Any) -> None:
+    """fix(audit health split): the headline case. The curated cohort was last
+    swept 3 days ago while the BROAD pipeline is perfectly fresh (recent
+    successful run + fresh discovered-handle sweep + net-new postings).
+    Pre-split, the old recent_success check read any success as 'the daily
+    curated cron ran' — a false green. Now: curated_fresh is its own HARD
+    check and the dot goes RED."""
     from job_assist.main import app
 
-    db_session.add(_run(status="success", finished_hours_ago=72, started_hours_ago=72.1))
-    db_session.add(_handle(last_ingested_hours_ago=2))
-    db_session.add(_posting(first_seen_days_ago=0.5))
+    db_session.add(_curated_company(swept_hours_ago=72))  # curated cron dead
+    db_session.add(_run(status="success", finished_hours_ago=2, started_hours_ago=2.1))
+    db_session.add(_handle(last_ingested_hours_ago=2))  # broad fresh
+    db_session.add(_posting(first_seen_days_ago=0.5, classified_hours_ago=2))
+    db_session.add(_gmail_sweep(started_hours_ago=2))
     await db_session.commit()
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
         h = await _health(client)
 
     assert h["ok"] is False
-    assert h["severity"] == "down"  # cron stopped running is a HARD problem → red
-    assert h["checks"]["recent_success"] is False
+    assert h["severity"] == "down"  # dead curated cron is a HARD problem → red
+    assert h["checks"]["curated_fresh"] is False
+    assert h["checks"]["broad_fresh"] is True  # broad succeeding must NOT mask it
+    assert any("curated cron" in p for p in h["problems"])
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_curated_fresh_trivially_true_when_cohort_empty(db_session: Any) -> None:
+    """Zero curated companies (e.g. a fresh DB) → curated_fresh passes,
+    mirroring the warm_path_fresh empty-cohort contract."""
+    from job_assist.main import app
+
+    db_session.add(_run(status="success", finished_hours_ago=2, started_hours_ago=2.1))
+    db_session.add(_handle(last_ingested_hours_ago=2))
+    db_session.add(_posting(first_seen_days_ago=0.5, classified_hours_ago=2))
+    db_session.add(_gmail_sweep(started_hours_ago=2))
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["checks"]["curated_fresh"] is True
+    assert h["metrics"]["curated_companies"] == 0
 
 
 @_NEEDS_DB
@@ -237,13 +324,16 @@ async def test_handle_not_found_is_not_a_hard_failure(db_session: Any) -> None:
 
 @_NEEDS_DB
 @pytest.mark.asyncio
-async def test_stale_classifier_flags_degraded(db_session: Any) -> None:
-    """Ingest is healthy, but the classifier sweep last ran >24h ago → YELLOW."""
+async def test_stale_classifier_with_pending_work_flags_degraded(db_session: Any) -> None:
+    """Classifier last stamped >24h ago AND its candidate bucket (open
+    'other'/'unknown' rows) is non-empty → the sweep should have run → YELLOW."""
     from job_assist.main import app
 
     db_session.add(_run(status="success", finished_hours_ago=2, started_hours_ago=2.1))
     db_session.add(_handle(last_ingested_hours_ago=2))
-    db_session.add(_posting(first_seen_days_ago=0.5, classified_hours_ago=30))  # >24h
+    # Stale stamp AND a pending candidate (role_family='other' = the
+    # reclassify sweep's only_unclassified bucket).
+    db_session.add(_posting(first_seen_days_ago=0.5, classified_hours_ago=30, role_family="other"))
     await db_session.commit()
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
@@ -253,6 +343,29 @@ async def test_stale_classifier_flags_degraded(db_session: Any) -> None:
     assert h["severity"] == "degraded"  # stale LLM is a SOFT problem → yellow
     assert h["checks"]["llm_healthy"] is False
     assert any("classifier sweep" in p for p in h["problems"])
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_stale_classifier_with_empty_bucket_is_green(db_session: Any) -> None:
+    """fix(audit health semantics): a no-op day is GREEN. The reclassify sweep
+    only stamps classified_at when its candidate bucket is non-empty — a stale
+    stamp with NOTHING pending used to false-alarm 'classifier stalled'."""
+    from job_assist.main import app
+
+    db_session.add(_run(status="success", finished_hours_ago=2, started_hours_ago=2.1))
+    db_session.add(_handle(last_ingested_hours_ago=2))
+    db_session.add(_gmail_sweep(started_hours_ago=2))
+    # Stale stamp, but the row is fully classified (NOT in the bucket).
+    db_session.add(_posting(first_seen_days_ago=0.5, classified_hours_ago=30))
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["checks"]["llm_healthy"] is True, h["problems"]
+    assert h["metrics"]["reclassify_pending"] == 0
+    assert h["severity"] == "ok"
 
 
 @_NEEDS_DB
