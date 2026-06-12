@@ -47,6 +47,11 @@ const VALID_FAMILY = new Set<RoleFamilyWire>([
   'product_owner',
   'product_marketing',
   'program_management',
+  // feat/strategy-spine: without this, parseFilters strips ?role_family=
+  // strategy_ops back out, so the Strategy/Ops chip was a no-op (the queue
+  // fell back to the pm_only PM/PO list) and the xlsx export diverged from
+  // the visible list. Keep in lockstep with FAMILY_CHIPS / RoleFamilyWire.
+  'strategy_ops',
   'other',
 ]);
 const VALID_STATE = new Set<StateFilter>([
