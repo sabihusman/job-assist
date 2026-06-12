@@ -1,6 +1,6 @@
 'use client';
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { api } from '@/lib/api/client';
 import { MutationError, extractDetail } from '@/lib/api/mutation-error';
@@ -92,6 +92,56 @@ export function useTriagePostings(filters: TriageFilters, enabled = true) {
   });
 }
 
+// Per-page size for the infinite triage list. 100 = the backend's max
+// ``limit`` (main.py enforces 1..100), so Load More walks the queue in the
+// fewest round-trips.
+const TRIAGE_PAGE_SIZE = 100;
+
+/**
+ * Paginated triage list as an accumulating ``useInfiniteQuery``
+ * (fix/audit #5). The previous Load More used a single second
+ * ``useTriagePostings`` slot keyed on a moving ``offset`` — so the second
+ * Load More click REPLACED the first extra window instead of appending,
+ * silently dropping the middle page (rows 100–199 vanished on the way to
+ * 200–299). This pages by offset and renders the flattened accumulation,
+ * matching the contacts list (``useContacts``).
+ *
+ * The cache key OMITS limit/offset (they vary per page); changing any
+ * filter chip still invalidates because the rest of the serialized filter
+ * set is in the key. Returns the raw infinite-query object plus convenience
+ * ``items`` (flattened) and ``total`` (server-reported full count).
+ */
+export function useTriagePostingsInfinite(filters: TriageFilters) {
+  // toQuery always stamps limit/offset; strip them so they don't enter the
+  // cache key — pagination is driven by pageParam below, not the filter.
+  const { limit: _limit, offset: _offset, ...filterQuery } = toQuery(filters);
+  const query = useInfiniteQuery({
+    queryKey: queryKeys.postings(filterQuery),
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) => {
+      const { data, error } = await api.GET('/postings', {
+        params: {
+          query: { ...filterQuery, limit: TRIAGE_PAGE_SIZE, offset: pageParam } as never,
+        },
+      });
+      if (error) throw error;
+      return data as unknown as PostingsListResponse;
+    },
+    // Next offset = rows loaded so far; undefined once we've reached total
+    // (Load More then hides).
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((n, page) => n + page.items.length, 0);
+      return loaded < lastPage.total ? loaded : undefined;
+    },
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+  });
+
+  const items = query.data?.pages.flatMap((page) => page.items) ?? [];
+  const total = query.data?.pages[0]?.total ?? 0;
+  return { ...query, items, total };
+}
+
 /** Single posting detail with division + state_history. */
 export function usePosting(id: string | null) {
   return useQuery({
@@ -180,6 +230,26 @@ export function toStateRequestBody(
   return { action_type, reason, snooze_until, notes, resume_version_id };
 }
 
+// ── Cache-shape guards for optimistic removal ───────────────────────────
+//
+// The ``['postings', ...]`` cache holds TWO shapes now: flat
+// ``PostingsListResponse`` (the count + applied-subtitle queries) and the
+// ``useInfiniteQuery`` envelope ``{ pages, pageParams }`` (the main triage
+// list, fix/audit #5). The optimistic-removal loops below must drop the
+// acted-on row from EITHER, or a passed/applied card lingers in the infinite
+// list until the settle-refetch (a visible UX regression from the instant
+// removal the flat list always had).
+
+type InfinitePostings = { pages: PostingsListResponse[]; pageParams: unknown[] };
+
+function isFlatPostings(v: unknown): v is PostingsListResponse {
+  return typeof v === 'object' && v !== null && Array.isArray((v as { items?: unknown }).items);
+}
+
+function isInfinitePostings(v: unknown): v is InfinitePostings {
+  return typeof v === 'object' && v !== null && Array.isArray((v as { pages?: unknown }).pages);
+}
+
 /**
  * Record an operator action. Optimistically removes the posting from
  * any cached triage list (cards that just transitioned out of triage
@@ -217,30 +287,44 @@ export function useRecordAction() {
 
       // Snapshot every cached `['postings', ...]` query so we can
       // roll back if the POST fails.
-      const snapshots = qc.getQueriesData<PostingsListResponse>({
-        queryKey: ['postings'],
-      });
+      // Untyped: entries are EITHER flat PostingsListResponse (count/applied
+      // queries) or the useInfiniteQuery envelope (the main list). The guards
+      // below narrow each; a single type param would mis-narrow the infinite
+      // branch to ``never``.
+      const snapshots = qc.getQueriesData({ queryKey: ['postings'] });
 
       for (const [key, prev] of snapshots) {
         if (!prev) continue;
-        // Bestiary 5.12: defense-in-depth shape guard. The primary fix
-        // is that ``useSavedFilterCount`` no longer shares the
-        // ``['postings', ...]`` cache key, so this loop only sees
-        // ``PostingsListResponse`` entries. But if a future hook ever
-        // lands under this prefix with a different shape, we skip it
-        // here instead of crashing on ``prev.items.filter``.
-        if (typeof prev !== 'object' || !('items' in prev) || !Array.isArray(prev.items)) continue;
         // Drop the acted-on posting from the cached list and bump the
         // total down by one. We don't try to be clever about which
         // filters this affects — list views consume their own filter,
         // and the user has just made a decision that moves the card
         // out of whatever bucket they were looking at.
-        const next: PostingsListResponse = {
-          ...prev,
-          total: Math.max(0, prev.total - 1),
-          items: prev.items.filter((p) => p.id !== vars.postingId),
-        };
-        qc.setQueryData(key, next);
+        //
+        // Bestiary 5.12: only the two shapes below are touched. A future
+        // hook landing under ``['postings', ...]`` with a third shape is
+        // skipped, not crashed on.
+        if (isFlatPostings(prev)) {
+          const next: PostingsListResponse = {
+            ...prev,
+            total: Math.max(0, prev.total - 1),
+            items: prev.items.filter((p) => p.id !== vars.postingId),
+          };
+          qc.setQueryData(key, next);
+        } else if (isInfinitePostings(prev)) {
+          // fix/audit #5: same removal across every loaded page of the
+          // infinite triage list. All pages carry the same server total,
+          // so decrement each by one to keep them consistent.
+          const next: InfinitePostings = {
+            ...prev,
+            pages: prev.pages.map((page) => ({
+              ...page,
+              total: Math.max(0, page.total - 1),
+              items: page.items.filter((p) => p.id !== vars.postingId),
+            })),
+          };
+          qc.setQueryData(key, next);
+        }
       }
 
       return { snapshots };
@@ -314,18 +398,36 @@ export function useBulkRecordAction() {
     },
     onMutate: async (vars) => {
       await qc.cancelQueries({ queryKey: ['postings'] });
-      const snapshots = qc.getQueriesData<PostingsListResponse>({ queryKey: ['postings'] });
+      const snapshots = qc.getQueriesData({ queryKey: ['postings'] });
       const idSet = new Set(vars.postingIds);
       for (const [key, prev] of snapshots) {
         if (!prev) continue;
-        if (typeof prev !== 'object' || !('items' in prev) || !Array.isArray(prev.items)) continue;
-        const removed = prev.items.filter((p) => idSet.has(p.id)).length;
-        const next: PostingsListResponse = {
-          ...prev,
-          total: Math.max(0, prev.total - removed),
-          items: prev.items.filter((p) => !idSet.has(p.id)),
-        };
-        qc.setQueryData(key, next);
+        if (isFlatPostings(prev)) {
+          const removed = prev.items.filter((p) => idSet.has(p.id)).length;
+          const next: PostingsListResponse = {
+            ...prev,
+            total: Math.max(0, prev.total - removed),
+            items: prev.items.filter((p) => !idSet.has(p.id)),
+          };
+          qc.setQueryData(key, next);
+        } else if (isInfinitePostings(prev)) {
+          // fix/audit #5: removed cards can span several loaded pages — sum
+          // across all of them, then drop that count from every page's total
+          // (all pages carry the same full count).
+          const totalRemoved = prev.pages.reduce(
+            (n, page) => n + page.items.filter((p) => idSet.has(p.id)).length,
+            0,
+          );
+          const next: InfinitePostings = {
+            ...prev,
+            pages: prev.pages.map((page) => ({
+              ...page,
+              total: Math.max(0, page.total - totalRemoved),
+              items: page.items.filter((p) => !idSet.has(p.id)),
+            })),
+          };
+          qc.setQueryData(key, next);
+        }
       }
       return { snapshots };
     },

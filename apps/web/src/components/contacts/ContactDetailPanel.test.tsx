@@ -168,6 +168,55 @@ describe('ContactDetailPanel', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  // ── fix/audit #3: switching contacts mid-edit must NOT carry edits over ───
+  //
+  // ContactEditForm holds its in-progress edits in local state. Without a
+  // ``key={contact.id}`` on the form, React reused the instance across a
+  // contact switch, so an unsaved edit to contact A lingered on the form and
+  // could be PATCHed onto contact B. The key forces a remount → fresh state.
+  test('unsaved edits do not leak when the selected contact changes', async () => {
+    const user = userEvent.setup();
+    // Detail GET branches on the requested contact id; outreach stays empty.
+    getMock.mockImplementation(
+      async (path: string, opts: { params: { path?: { contact_id?: string } } }) => {
+        if (path === '/contacts/{contact_id}/outreach') {
+          return {
+            data: { total: 0, offset: 0, limit: 50, items: [] },
+            error: null,
+            response: new Response(null, { status: 200 }),
+          };
+        }
+        const id = opts.params.path?.contact_id ?? 'c-1';
+        const position = id === 'c-2' ? 'Beta PM' : 'Alpha PM';
+        return {
+          data: makeDetail({ id, current_position: position }),
+          error: null,
+          response: new Response(null, { status: 200 }),
+        };
+      },
+    );
+
+    const { rerender } = render(wrap(<ContactDetailPanel contactId="c-1" onClose={() => {}} />));
+    const positionA = await screen.findByLabelText(/current position/i);
+    await waitFor(() => expect(positionA).toHaveValue('Alpha PM'));
+
+    // Edit contact A's position but DON'T save.
+    await user.clear(positionA);
+    await user.type(positionA, 'Alpha PM (edited, unsaved)');
+
+    // Switch to contact B.
+    rerender(wrap(<ContactDetailPanel contactId="c-2" onClose={() => {}} />));
+
+    // The form remounted on the new id → shows B's value, not A's stale edit.
+    const positionB = await screen.findByLabelText(/current position/i);
+    await waitFor(() => expect(positionB).toHaveValue('Beta PM'));
+    expect(positionB).not.toHaveValue('Alpha PM (edited, unsaved)');
+
+    // Fresh form is not dirty → Save disabled → no cross-contact PATCH.
+    expect(screen.getByRole('button', { name: /save contact changes/i })).toBeDisabled();
+    expect(patchMock).not.toHaveBeenCalled();
+  });
+
   test('shows error state when contact GET fails', async () => {
     getMock.mockImplementation(async () => ({
       data: null,

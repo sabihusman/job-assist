@@ -296,4 +296,89 @@ describe('DetailPanel', () => {
     wrap(<DetailPanel selectedId={'p-detail-1'} onClose={() => {}} onAction={() => {}} />);
     expect(panel().queryByTestId('gmail-outcome-link')).not.toBeInTheDocument();
   });
+
+  // ── fix/audit #4: in-panel reason picker reports its open state up ─────────
+  //
+  // The DetailPanel has its OWN reason picker, separate from the list-card
+  // one the page already tracked. Without surfacing its open state, a
+  // keypress while the picker is open fired BOTH the picker handler AND the
+  // page's triage shortcut (double action). The page gates its keyboard on
+  // this callback, so it must flip true on open and false on
+  // close/select/unmount.
+
+  test('reports reason-picker open via onReasonOpenChange when Pass is clicked', () => {
+    mockState.data = makeDetail();
+    const onReasonOpenChange = vi.fn();
+    wrap(
+      <DetailPanel
+        selectedId={'p-detail-1'}
+        onClose={() => {}}
+        onAction={() => {}}
+        onReasonOpenChange={onReasonOpenChange}
+      />,
+    );
+    // Mount effect reports the initial closed state.
+    expect(onReasonOpenChange).toHaveBeenLastCalledWith(false);
+
+    fireEvent.click(panel().getByRole('button', { name: /pass/i, hidden: true }));
+    expect(onReasonOpenChange).toHaveBeenLastCalledWith(true);
+
+    // The picker (fieldset aria-label="Reason") is now mounted.
+    expect(panel().getByRole('group', { name: /reason/i, hidden: true })).toBeInTheDocument();
+  });
+
+  test('reports closed again after a reason is picked', () => {
+    mockState.data = makeDetail();
+    const onReasonOpenChange = vi.fn();
+    const onAction = vi.fn();
+    wrap(
+      <DetailPanel
+        selectedId={'p-detail-1'}
+        onClose={() => {}}
+        onAction={onAction}
+        onReasonOpenChange={onReasonOpenChange}
+      />,
+    );
+    fireEvent.click(panel().getByRole('button', { name: /pass/i, hidden: true }));
+    expect(onReasonOpenChange).toHaveBeenLastCalledWith(true);
+
+    // Pick the first reason — picker closes and exactly one action fires.
+    const reasonButtons = panel()
+      .getByRole('group', { name: /reason/i, hidden: true })
+      .querySelectorAll('button');
+    // First button is Cancel; the next is a real reason.
+    fireEvent.click(reasonButtons[1] as HTMLButtonElement);
+    expect(onReasonOpenChange).toHaveBeenLastCalledWith(false);
+    expect(onAction).toHaveBeenCalledTimes(1);
+  });
+
+  test('reports closed when the panel content unmounts with the picker open', () => {
+    mockState.data = makeDetail({ id: 'p-1' });
+    const onReasonOpenChange = vi.fn();
+    const { rerender } = wrap(
+      <DetailPanel
+        selectedId={'p-1'}
+        onClose={() => {}}
+        onAction={() => {}}
+        onReasonOpenChange={onReasonOpenChange}
+      />,
+    );
+    fireEvent.click(panel().getByRole('button', { name: /pass/i, hidden: true }));
+    expect(onReasonOpenChange).toHaveBeenLastCalledWith(true);
+
+    // Deselect → DetailContentBody unmounts; the cleanup must reset the gate
+    // so the page keyboard doesn't stay stuck paused.
+    mockState.data = null;
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <DetailPanel
+          selectedId={null}
+          onClose={() => {}}
+          onAction={() => {}}
+          onReasonOpenChange={onReasonOpenChange}
+        />
+      </QueryClientProvider>,
+    );
+    expect(onReasonOpenChange).toHaveBeenLastCalledWith(false);
+  });
 });
