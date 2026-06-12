@@ -304,22 +304,35 @@ export function useRecordAction() {
         // Bestiary 5.12: only the two shapes below are touched. A future
         // hook landing under ``['postings', ...]`` with a third shape is
         // skipped, not crashed on.
+        // fix(audit): only decrement total when the posting was actually IN
+        // that cached list. Unconditional decrement dragged unrelated lists'
+        // totals down — most visibly the subtitle's applied-count query
+        // (state=['applied'], limit=1, items never contain a triage card),
+        // which drifted downward on every rapid j,1,j,1 keyboard burst and
+        // even decremented when an action should have INCREMENTED it.
         if (isFlatPostings(prev)) {
+          const removed = prev.items.filter((p) => p.id === vars.postingId).length;
+          if (removed === 0) continue;
           const next: PostingsListResponse = {
             ...prev,
-            total: Math.max(0, prev.total - 1),
+            total: Math.max(0, prev.total - removed),
             items: prev.items.filter((p) => p.id !== vars.postingId),
           };
           qc.setQueryData(key, next);
         } else if (isInfinitePostings(prev)) {
           // fix/audit #5: same removal across every loaded page of the
-          // infinite triage list. All pages carry the same server total,
-          // so decrement each by one to keep them consistent.
+          // infinite triage list. All pages carry the same server total, so
+          // drop the actual removed count from each to keep them consistent.
+          const removed = prev.pages.reduce(
+            (n, page) => n + page.items.filter((p) => p.id === vars.postingId).length,
+            0,
+          );
+          if (removed === 0) continue;
           const next: InfinitePostings = {
             ...prev,
             pages: prev.pages.map((page) => ({
               ...page,
-              total: Math.max(0, page.total - 1),
+              total: Math.max(0, page.total - removed),
               items: page.items.filter((p) => p.id !== vars.postingId),
             })),
           };
