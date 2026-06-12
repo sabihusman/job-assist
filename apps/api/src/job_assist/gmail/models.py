@@ -74,3 +74,8 @@ class BackfillReport(BaseModel):
     fetch_errors: int = 0
     outcome_events_inserted: int = 0
     target_company_links: int = 0
+    # fix/gmail-watermark: True when the derived poll watermark was in the
+    # future (a stored outcome_event has a future received_at). The poll clamps
+    # to now() so it still works, but the sweep is flagged unhealthy so the
+    # operator sees the data anomaly instead of a silent green dot.
+    watermark_in_future: bool = False

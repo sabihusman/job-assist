@@ -18,7 +18,7 @@ import base64
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from email.utils import parseaddr, parsedate_to_datetime
 from typing import Any
 
@@ -125,14 +125,31 @@ def parse_message(msg: dict[str, Any]) -> RawEmail:
 
     subject = headers.get("subject", "")
     date_header = headers.get("date")
+    now = datetime.now(tz=UTC)
+    # Gmail's internalDate is the authoritative receipt time (epoch ms, UTC) —
+    # the fallback when the sender's Date header is missing/unparseable. tz=UTC
+    # so a non-UTC host doesn't produce a naive LOCAL-time datetime (the rest of
+    # the pipeline treats naive == UTC).
+    internal = datetime.fromtimestamp(int(msg.get("internalDate", "0") or "0") / 1000, tz=UTC)
     received_at: datetime
     if date_header:
         try:
             received_at = parsedate_to_datetime(date_header)
         except (TypeError, ValueError):
-            received_at = datetime.fromtimestamp(int(msg.get("internalDate", "0")) / 1000)
+            received_at = internal
     else:
-        received_at = datetime.fromtimestamp(int(msg.get("internalDate", "0")) / 1000)
+        received_at = internal
+    # parsedate_to_datetime may return a naive datetime (header carried no tz) —
+    # treat as UTC, consistent with the rest of the pipeline.
+    if received_at.tzinfo is None:
+        received_at = received_at.replace(tzinfo=UTC)
+    # CLAMP: a message cannot be received in the future. The poll watermark is
+    # MAX(outcome_event.received_at); a sender's skewed or FORGED Date header
+    # (classic spam) must not push the watermark into the future and freeze the
+    # poll forever (after:<future> matches nothing). Clamp to the later of
+    # internalDate and now so a forged Date can never exceed Gmail's own clock.
+    if received_at > now:
+        received_at = min(internal, now) if internal <= now else now
 
     text, html = _walk_parts(msg.get("payload") or {})
     text_stripped = _strip_quoted_replies(text) if text else ""

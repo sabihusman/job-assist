@@ -180,3 +180,45 @@ def test_received_at_uses_utc_when_offset_zero() -> None:
         )
     )
     assert email.received_at == datetime(2024, 5, 1, 12, 0, 0, tzinfo=UTC)
+
+
+# ── fix/gmail-watermark: future-dated Date header must not poison the watermark
+
+
+def test_received_at_clamped_when_date_header_is_in_the_future() -> None:
+    """A forged/skewed future Date header is clamped so MAX(received_at) (the
+    poll watermark) can never be pushed into the future."""
+    from datetime import UTC, datetime
+
+    future = "Wed, 1 May 2099 12:00:00 +0000"
+    internal_ms = 1715000000000  # 2024-05-06, a sane real receipt time
+    email = parse_message(
+        _msg(
+            headers=[
+                ("From", "spam@x.com"),
+                ("To", "me@example.com"),
+                ("Subject", "You won"),
+                ("Date", future),
+            ],
+            internal_date_ms=internal_ms,
+        )
+    )
+    now = datetime.now(tz=UTC)
+    assert email.received_at <= now, "future Date header must be clamped to <= now"
+    # Clamps to internalDate when that is in the past (Gmail's own clock).
+    assert email.received_at == datetime.fromtimestamp(internal_ms / 1000, tz=UTC)
+
+
+def test_internaldate_fallback_is_utc_aware_not_naive_local() -> None:
+    """When the Date header is missing, the internalDate fallback must be a
+    tz-aware UTC datetime (not naive local time on a non-UTC host)."""
+    from datetime import UTC, datetime
+
+    msg = _msg(headers=[("From", "a@b.com"), ("Subject", "x")], internal_date_ms=1715000000000)
+    # Drop the Date header so the fallback path runs.
+    msg["payload"]["headers"] = [
+        h for h in msg["payload"]["headers"] if h["name"].lower() != "date"
+    ]
+    email = parse_message(msg)
+    assert email.received_at.tzinfo is not None
+    assert email.received_at == datetime.fromtimestamp(1715000000000 / 1000, tz=UTC)
