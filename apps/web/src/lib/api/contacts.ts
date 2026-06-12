@@ -2,7 +2,7 @@
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { api } from '@/lib/api/client';
+import { API_BASE_URL, api } from '@/lib/api/client';
 import { MutationError, extractDetail } from '@/lib/api/mutation-error';
 import type {
   ContactCreate,
@@ -98,6 +98,29 @@ export function useContacts(filters: ContactsFilters) {
   const items = query.data?.pages.flatMap((page) => page.items) ?? [];
   const total = query.data?.pages[0]?.total ?? 0;
   return { ...query, items, total };
+}
+
+/**
+ * Href for the contacts "Export current view" link (feat/view-exports).
+ *
+ * Serializes the SAME filter set ``useContacts`` sends (via the shared
+ * ``toFilterQuery``) onto the backend CSV endpoint, which uses the same
+ * clause builder as the list — so the export is provably the full
+ * unpaginated version of exactly what's on screen. Pure + exported so the
+ * filter→URL mapping is unit-testable.
+ */
+export function contactsExportHref(filters: ContactsFilters): string {
+  const params = new URLSearchParams();
+  const q = toFilterQuery(filters);
+  for (const [key, value] of Object.entries(q)) {
+    if (Array.isArray(value)) {
+      for (const v of value) params.append(key, String(v));
+    } else if (value !== undefined && value !== null) {
+      params.set(key, String(value));
+    }
+  }
+  const qs = params.toString();
+  return `${API_BASE_URL}/contacts/export.csv${qs ? `?${qs}` : ''}`;
 }
 
 // Per-page size for the infinite outreach timeline (matches the backend's

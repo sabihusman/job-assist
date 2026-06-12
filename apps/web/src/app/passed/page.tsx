@@ -4,6 +4,7 @@ import { useState } from 'react';
 
 import { AppShell } from '@/components/chrome/AppShell';
 import { PassedRow } from '@/components/passed/PassedRow';
+import { API_BASE_URL } from '@/lib/api/client';
 import { usePassedPostings } from '@/lib/api/state-views';
 
 /**
@@ -51,9 +52,26 @@ function PassedPageInner() {
 
   return (
     <div className="flex min-w-0 flex-col gap-4 px-4 py-4 md:px-6">
-      <p className="text-[13px] text-muted-foreground">
-        {page1.data ? `${items.length} of ${total} passed` : '…'}
-      </p>
+      <div className="flex items-center justify-between">
+        <p className="text-[13px] text-muted-foreground">
+          {page1.data ? `${items.length} of ${total} passed` : '…'}
+        </p>
+        {/* feat/view-exports: server-side export, Triage-style. The list is
+            server-paginated, so the endpoint (same shared query builder as
+            GET /postings) serializes the FULL not_interested set in the same
+            default sort — every row this view paginates over, no cap. Plain
+            <a href> so the browser's native download handles the
+            Content-Disposition response. */}
+        <a
+          href={`${API_BASE_URL}/postings/export.xlsx?state=not_interested`}
+          download
+          data-testid="passed-export-link"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded border border-border bg-surface px-2.5 py-1 text-sm text-muted-foreground ring-1 ring-inset ring-border transition-colors hover:text-foreground"
+          title="Download an .xlsx of every passed role — same sort, no row cap."
+        >
+          Export current view
+        </a>
+      </div>
 
       {isError ? (
         <ErrorCard message={errorMsg} onRetry={() => page1.refetch()} />

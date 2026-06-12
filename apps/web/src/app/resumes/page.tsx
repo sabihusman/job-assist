@@ -4,8 +4,10 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 
 import { AppShell } from '@/components/chrome/AppShell';
+import { ExportCsvButton } from '@/components/shared/ExportCsvButton';
 import { showErrorToast } from '@/lib/api/error-toast';
 import { useCreateResumeVersion, useResumeAnalytics, useResumeVersions } from '@/lib/api/resume';
+import { buildResumesCsv } from '@/lib/resumes/exportCsv';
 
 /**
  * Resume-version manager + outcome analytics (feat/resume-version-tracking).
@@ -109,10 +111,23 @@ function CreateForm() {
 
 function VersionList() {
   const { data, isLoading, isError } = useResumeVersions();
+  // feat/view-exports: the export joins versions with the analytics table the
+  // page renders below — one row per version, zero counts when the analytics
+  // hasn't attributed it yet. Both lists are fully in memory (no pagination).
+  const analytics = useResumeAnalytics();
   const items = data?.items ?? [];
   return (
     <section data-testid="resume-list">
-      <h2 className="mb-2 text-sm font-semibold">Versions ({items.length})</h2>
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="text-sm font-semibold">Versions ({items.length})</h2>
+        <ExportCsvButton
+          buildCsv={() => buildResumesCsv(items, analytics.data)}
+          filenamePrefix="resumes-export"
+          disabled={isLoading || items.length === 0}
+          testId="resumes-export-button"
+          title="Download a .csv of every resume version with its outcome analytics."
+        />
+      </div>
       {isLoading ? (
         <p className="text-[13px] text-muted-foreground">Loading…</p>
       ) : isError ? (

@@ -37,6 +37,8 @@ vi.mock('@/lib/api/client', () => ({
     PATCH: patchMock,
     GET: vi.fn(),
   },
+  // feat/view-exports: contactsExportHref builds on the base URL.
+  API_BASE_URL: 'http://api.test',
 }));
 
 function wrap() {
@@ -368,5 +370,43 @@ describe('useOutreachLog', () => {
     expect(err.name).toBe('MutationError');
     expect(err.detail).toBe('reason_required');
     expect(err.status).toBe(422);
+  });
+});
+
+// ── feat/view-exports: contactsExportHref ───────────────────────────────────
+
+describe('contactsExportHref', () => {
+  test('serializes the same filter set useContacts sends, onto export.csv', async () => {
+    const { contactsExportHref } = await import('@/lib/api/contacts');
+    const href = contactsExportHref({
+      source_type: ['tippie_alumni', 'warm_intro'],
+      search: '  jane  ',
+      employer: 'Acme',
+      include_archived: true,
+      limit: 100,
+      offset: 0,
+    });
+    const url = new URL(href, 'http://test');
+    expect(url.pathname.endsWith('/contacts/export.csv')).toBe(true);
+    expect(url.searchParams.getAll('source_type')).toEqual(['tippie_alumni', 'warm_intro']);
+    expect(url.searchParams.get('search')).toBe('jane'); // trimmed like the list query
+    expect(url.searchParams.get('employer')).toBe('Acme');
+    expect(url.searchParams.get('include_archived')).toBe('true');
+    // No pagination params — the export is the full filtered set.
+    expect(url.searchParams.has('limit')).toBe(false);
+    expect(url.searchParams.has('offset')).toBe(false);
+  });
+
+  test('default filters → bare endpoint (no empty params)', async () => {
+    const { contactsExportHref } = await import('@/lib/api/contacts');
+    const href = contactsExportHref({
+      source_type: [],
+      search: '',
+      employer: '',
+      include_archived: false,
+      limit: 100,
+      offset: 0,
+    });
+    expect(href.endsWith('/contacts/export.csv')).toBe(true);
   });
 });
