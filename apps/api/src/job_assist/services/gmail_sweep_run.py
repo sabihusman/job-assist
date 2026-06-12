@@ -37,11 +37,22 @@ class SweepHandle:
         self.run_id = run_id
         self.messages_listed = 0
         self.outcomes_inserted = 0
+        # fix/gmail-watermark: a non-fatal data anomaly the sweep recovered from
+        # (e.g. a future-dated watermark, clamped). Set → the run is finalized
+        # 'failed' with this message so gmail_healthy surfaces it, even though
+        # the poll itself completed without raising.
+        self.anomaly: str | None = None
 
     def set_counts(self, report: Any) -> None:
         """Pull the counters off a ``BackfillReport`` (poll or backfill)."""
         self.messages_listed = int(getattr(report, "message_ids_listed", 0) or 0)
         self.outcomes_inserted = int(getattr(report, "outcome_events_inserted", 0) or 0)
+        if getattr(report, "watermark_in_future", False):
+            self.anomaly = (
+                "poll watermark was in the future (clamped to now) — an "
+                "outcome_event row has a future received_at; clean it up so the "
+                "poll can't silently freeze."
+            )
 
 
 @asynccontextmanager
@@ -66,11 +77,15 @@ async def record_sweep(kind: str) -> AsyncIterator[SweepHandle]:
         await _finalize(run_id, status="failed", error=str(exc)[:500])
         raise
     else:
+        # fix/gmail-watermark: a recovered-from anomaly still finalizes 'failed'
+        # (with the anomaly message) so the health monitor isn't blind to it —
+        # an empty 'success' poll over corrupt watermark data is half the bug.
         await _finalize(
             run_id,
-            status="success",
+            status="failed" if handle.anomaly else "success",
             messages_listed=handle.messages_listed,
             outcomes_inserted=handle.outcomes_inserted,
+            error=handle.anomaly,
         )
 
 

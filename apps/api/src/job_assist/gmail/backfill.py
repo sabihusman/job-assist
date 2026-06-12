@@ -360,18 +360,35 @@ async def run_poll(
     """
     from sqlalchemy import func
 
+    now = datetime.now(tz=UTC)
     watermark_row = await session.execute(select(func.max(OutcomeEvent.received_at)))
     watermark: datetime | None = watermark_row.scalar_one_or_none()
+    watermark_in_future = False
     if watermark is None:
-        watermark = datetime.now(tz=UTC) - POLL_BOOTSTRAP_LOOKBACK
-    elif watermark.tzinfo is None:
-        # Defensive: timestamps in DB are TIMESTAMP WITH TIME ZONE, but if a
-        # naive value ever lands here, treat it as UTC rather than crash.
-        watermark = watermark.replace(tzinfo=UTC)
+        watermark = now - POLL_BOOTSTRAP_LOOKBACK
+    else:
+        if watermark.tzinfo is None:
+            # Defensive: timestamps in DB are TIMESTAMP WITH TIME ZONE, but if a
+            # naive value ever lands here, treat it as UTC rather than crash.
+            watermark = watermark.replace(tzinfo=UTC)
+        # fix/gmail-watermark: defense-in-depth against a legacy future-dated
+        # row. client.parse_message now clamps received_at to now() on the way
+        # in, but a row inserted before that fix could still sit in the future
+        # and freeze the poll (after:<future> matches nothing, forever). Clamp
+        # the watermark and flag the anomaly so the sweep reads unhealthy.
+        if watermark > now:
+            watermark_in_future = True
+            logger.warning(
+                "gmail.poll.watermark_in_future: watermark=%s now=%s — clamped",
+                watermark.isoformat(),
+                now.isoformat(),
+            )
+            watermark = now
 
     query = build_after_query(watermark)
     report = await _run_email_ingest(session, gmail, classifier, query=query)
     report.watermark_used = watermark
+    report.watermark_in_future = watermark_in_future
 
     # Re-query MAX(received_at) after the run so the operator can see how
     # far the watermark advanced (or didn't).
