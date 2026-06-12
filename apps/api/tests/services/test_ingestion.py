@@ -366,3 +366,105 @@ async def test_reappearance_clears_closed_at(db_session: Any) -> None:
     )
     await db_session.refresh(row)
     assert row.closed_at is None, "reappeared posting must have closed_at cleared"
+
+
+# ── fix/ingest-lifecycle (audit HIGH #2): warm-path cohort mark-stale window ──
+
+
+@_NEEDS_DB
+async def test_warm_path_postings_get_longer_stale_window(db_session: Any) -> None:
+    """A warm-path posting (matched company source='warm_path') aged 8 days —
+    past the 7d daily cutoff but inside the 10d warm window — must NOT close,
+    because that cohort is swept only weekly. An unmatched posting (the bulk,
+    target_company_id NULL) and a curated-company posting at 8d DO close. A
+    warm-path posting past the 10d window closes."""
+    from job_assist.db.models import TargetCompany
+
+    warm_co = TargetCompany(name="WarmDeere", ats="workday", domain="d.com", source="warm_path")
+    curated_co = TargetCompany(name="CuratedCo", tier=1, ats="greenhouse", source="curated")
+    db_session.add_all([warm_co, curated_co])
+    await db_session.flush()
+
+    warm_8d = _bare_posting(last_seen_days_ago=8)
+    warm_8d.target_company_id = warm_co.id
+    warm_12d = _bare_posting(last_seen_days_ago=12)
+    warm_12d.target_company_id = warm_co.id
+    curated_8d = _bare_posting(last_seen_days_ago=8)
+    curated_8d.target_company_id = curated_co.id
+    unmatched_8d = _bare_posting(last_seen_days_ago=8)  # target_company_id NULL
+    db_session.add_all([warm_8d, warm_12d, curated_8d, unmatched_8d])
+    await db_session.commit()
+
+    await mark_stale_postings(db_session, stale_after_days=7)
+    for p in (warm_8d, warm_12d, curated_8d, unmatched_8d):
+        await db_session.refresh(p)
+
+    assert warm_8d.closed_at is None, "warm-path 8d posting must survive the daily cutoff"
+    assert warm_12d.closed_at is not None, "warm-path 12d posting (past 10d) must close"
+    assert curated_8d.closed_at is not None, "curated 8d posting closes on the daily cutoff"
+    assert unmatched_8d.closed_at is not None, "unmatched (NULL company) 8d posting closes daily"
+
+
+# ── fix/ingest-lifecycle (audit HIGH #7): PostingSource re-point on retitle ──
+
+
+def _gh_job(*, job_id: int, title: str, url: str) -> dict[str, Any]:
+    return {
+        "id": job_id,
+        "title": title,
+        "location": {"name": "Remote"},
+        "absolute_url": url,
+        "content": "<p>PM role.</p>",
+        "first_published": "2026-05-01T00:00:00Z",
+        "departments": [],
+    }
+
+
+@_NEEDS_DB
+async def test_posting_source_repoints_when_content_hash_changes(db_session: Any) -> None:
+    """An ATS edit to a live posting's title changes content_hash → a NEW
+    JobPosting is inserted, but the SAME (ats, source_job_id) PostingSource must
+    RE-POINT to it (not stay orphaned on the old posting). Otherwise the new
+    posting has no apply URL and is invisible to the ats filter."""
+    from sqlalchemy import select as sa_select
+
+    from job_assist.db.models import PostingSource
+
+    service = IngestionService()
+
+    # First sight: title A.
+    await service.ingest_source(
+        _make_adapter([_gh_job(job_id=900001, title="Product Manager", url="https://x.test/a")]),
+        "stripe",
+        db_session,
+    )
+    # Same source id, EDITED title → new content_hash → new JobPosting.
+    await service.ingest_source(
+        _make_adapter(
+            [_gh_job(job_id=900001, title="Staff Product Manager", url="https://x.test/b")]
+        ),
+        "stripe",
+        db_session,
+    )
+
+    # Exactly one PostingSource for this source id (upsert by ats+source_job_id).
+    sources = (
+        (
+            await db_session.execute(
+                sa_select(PostingSource).where(PostingSource.source_job_id == "900001")
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(sources) == 1, "one PostingSource per (ats, source_job_id)"
+    src = sources[0]
+
+    # It must point at the NEW (latest-title) JobPosting, with the fresh URL.
+    new_posting = (
+        await db_session.execute(
+            sa_select(JobPosting).where(JobPosting.raw_title == "Staff Product Manager")
+        )
+    ).scalar_one()
+    assert src.job_posting_id == new_posting.id, "source must re-point to the retitled posting"
+    assert src.source_url == "https://x.test/b", "provenance URL refreshed to the new posting"
