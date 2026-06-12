@@ -1,0 +1,88 @@
+name: Wellfound probe (Gate 1)
+
+# One-off, MANUAL verification harness for the Wellfound ingest (feat/
+# wellfound-ingest). NOT a cron — there is no `schedule:`; it only ever runs via
+# "Run workflow". It exists so the Gate-1 capped live pull goes through the real
+# deployed pipeline server-side (the /admin endpoints require the auth token,
+# which lives only in the Railway env / GitHub secret), and prints the readout
+# + 2-3 DB samples to the run log for sign-off BEFORE the daily cron lands.
+#
+#   Actions → Wellfound probe (Gate 1) → Run workflow
+#     role        = product-manager   (must be in the endpoint allowlist)
+#     page_limit  = 1                 (HARD COST CAP — keep at 1 for the probe)
+#     monitor_mode = false            (run again with true to verify only-new)
+#
+# Cost: a page_limit=1 PM+remote pull is ~tens of records at ~$3.49/1k ≈ a few
+# cents; the adapter's _MAX_RECORDS_PER_RUN failsafe caps the worst case at
+# ~$0.87. Required secrets: API_URL, API_AUTH_TOKEN (same as ingest-daily.yml).
+
+on:
+  workflow_dispatch:
+    inputs:
+      role:
+        description: 'Wellfound role slug (endpoint allowlist: product-manager / product-management / founding-product-manager)'
+        required: false
+        default: 'product-manager'
+      page_limit:
+        description: 'Pages per run (HARD cost cap, 1-5; keep 1 for the probe)'
+        required: false
+        default: '1'
+      monitor_mode:
+        description: 'Only-new since last run (set true on a 2nd run to verify monitorMode)'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Capped Wellfound live pull + sample readback
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+      ROLE: ${{ github.event.inputs.role }}
+      PAGE_LIMIT: ${{ github.event.inputs.page_limit }}
+      MONITOR: ${{ github.event.inputs.monitor_mode }}
+    steps:
+      - name: Trigger the capped Wellfound ingest
+        run: |
+          if [ -z "$API_URL" ]; then
+            echo "::error::API_URL secret not configured."
+            exit 1
+          fi
+          echo "POST /admin/ingest/wellfound?role=${ROLE}&page_limit=${PAGE_LIMIT}&monitor_mode=${MONITOR}"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 240 -X POST \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/ingest/wellfound?role=${ROLE}&only_remote=true&page_limit=${PAGE_LIMIT}&monitor_mode=${MONITOR}" \
+            || echo -e "\n000")
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "── HTTP $CODE ─────────────────────────────────────────────"
+          echo "$BODY" | python3 -m json.tool 2>/dev/null || echo "$BODY"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::ingest returned HTTP $CODE"
+            exit 1
+          fi
+          # Surface the cost-guard flag loudly if it ever trips.
+          if echo "$BODY" | grep -q '"cost_guard_tripped": true'; then
+            echo "::warning::cost_guard_tripped=true — the run hit the record/cost ceiling. Inspect the filters."
+          fi
+
+      - name: Read back 3 Wellfound samples as they landed in the DB
+        run: |
+          echo "── GET /postings?ats=wellfound&limit=3 ───────────────────"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/postings?ats=wellfound&per_company_cap=0&limit=3" || echo -e "\n000")
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "── HTTP $CODE ─────────────────────────────────────────────"
+          echo "$BODY" | python3 -m json.tool 2>/dev/null || echo "$BODY"
+
+      - name: Recent ingest_run rows (per-company status/counts)
+        run: |
+          echo "── GET /admin/ingest/runs?limit=8 ────────────────────────"
+          curl -s --max-time 30 -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/ingest/runs?limit=8" | python3 -m json.tool 2>/dev/null || true

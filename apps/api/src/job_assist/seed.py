@@ -57,7 +57,7 @@ _SEED_FIELDS = {
 }
 
 # Mirror of main.py._CRAWL_CONFIG_SOURCES — the provenance vocabulary.
-_SEED_SOURCES = {"curated", "broad", "deactivated", "applied", "warm_path"}
+_SEED_SOURCES = {"curated", "broad", "deactivated", "applied", "warm_path", "wellfound"}
 
 
 # Valid ATS strings — the DB enum's values. Validated here so a typo'd seed

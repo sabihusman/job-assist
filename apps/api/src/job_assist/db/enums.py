@@ -22,6 +22,12 @@ class ATS(enum.StrEnum):
     # enum value exactly — a typo here would silently fail the
     # SAEnum-validated cast on read.
     icims = "icims"
+    # feat/wellfound-ingest: Wellfound (ex-AngelList) startup job board, sourced
+    # via the clearpath Apify actor. Unlike the others this is the POSTING's
+    # source, not a company board — Wellfound shells carry ats='unknown' on the
+    # company row; ats='wellfound' lives on the PostingSource. Enum extended via
+    # the ``a9f1b2wellf6`` migration; the Python value must match the PG value.
+    wellfound = "wellfound"
     other = "other"
     unknown = "unknown"
 

@@ -198,6 +198,82 @@
         }
       }
     },
+    "/admin/ingest/wellfound": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Trigger Wellfound Ingest",
+        "description": "Query Wellfound for one role via the clearpath Apify actor, discover\ncompanies from the postings, and ingest each through the standard pipeline\n(feat/wellfound-ingest). Query-driven \u2014 discovered companies are\n``source='wellfound'`` shells that NEVER join a recurring plan.\n\nHARD COST CAPS: ``page_limit`` is clamped (1-5) and the actor call carries a\n``_MAX_RECORDS_PER_RUN`` failsafe + a per-run cost-sanity alert, so a filter\nregression can never fail open into an unbounded paid fetch. ``monitor_mode``\nfetches only-new since the last run (cheaper at a daily cadence; verify its\nbehavior on a second pull before relying on it).\n\nReturns the Gate-1 readout: fetched / kept / skipped_quality, the estimated\nrun cost + cost-guard flag, per-company new/updated counts. 503 when\n``APIFY_API_TOKEN`` is unset.",
+        "operationId": "trigger_wellfound_ingest_admin_ingest_wellfound_post",
+        "parameters": [
+          {
+            "name": "role",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "product-manager",
+              "title": "Role"
+            }
+          },
+          {
+            "name": "only_remote",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Only Remote"
+            }
+          },
+          {
+            "name": "page_limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "title": "Page Limit"
+            }
+          },
+          {
+            "name": "monitor_mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Monitor Mode"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Trigger Wellfound Ingest Admin Ingest Wellfound Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/ingest/fantastic-plan": {
       "get": {
         "tags": [
