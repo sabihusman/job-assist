@@ -81,6 +81,11 @@ function TriagePageInner() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: filters is the intentional reset trigger
   useEffect(() => {
     setSelectedIds(new Set());
+    // fix(audit): a new filter set means a new result window — a lingering
+    // reasonPickerCardId for a card that's no longer visible would pause
+    // the keyboard with no mounted picker to dismiss it (the deadlock's
+    // second ingredient; the deep-link guard in onAction2 is the first).
+    setReasonPickerCardId(null);
   }, [filters]);
   // PR #43: fire a second light query to drive the dynamic subtitle's
   // applied count. limit=1 is enough — we only need ``total`` on the
@@ -298,7 +303,17 @@ function TriagePageInner() {
         // commit anything — the operator picks 1-9 (or Esc) once the
         // picker has the keystrokes (its own listener takes over,
         // because we pause this hook via ``enabled`` below).
-        if (selectedId) handleToggleReason(selectedId);
+        //
+        // fix(audit): only when the posting is actually IN the list. A
+        // deep-linked posting (?posting=<id> from the Pipeline) can be
+        // selected without being in the current list — toggling the picker
+        // for it set reasonPickerCardId to an id no card renders, so no
+        // picker mounted while the keyboard stayed paused: J/K/1-4/Escape
+        // all dead with no way out short of a mouse round-trip. For a
+        // deep-linked posting the DetailPanel's own Pass button is the path.
+        if (selectedId && items.some((p) => p.id === selectedId)) {
+          handleToggleReason(selectedId);
+        }
       },
       onAction3: () => {
         if (selectedId) handleAction(selectedId, { kind: 'applied' });

@@ -95,6 +95,94 @@ describe('useRecordAction', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
   });
 
+  // ── fix(audit): total decrements ONLY for lists containing the posting ─────
+  //
+  // onMutate used to decrement total on EVERY ['postings', ...] cache entry
+  // regardless of membership. The subtitle's applied-count query
+  // (state=['applied'], limit=1 — items never contain a triage card) drifted
+  // downward on every pass/snooze, and a rapid keyboard burst compounded it
+  // before refetches landed.
+  test('does NOT decrement totals of cached lists that never contained the posting', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // The triage list contains 'b'; the applied-count entry does not.
+    const triageKey = seedListCache(client, [fakePosting('a'), fakePosting('b')]);
+    const appliedKey = queryKeys.postings({ state: ['applied'], limit: 1, offset: 0 });
+    client.setQueryData<PostingsListResponse>(appliedKey, {
+      total: 7,
+      offset: 0,
+      limit: 1,
+      items: [],
+    });
+
+    let resolvePost: (v: unknown) => void = () => {};
+    postMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolvePost = (v) => resolve(v);
+      }),
+    );
+
+    const { result } = renderHook(() => useRecordAction(), { wrapper: wrap(client) });
+    act(() => {
+      result.current.mutate({ postingId: 'b', action_type: 'not_interested' });
+    });
+
+    await waitFor(() => {
+      // Member list: removed + decremented.
+      const triage = client.getQueryData<PostingsListResponse>(triageKey);
+      expect(triage?.items.map((p) => p.id)).toEqual(['a']);
+      expect(triage?.total).toBe(1);
+      // Non-member list: total UNTOUCHED (was 7, stays 7).
+      const applied = client.getQueryData<PostingsListResponse>(appliedKey);
+      expect(applied?.total).toBe(7);
+    });
+
+    resolvePost({ data: { current: 'not_interested' }, error: null });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  });
+
+  test('infinite-list entries decrement by the actual removed count only', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // An infinite cache entry whose pages contain 'x' once; total 200.
+    const infKey = queryKeys.postings({});
+    client.setQueryData(infKey, {
+      pages: [
+        { total: 200, offset: 0, limit: 100, items: [fakePosting('x'), fakePosting('y')] },
+        { total: 200, offset: 100, limit: 100, items: [fakePosting('z')] },
+      ],
+      pageParams: [0, 100],
+    });
+    // A second infinite entry that does NOT contain it.
+    const otherKey = queryKeys.postings({ tier: [1] });
+    client.setQueryData(otherKey, {
+      pages: [{ total: 50, offset: 0, limit: 100, items: [fakePosting('q')] }],
+      pageParams: [0],
+    });
+
+    let resolvePost: (v: unknown) => void = () => {};
+    postMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolvePost = (v) => resolve(v);
+      }),
+    );
+
+    const { result } = renderHook(() => useRecordAction(), { wrapper: wrap(client) });
+    act(() => {
+      result.current.mutate({ postingId: 'x', action_type: 'interested' });
+    });
+
+    await waitFor(() => {
+      const inf = client.getQueryData<{ pages: PostingsListResponse[] }>(infKey);
+      expect(inf?.pages[0]?.items.map((p) => p.id)).toEqual(['y']);
+      expect(inf?.pages[0]?.total).toBe(199);
+      expect(inf?.pages[1]?.total).toBe(199);
+      const other = client.getQueryData<{ pages: PostingsListResponse[] }>(otherKey);
+      expect(other?.pages[0]?.total).toBe(50); // untouched
+    });
+
+    resolvePost({ data: { current: 'interested' }, error: null });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  });
+
   test('rolls back to the snapshot on POST error', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const key = seedListCache(client, [fakePosting('a'), fakePosting('b')]);

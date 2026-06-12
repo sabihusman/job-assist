@@ -1076,7 +1076,7 @@ async def list_contacts(
     real PII; the single-operator trust model is the only thing holding
     until proper auth lands.
     """
-    from sqlalchemy import func, or_, select
+    from sqlalchemy import false, func, or_, select
 
     from job_assist.db.models import Contact
 
@@ -1098,13 +1098,44 @@ async def list_contacts(
         where_clauses.append(Contact.archived_at.is_(None))
     if source_type:
         where_clauses.append(Contact.source_type.in_(source_type))
-    # feat/warm-path-badge: ``?employer=Acme`` filters to contacts whose
-    # ``current_employer`` substring-matches (case-insensitive). The warm-path
-    # badge's click-through lands here (/contacts?company=<name>). ILIKE, not
-    # normalized-equality, so "Citi" finds "Citibank" — at click-through scale
-    # an over-match beats a silent under-match.
+    # feat/warm-path-badge + fix(audit badge parity): ``?employer=Acme``
+    # filters by the SAME normalizer the badge count uses
+    # (company_name_match.normalize_company_name) — so the click-through
+    # destination shows EXACTLY the contacts that produced "N alumni here".
+    # The old raw ILIKE substring could both under-match (an outcome-derived
+    # display_name like "Acme Recruiting" finds no employer containing it)
+    # and over-match ("Acme" found "Acmesoft"), so the badge said N while
+    # the list showed 0 or N+k. Normalized-equality is computed in Python
+    # over the small distinct-employer set (~hundreds) because the
+    # normalizer is regex-based; the resulting raw strings filter in SQL so
+    # COUNT/pagination stay server-side.
     if employer and employer.strip():
-        where_clauses.append(Contact.current_employer.ilike(f"%{employer.strip()}%"))
+        from job_assist.services.company_name_match import normalize_company_name
+
+        employer_key = normalize_company_name(employer)
+        if not employer_key:
+            # Normalizes to nothing (e.g. bare "Inc.") → no possible match.
+            where_clauses.append(false())
+        else:
+            distinct_employers = (
+                (
+                    await db.execute(
+                        select(Contact.current_employer)
+                        .where(Contact.current_employer.is_not(None))
+                        .distinct()
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            matching_raw = [
+                raw
+                for raw in distinct_employers
+                if raw is not None and normalize_company_name(raw) == employer_key
+            ]
+            where_clauses.append(
+                Contact.current_employer.in_(matching_raw) if matching_raw else false()
+            )
     if search:
         pattern = f"%{search.strip().lower()}%"
         if pattern.strip("%"):
