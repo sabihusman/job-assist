@@ -675,6 +675,11 @@ async def test_reeval_hard_rules_endpoint(db_session: Any) -> None:
     # Upsert the singleton — the test DB is already seeded with id=1, so a
     # plain insert would violate the PK. Overwrite the rule fields the test
     # depends on so it's deterministic regardless of seeded defaults.
+    #
+    # fix(audit): operator_profile is NOT in conftest's TRUNCATE list (it's
+    # the seeded singleton), so this rewrite used to leak the test's rule set
+    # into every later test in the run. Capture the original values up front
+    # and restore them in the finally below.
     profile = (
         await db_session.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
     ).scalar_one_or_none()
@@ -686,9 +691,12 @@ async def test_reeval_hard_rules_endpoint(db_session: Any) -> None:
         "seniority_levels_included": None,
         "staffing_firm_blocklist": [],
     }
-    if profile is None:
+    created_profile = profile is None
+    original: dict[str, Any] = {}
+    if created_profile:
         db_session.add(OperatorProfile(id=1, looking_for_text="PM", role_keywords=[], **fields))
     else:
+        original = {key: getattr(profile, key) for key in fields}
         for key, value in fields.items():
             setattr(profile, key, value)
     c = _company(name="ReevalCo")
@@ -706,24 +714,38 @@ async def test_reeval_hard_rules_endpoint(db_session: Any) -> None:
     db_session.add_all([below, nullsal, closed])
     await db_session.commit()
 
-    ac = await _client(db_session)
     try:
-        async with ac:
-            resp = await ac.post("/admin/postings/reeval-hard-rules")
+        ac = await _client(db_session)
+        try:
+            async with ac:
+                resp = await ac.post("/admin/postings/reeval-hard-rules")
+        finally:
+            await _drop_override()
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["evaluated"] == 2, "only the 2 OPEN postings are evaluated"
+        assert body["passed"] == 1
+        assert body["failed"] == 1
+        assert body["by_rule"].get("salary_floor") == 1
+
+        await db_session.refresh(below)
+        await db_session.refresh(nullsal)
+        assert below.hard_rule_failed == "salary_floor"
+        assert nullsal.hard_rule_failed is None
     finally:
-        await _drop_override()
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["evaluated"] == 2, "only the 2 OPEN postings are evaluated"
-    assert body["passed"] == 1
-    assert body["failed"] == 1
-    assert body["by_rule"].get("salary_floor") == 1
-
-    await db_session.refresh(below)
-    await db_session.refresh(nullsal)
-    assert below.hard_rule_failed == "salary_floor"
-    assert nullsal.hard_rule_failed is None
+        # Restore the singleton exactly as found so later tests see the
+        # seeded defaults, not this test's rule set.
+        restored = (
+            await db_session.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
+        ).scalar_one_or_none()
+        if created_profile:
+            if restored is not None:
+                await db_session.delete(restored)
+        elif restored is not None:
+            for key, value in original.items():
+                setattr(restored, key, value)
+        await db_session.commit()
 
 
 # ── reparse-salary backfill (PR feat/reparse-salary-backfill) ────────────────

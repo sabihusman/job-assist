@@ -264,6 +264,58 @@ async def test_sweep_only_unclassified_false_touches_all(
 
 @_NEEDS_DB
 @pytest.mark.asyncio
+async def test_sweep_does_not_rebuy_llm_confirmed_other(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """fix(audit): a row THIS classifier version already judged 'other' must
+    not be re-selected by only_unclassified — pre-fix it stayed in the bucket
+    forever and was re-sent to Gemini daily, producing the same answer at the
+    same CLASSIFIER_VERSION (pure wasted paid calls). A row classified by an
+    OLDER version stays re-keyable."""
+    from job_assist.main import app
+
+    _patch_classify(monkeypatch, ("other", "unknown"))
+
+    tc = _company()
+    db_session.add(tc)
+    await db_session.flush()
+
+    # LLM-confirmed 'other' at the CURRENT version → must be skipped.
+    db_session.add(
+        _posting(
+            target_company_id=tc.id,
+            role_family="other",
+            seniority_level="unknown",
+            classifier_version=CLASSIFIER_VERSION,
+            classified_at=datetime.now(tz=UTC),
+        )
+    )
+    # Same bucket, but classified by an OLDER version → re-keyable, selected.
+    db_session.add(
+        _posting(
+            target_company_id=tc.id,
+            role_family="other",
+            seniority_level="unknown",
+            classifier_version="gemini-flash-lite-v0-legacy",
+            classified_at=datetime.now(tz=UTC),
+        )
+    )
+    # Never-classified regex 'other' → selected.
+    db_session.add(_posting(target_company_id=tc.id, role_family="other"))
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await _post_sweep(client, limit=50, only_unclassified=True)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    # Only the legacy-version row + the never-classified row are processed;
+    # the current-version 'other' is NOT re-bought.
+    assert data["processed"] == 2
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
 async def test_sweep_llm_failure_skips_one_row(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:

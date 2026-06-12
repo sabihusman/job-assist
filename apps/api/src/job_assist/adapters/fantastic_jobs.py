@@ -108,9 +108,15 @@ STRATEGY_TITLE_SEARCH: list[str] = [
 # Corporate Strategy). The warm-path exclusions keep only the terms that
 # can't collide with EITHER family's wanted titles; seniority control for
 # the strategy lane is the classifier + operator eyeball (the lane is small).
+#
+# fix(audit judgment #3): the Senior-PM exclusion is DROPPED here too. tsquery
+# multi-word terms match as tokenized AND, so "Senior Product Manager"
+# excluded wanted strategy titles like "Senior Manager, Product Strategy"
+# (senior+product+manager all present) — contradicting the no-collision claim
+# above. Warm-path volume is a trickle: a few senior-PM rows of noise are
+# acceptable; silently losing strategy titles is not. The PM track's
+# TITLE_EXCLUSION_SEARCH keeps the exclusion unchanged.
 WARM_PATH_TITLE_EXCLUSION_SEARCH: list[str] = [
-    "Senior Product Manager",
-    "Sr Product Manager",
     "Project Manager",
     "Program Manager",
     "Product Marketing",

@@ -194,9 +194,24 @@ def test_build_actor_input_strategy_track_widens_search() -> None:
     # that would tsquery-kill "Chief of Staff" / "Strategy Lead".
     for tok in ["Chief", "Staff", "Lead", "Director", "Head", "VP", "Principal", "Group"]:
         assert tok not in body["titleExclusionSearch"]
-    # PM seniority + wrong-family exclusions survive.
-    assert "Senior Product Manager" in body["titleExclusionSearch"]
+    # Wrong-family exclusions survive.
     assert "Program Manager" in body["titleExclusionSearch"]
+
+
+def test_strategy_track_does_not_exclude_senior_pm_terms() -> None:
+    """fix(audit judgment #3): tsquery multi-word exclusions match as
+    tokenized AND, so excluding "Senior Product Manager" on the strategy
+    track killed wanted titles like "Senior Manager, Product Strategy"
+    (senior+product+manager all present). The exclusion is dropped on the
+    strategy track ONLY — warm-path volume is a trickle, senior-PM noise is
+    acceptable, losing strategy titles is not."""
+    body = build_actor_input(organization="John Deere", domain="deere.com", track="strategy")
+    assert "Senior Product Manager" not in body["titleExclusionSearch"]
+    assert "Sr Product Manager" not in body["titleExclusionSearch"]
+    # The PM track keeps its locked exclusion unchanged.
+    pm = build_actor_input(organization="Athene", domain="athene.com", track="pm")
+    assert "Senior Product Manager" in pm["titleExclusionSearch"]
+    assert "Sr Product Manager" in pm["titleExclusionSearch"]
 
 
 def test_build_actor_input_default_track_unchanged() -> None:

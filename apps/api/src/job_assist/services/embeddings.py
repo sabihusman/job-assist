@@ -392,7 +392,11 @@ async def embed_profile_if_changed(session: AsyncSession) -> bool:
     """Re-embed the operator profile's ``looking_for_text`` when it changed.
 
     Hash-gated: a no-op save (text unchanged) skips the call. Empty text
-    clears the vector. Returns True when a (re-)embed happened.
+    clears the vector. Returns True when the embedding STATE changed — a
+    (re-)embed OR a clear — so the caller's recalibrate+rescore hook runs in
+    both directions (fix/audit judgment #4: a clear used to return False, so
+    every posting kept a similarity_score computed against the now-deleted
+    vector and the scorer blended that stale signal indefinitely).
 
     CALLER WRAPS THIS IN try/except — an embedding failure must NEVER fail the
     profile save (same "must not cascade" contract as scoring at ingest).
@@ -406,12 +410,16 @@ async def embed_profile_if_changed(session: AsyncSession) -> bool:
 
     text = (profile.looking_for_text or "").strip()
     if not text:
-        # Cleared the field — drop any stale vector so nearest() returns empty.
+        # Cleared the field — drop any stale vector so nearest() returns empty,
+        # and report the change so the caller NULLs similarity_score corpus-wide
+        # (recalibrate_similarity handles the no-vector case) + rescores.
         if profile.looking_for_embedding is not None:
             profile.looking_for_embedding = None
             profile.looking_for_embedding_hash = None
             profile.looking_for_embedded_at = None
             await session.commit()
+            logger.info("embeddings.profile_cleared")
+            return True
         return False
 
     new_hash = text_hash(text)
@@ -660,7 +668,26 @@ async def recalibrate_similarity(
         await session.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
     ).scalar_one_or_none()
     if profile is None or profile.looking_for_embedding is None:
-        return {"available": False, "calibrated": 0, "reason": "profile not embedded yet"}
+        # fix(audit judgment #4): no profile vector → there IS no valid
+        # similarity. NULL the corpus instead of no-opping, so a cleared
+        # looking_for_text stops feeding the scorer a stale calibration
+        # (score_semantic_fit returns None on NULL and score_posting
+        # renormalizes fit over the remaining features).
+        result = await session.execute(
+            update(JobPosting)
+            .where(JobPosting.similarity_score.is_not(None))
+            .values(similarity_score=None)
+        )
+        await session.commit()
+        cleared = cast("CursorResult[Any]", result).rowcount or 0
+        if cleared:
+            logger.info("embeddings.similarity_cleared", extra={"rows": int(cleared)})
+        return {
+            "available": False,
+            "calibrated": 0,
+            "cleared": int(cleared),
+            "reason": "profile not embedded yet",
+        }
 
     profile_vec = list(profile.looking_for_embedding)
     distance = JobPosting.jd_embedding.cosine_distance(profile_vec)

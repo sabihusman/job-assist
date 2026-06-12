@@ -94,6 +94,10 @@ async def db_session(_apply_migrations: None) -> AsyncGenerator[AsyncSession, No
                 "TRUNCATE posting_action, posting_source, triage_result, "
                 "outcome_event, application_state, job_posting, ingest_run, "
                 "closed_channel, target_company, contact, discovered_handle, "
+                # fix(audit): resume_version is REFERENCED by other tables —
+                # CASCADE only reaches referencing dependents, never referenced
+                # parents — so its rows leaked across tests and across runs.
+                "resume_version, "
                 # feat/gmail-health-check: gmail_sweep_run is written from an
                 # autonomous session (record_sweep), so it survives the request
                 # transaction and must be truncated here or it leaks across tests.
