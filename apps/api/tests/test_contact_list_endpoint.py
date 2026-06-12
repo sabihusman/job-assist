@@ -114,6 +114,73 @@ async def _clear_contacts(db_session: Any) -> None:
     await db_session.commit()
 
 
+# ── fix(audit badge parity): ?employer= uses the badge's normalizer ──────────
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_employer_filter_agrees_with_badge_count_by_construction(db_session: Any) -> None:
+    """The warm-path badge counts contacts by NORMALIZED employer key
+    (company_signals); its click-through lands on /contacts?employer=. Both
+    sides must use the SAME normalizer so the destination list shows exactly
+    the contacts that produced 'N alumni here' — no over-match (the old raw
+    ILIKE found 'Acmesoft' for 'Acme'), no under-match (an outcome-derived
+    display name like 'Acme Recruiting Team' found nothing).
+    """
+    from job_assist.services.company_name_match import normalize_company_name
+
+    await _clear_contacts(db_session)
+    # Three employers that normalize to the SAME key as "Acme"...
+    db_session.add(_contact(n=1, employer="Acme Corp"))
+    db_session.add(_contact(n=2, employer="Acme, Inc."))
+    db_session.add(_contact(n=3, employer="acme"))
+    # ...and a near-miss the old substring ILIKE would have over-matched.
+    db_session.add(_contact(n=4, employer="Acmesoft"))
+    await db_session.commit()
+
+    # Sanity: the fixtures really share/differ on the normalized key.
+    assert normalize_company_name("Acme Corp") == normalize_company_name("acme")
+    assert normalize_company_name("Acmesoft") != normalize_company_name("acme")
+
+    client = await _client(db_session)
+    try:
+        # The badge href passes a display-name variant — any variant that
+        # normalizes to the same key must return the same set.
+        for param in ("Acme", "Acme Corp", "Acme, Inc."):
+            resp = await client.get("/contacts", params={"employer": param})
+            assert resp.status_code == 200
+            body = resp.json()
+            employers = sorted(i["current_employer"] for i in body["items"])
+            assert body["total"] == 3, f"employer={param!r}: {employers}"
+            assert "Acmesoft" not in employers
+
+        # The near-miss queried directly only finds itself.
+        resp = await client.get("/contacts", params={"employer": "Acmesoft"})
+        assert resp.json()["total"] == 1
+    finally:
+        await _drop_override()
+        await _clear_contacts(db_session)
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_employer_filter_normalizing_to_nothing_matches_nothing(db_session: Any) -> None:
+    """A filter value that normalizes to an empty key (bare suffix noise)
+    matches zero rows instead of falling back to a raw substring scan."""
+    await _clear_contacts(db_session)
+    db_session.add(_contact(n=1, employer="Inc. Magazine"))
+    await db_session.commit()
+
+    client = await _client(db_session)
+    try:
+        resp = await client.get("/contacts", params={"employer": "Inc."})
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 0
+    finally:
+        await _drop_override()
+        await _clear_contacts(db_session)
+
+
 # ── Validation (pure, no DB) ────────────────────────────────────────────────
 
 
