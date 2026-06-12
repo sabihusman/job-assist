@@ -515,6 +515,60 @@ async def trigger_fantastic_ingest(db: DbSession, source: str = "curated") -> di
     return await ingest_curated_via_fantastic(db, token, source=source)
 
 
+# Wellfound query roles the operator may sweep. URL-slug form (the actor is
+# URL-driven). Kept small + explicit so a typo can't fan out into many paid
+# queries; the default targets where first-PM-hire/0-to-1 roles concentrate.
+_WELLFOUND_ROLES = {"product-manager", "product-management", "founding-product-manager"}
+
+
+@app.post("/admin/ingest/wellfound", tags=["admin"])
+async def trigger_wellfound_ingest(
+    db: DbSession,
+    role: str = "product-manager",
+    only_remote: bool = True,
+    page_limit: int = 1,
+    monitor_mode: bool = False,
+) -> dict[str, Any]:
+    """Query Wellfound for one role via the clearpath Apify actor, discover
+    companies from the postings, and ingest each through the standard pipeline
+    (feat/wellfound-ingest). Query-driven — discovered companies are
+    ``source='wellfound'`` shells that NEVER join a recurring plan.
+
+    HARD COST CAPS: ``page_limit`` is clamped (1-5) and the actor call carries a
+    ``_MAX_RECORDS_PER_RUN`` failsafe + a per-run cost-sanity alert, so a filter
+    regression can never fail open into an unbounded paid fetch. ``monitor_mode``
+    fetches only-new since the last run (cheaper at a daily cadence; verify its
+    behavior on a second pull before relying on it).
+
+    Returns the Gate-1 readout: fetched / kept / skipped_quality, the estimated
+    run cost + cost-guard flag, per-company new/updated counts. 503 when
+    ``APIFY_API_TOKEN`` is unset.
+    """
+    from job_assist.services.wellfound_ingest import ingest_wellfound
+
+    if role not in _WELLFOUND_ROLES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"role must be one of {sorted(_WELLFOUND_ROLES)}",
+        )
+    if not 1 <= page_limit <= 5:
+        raise HTTPException(status_code=422, detail="page_limit must be 1..5 (hard cost cap)")
+    token = settings.apify_api_token
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail="APIFY_API_TOKEN is not configured (server-side Apify credential).",
+        )
+    return await ingest_wellfound(
+        db,
+        token,
+        role=role,
+        only_remote=only_remote,
+        page_limit=page_limit,
+        monitor_mode=monitor_mode,
+    )
+
+
 @app.get("/admin/ingest/fantastic-plan", tags=["admin"])
 async def get_fantastic_plan(db: DbSession, source: str = "curated") -> dict[str, Any]:
     """List the employers ONE Apify cohort would sweep — the fantastic-path
@@ -861,7 +915,7 @@ async def seed_target_companies(
     }
 
 
-_CRAWL_CONFIG_SOURCES = {"curated", "broad", "deactivated", "applied", "warm_path"}
+_CRAWL_CONFIG_SOURCES = {"curated", "broad", "deactivated", "applied", "warm_path", "wellfound"}
 
 
 def _validate_crawl_config_row(row: dict[str, Any]) -> None:
@@ -2706,7 +2760,12 @@ async def backfill_department_team_endpoint(db: DbSession) -> dict[str, int]:
 # Previously hardcoded {greenhouse, lever, ashby}; it drifted when the Workday
 # (#33) and iCIMS (#55) adapters shipped, so ?ats=workday / ?ats=icims 422'd —
 # the SOURCE filter chips for those two were dead.
-_ALLOWED_ATS_VALUES = set(_INGESTABLE_ATS)
+# feat/wellfound-ingest: decoupled from _INGESTABLE_ATS. The DAILY-PLAN set
+# (_INGESTABLE_ATS) is the five free company-board adapters; Wellfound is
+# query-driven via Apify and must NOT join that plan — but its postings DO
+# carry posting_source.ats='wellfound', so the filter (+ export + frontend
+# chip) must accept it.
+_ALLOWED_ATS_VALUES = set(_INGESTABLE_ATS) | {"wellfound"}
 _ALLOWED_REMOTE_TYPES = {"remote", "hybrid", "onsite"}
 _ALLOWED_STATE_FILTER_VALUES = {
     "triage",

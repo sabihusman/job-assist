@@ -359,7 +359,12 @@ async def test_count_qualified_only_broad_shells_this_week(db_session: Any) -> N
     this_week = week_start + timedelta(hours=1)
     last_week = week_start - timedelta(days=1)
 
-    shell = TargetCompany(name="ShellCo", ats="greenhouse", ats_handle="shellco", tier=None)
+    # feat/wellfound-ingest: the cap is now scoped to source='broad' (so
+    # wellfound/warm_path tier-NULL shells don't eat the broad quota), and
+    # _ensure_shell_company stamps 'broad' on creation — set it explicitly here.
+    shell = TargetCompany(
+        name="ShellCo", ats="greenhouse", ats_handle="shellco", tier=None, source="broad"
+    )
     curated = TargetCompany(name="CuratedCo", ats="greenhouse", ats_handle="curatedco", tier=1)
     db_session.add_all([shell, curated])
     await db_session.flush()
@@ -380,6 +385,41 @@ async def test_count_qualified_only_broad_shells_this_week(db_session: Any) -> N
     await db_session.commit()
 
     assert await count_qualified_broad_this_week(db_session) == 2
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_qualified_count_excludes_wellfound_and_warmpath_shells(db_session: Any) -> None:
+    """feat/wellfound-ingest: the cap is scoped to source='broad'. A wellfound
+    or warm_path shell is ALSO tier-NULL, but its qualified postings must NOT
+    count toward the BROAD weekly quota (else a query-driven Wellfound sweep
+    silently starves the broad cron). Also closes the warm-path-leak LOW."""
+    from datetime import timedelta
+
+    from job_assist.services.broad_ingest import (
+        _current_iso_week_start,
+        count_qualified_broad_this_week,
+    )
+
+    this_week = _current_iso_week_start() + timedelta(hours=1)
+    broad = TargetCompany(
+        name="BroadCo", ats="greenhouse", ats_handle="broadco", tier=None, source="broad"
+    )
+    wf = TargetCompany(name="WellfoundCo", ats="unknown", tier=None, source="wellfound")
+    warm = TargetCompany(name="WarmCo", ats="workday", tier=None, source="warm_path")
+    db_session.add_all([broad, wf, warm])
+    await db_session.flush()
+
+    db_session.add_all(
+        [
+            _qualified_posting(tc_id=broad.id, fit_score=90, first_seen=this_week),  # counts
+            _qualified_posting(tc_id=wf.id, fit_score=95, first_seen=this_week),  # excluded
+            _qualified_posting(tc_id=warm.id, fit_score=95, first_seen=this_week),  # excluded
+        ]
+    )
+    await db_session.commit()
+
+    assert await count_qualified_broad_this_week(db_session) == 1
 
 
 # ── Weekly cap control flow (patched counter) ───────────────────────────────

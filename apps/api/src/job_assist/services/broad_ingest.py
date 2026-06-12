@@ -106,6 +106,12 @@ async def count_qualified_broad_this_week(session: AsyncSession) -> int:
         .select_from(JobPosting)
         .join(TargetCompany, JobPosting.target_company_id == TargetCompany.id)
         .where(TargetCompany.tier.is_(None))
+        # feat/wellfound-ingest: tier IS NULL alone no longer means "broad" —
+        # warm_path and wellfound shells are also tier-NULL. Scope the cap to
+        # source='broad' so the query-driven Wellfound (and weekly warm-path)
+        # shells don't silently consume the broad weekly quota. (Also closes
+        # the warm-path-leak LOW from the June audit.)
+        .where(TargetCompany.source == "broad")
         .where(JobPosting.fit_score >= _QUALIFIED_SCORE_FLOOR)
         .where(JobPosting.first_seen_at >= week_start)
     )
@@ -236,6 +242,13 @@ async def _ensure_shell_company(session: AsyncSession, *, ats: str, handle: str)
         ats=ats,
         ats_handle=handle,
         tier=None,
+        # feat/wellfound-ingest: stamp source='broad' explicitly. The column's
+        # server_default is 'curated', so a shell inserted without it was
+        # mislabeled — harmless while the weekly cap keyed on tier IS NULL, but
+        # now that the cap is scoped to source='broad' (so wellfound/warm_path
+        # tier-NULL shells don't eat it), a broad shell MUST carry 'broad' or it
+        # would silently stop counting toward its own cap.
+        source="broad",
     )
     session.add(shell)
     await session.flush()
