@@ -229,9 +229,31 @@ class EmailClassifier:
                     reasoning="non-JSON response",
                 )
 
+        # fix(audit): valid-but-non-object JSON (a top-level array or a bare
+        # string — both observed with response_mime_type=application/json)
+        # used to flow into _coerce_result and raise AttributeError on
+        # ``payload.get``, violating this method's never-raises contract and
+        # wasting the paid Gemini call. Unwrap a single-object array (the
+        # common Gemini wrapping); anything else non-dict → unclassified.
+        if isinstance(payload, list):
+            payload = next((p for p in payload if isinstance(p, dict)), None)
+        if not isinstance(payload, dict):
+            logger.warning(
+                "classifier.non_object_json",
+                extra={"message_id": email.message_id, "raw": raw[:200]},
+            )
+            return ClassificationResult(
+                outcome_type="unclassified",
+                confidence=0.0,
+                reasoning="non-object JSON response",
+            )
+
         try:
             return _coerce_result(payload)
-        except ValidationError:
+        except (ValidationError, AttributeError, TypeError):
+            # _coerce_result clamps every field, so this is belt-and-braces —
+            # but the contract is "never raises for malformed model output",
+            # so any shape-level surprise degrades to unclassified.
             return ClassificationResult(
                 outcome_type="unclassified",
                 confidence=0.0,

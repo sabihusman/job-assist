@@ -345,6 +345,17 @@ async def run_backfill(
 # arbitrary lookback so this can grow without changing the protocol.
 POLL_BOOTSTRAP_LOOKBACK = timedelta(hours=24)
 
+# fix(audit): retry window for transiently-failed messages. The watermark is
+# MAX(received_at) over INSERTED rows, and Gmail lists newest-first — so when
+# a newer message inserted but an older one hit a transient error (Gmail 5xx,
+# Gemini 429 exhausted), the failed message fell permanently outside every
+# future ``after:`` window. Polling from ``watermark - overlap`` re-lists the
+# recent window so failed messages get retried on every poll for 24 hours.
+# Cheap by construction: already-inserted ids are skipped by the
+# ``already_seen`` pre-check before any fetch or Gemini call — the only
+# recurring cost is the messages.list page and one SELECT.
+POLL_SAFETY_OVERLAP = timedelta(hours=24)
+
 
 async def run_poll(
     session: AsyncSession,
@@ -357,6 +368,13 @@ async def run_poll(
     ``now() - POLL_BOOTSTRAP_LOOKBACK`` (24 h) when the table is empty.
     The watermark is *derived* from data every run — no separate state
     table to drift out of sync.
+
+    The Gmail query looks back ``POLL_SAFETY_OVERLAP`` (24 h) BEFORE the
+    watermark so a message that hit a transient fetch/classifier error gets
+    retried by subsequent polls instead of being permanently dropped once a
+    newer message in the same batch advanced the watermark past it. The
+    overlap re-lists already-classified ids, which the ``already_seen``
+    pre-check skips for free (no fetch, no Gemini call).
     """
     from sqlalchemy import func
 
@@ -385,7 +403,7 @@ async def run_poll(
             )
             watermark = now
 
-    query = build_after_query(watermark)
+    query = build_after_query(watermark - POLL_SAFETY_OVERLAP)
     report = await _run_email_ingest(session, gmail, classifier, query=query)
     report.watermark_used = watermark
     report.watermark_in_future = watermark_in_future
