@@ -2159,6 +2159,20 @@ async def reclassify_sweep_endpoint(
                 cast(JobPosting.seniority_level, Text) == "unknown",
             )
         )
+        # fix(audit): skip rows THIS classifier version already judged — an
+        # LLM-confirmed 'other'/'unknown' stayed in the bucket forever and was
+        # re-sent to Gemini daily, producing the same answer at the same
+        # CLASSIFIER_VERSION (pure wasted paid calls, up to `limit` per day,
+        # contradicting the workflow's "sweeps regex-failures" intent). A
+        # version BUMP keeps them re-keyable — only same-version re-buys are
+        # blocked. The health check's reclassify_pending mirrors this clause.
+        stmt = stmt.where(
+            or_(
+                JobPosting.classified_at.is_(None),
+                JobPosting.classifier_version.is_(None),
+                JobPosting.classifier_version != CLASSIFIER_VERSION,
+            )
+        )
     # Oldest classified_at first; NULLs sort first so never-LLM-classified
     # rows are processed before rows the sweep has already touched.
     #
@@ -4162,6 +4176,8 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
     # Mirrors the sweep's own only_unclassified WHERE clause.
     from sqlalchemy import or_ as _or
 
+    from job_assist.services.classifier import CLASSIFIER_VERSION as _RECLASSIFY_VERSION
+
     reclassify_pending = (
         await db.execute(
             select(func.count())
@@ -4171,6 +4187,17 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
                 _or(
                     cast(JobPosting.role_family, Text) == "other",
                     cast(JobPosting.seniority_level, Text) == "unknown",
+                )
+            )
+            # fix(audit): mirror the sweep's same-version skip — an LLM-
+            # confirmed 'other'/'unknown' is NOT pending work (re-running the
+            # same model version cannot change it), so it must not hold the
+            # llm_healthy check yellow.
+            .where(
+                _or(
+                    JobPosting.classified_at.is_(None),
+                    JobPosting.classifier_version.is_(None),
+                    JobPosting.classifier_version != _RECLASSIFY_VERSION,
                 )
             )
         )

@@ -467,13 +467,21 @@ async def test_profile_embed_cleared_when_text_empty(
     await db_session.commit()
 
     # Now clear the text — embedding should be dropped, no SDK call.
+    # fix(audit judgment #4): the clear IS a state change — it must return
+    # True so the caller's recalibrate+rescore hook runs and the stale
+    # similarity calibration is torn down (pre-fix it returned False and the
+    # scorer kept blending scores from the deleted vector).
     prof.looking_for_text = ""
     await db_session.commit()
     changed = await embed_profile_if_changed(db_session)
-    assert changed is False
+    assert changed is True
 
     await db_session.refresh(prof)
     assert prof.looking_for_embedding is None
+
+    # A second clear with no vector left is a true no-op.
+    changed_again = await embed_profile_if_changed(db_session)
+    assert changed_again is False
 
     await _reset_profile(db_session)
 
@@ -634,10 +642,32 @@ async def test_recalibrate_spreads_compressed_cosines_to_uniform_0_100(
 
 
 @_NEEDS_DB
-async def test_recalibrate_noop_when_profile_unembedded(db_session: Any) -> None:
+async def test_recalibrate_unembedded_profile_nulls_similarity(db_session: Any) -> None:
+    """fix(audit judgment #4): with no profile vector there IS no valid
+    similarity — recalibrate NULLs the corpus instead of no-opping, so a
+    cleared looking_for_text stops feeding the scorer a stale calibration
+    (score_semantic_fit returns None on NULL; fit renormalizes over the
+    remaining features)."""
     await _reset_profile(db_session)  # looking_for_embedding is NULL
+
+    company = _company()
+    db_session.add(company)
+    await db_session.flush()
+    stale = _posting(target_company_id=company.id, embedding=_vec(0))
+    stale.similarity_score = 88  # calibrated against a since-deleted vector
+    db_session.add(stale)
+    await db_session.commit()
+    stale_id = stale.id
+
     out = await recalibrate_similarity(db_session)
-    assert out == {"available": False, "calibrated": 0, "reason": "profile not embedded yet"}
+    assert out["available"] is False
+    assert out["calibrated"] == 0
+    assert out["cleared"] == 1
+
+    refreshed = (
+        await db_session.execute(select(JobPosting).where(JobPosting.id == stale_id))
+    ).scalar_one()
+    assert refreshed.similarity_score is None
 
 
 @_NEEDS_DB

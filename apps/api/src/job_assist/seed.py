@@ -98,10 +98,15 @@ async def seed_from_rows(
         if existing is not None:
             if backfill_nullables:
                 changed = False
-                # Patch nullable columns where the DB row is NULL and
-                # the seed supplies a value. ``name`` and ``tier`` are
-                # NOT NULL so they're excluded by construction.
-                for field in _SEED_FIELDS - {"name", "tier"}:
+                # Patch nullable columns where the DB row is NULL and the
+                # seed supplies a value. Only ``name`` is excluded (the match
+                # key). fix(audit): ``tier`` used to be excluded on the stale
+                # premise that it's NOT NULL — it has been nullable since the
+                # broad-ingestion expansion, so a NULL-tier row silently never
+                # got the seed's tier (and stayed outside the daily plan's
+                # ``tier IS NOT NULL`` gate) while the response could still
+                # claim the row was backfilled.
+                for field in _SEED_FIELDS - {"name"}:
                     if field not in row:
                         continue
                     seed_value = row[field]

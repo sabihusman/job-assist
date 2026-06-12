@@ -139,6 +139,62 @@ async def test_handle_not_found_is_recorded_as_distinct_status(db_session: Any) 
     assert "ghost-handle" in (run.error_message or "")
 
 
+# ── DB-level failure mid-run still records the failed IngestRun ───────────────
+
+
+@_NEEDS_DB
+async def test_db_level_failure_records_failed_run_on_clean_session(db_session: Any) -> None:
+    """fix(audit): a DB-level error mid-run (an errored statement aborts the
+    whole Postgres transaction) used to make the except-branch commit raise
+    PendingRollbackError — losing the failed IngestRun row, propagating out,
+    and aborting the rest of the fantastic/broad batch. The handler now rolls
+    back and re-records the failed run on the clean session.
+    """
+    from sqlalchemy import text
+
+    from job_assist.db.models.ingest_run import IngestRun
+
+    class _TxBreakingAdapter:
+        """Errors a statement on the RUN's session mid-fetch — the realistic
+        shape of an IntegrityError raised inside flush."""
+
+        ats = "greenhouse"
+        parser_version = "stub-v1"
+
+        def __init__(self, session: Any) -> None:
+            self._session = session
+
+        async def fetch_postings(self, handle: str) -> list[Any]:
+            # Any errored statement aborts the transaction; every later
+            # statement (including COMMIT) then fails until rollback.
+            await self._session.execute(text("SELECT 1/0"))
+            return []
+
+        def normalize(self, raw: Any, canonical_company_name: str) -> Any:
+            raise AssertionError("unreachable")
+
+    service = IngestionService()
+    # Must RETURN (not raise) — one bad board never aborts the batch.
+    run = await service.ingest_source(
+        _TxBreakingAdapter(db_session),  # type: ignore[arg-type]
+        "txbreak",
+        db_session,
+    )
+    assert run.status == "failed"
+
+    # The failed run row is PERSISTED (it used to be lost with the rollback)...
+    persisted = (
+        await db_session.execute(
+            select(func.count()).select_from(IngestRun).where(IngestRun.status == "failed")
+        )
+    ).scalar_one()
+    assert persisted == 1
+
+    # ...and the session is usable for the batch's next employer.
+    ok = (await db_session.execute(text("SELECT 1"))).scalar_one()
+    assert ok == 1
+
+
 # ── last_swept_at stamping (fix/audit per-pipeline health) ────────────────────
 
 

@@ -207,7 +207,20 @@ class IngestionService:
             run.postings_fetched = postings_fetched
             run.postings_new = postings_new
             run.postings_updated = postings_updated
-            await session.commit()
+            try:
+                # Preserve the docstring contract where possible: partial work
+                # from before the failure commits alongside the failed run.
+                await session.commit()
+            except Exception:
+                # fix(audit): a DB-LEVEL failure (e.g. an IntegrityError mid-
+                # flush) aborts the whole transaction — this commit then raised
+                # PendingRollbackError, which propagated out, LOST the failed
+                # IngestRun row, and aborted the rest of the fantastic/broad
+                # batch. Roll back (discarding the unsalvageable partial work),
+                # then re-record just the failed run on the now-clean session.
+                await session.rollback()
+                session.add(run)
+                await session.commit()
             logger.exception("ingestion.failed", handle=handle, ats=adapter.ats)
 
         return run
