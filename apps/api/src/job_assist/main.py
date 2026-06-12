@@ -1764,14 +1764,23 @@ async def gmail_backfill(
         )
 
     from job_assist.gmail.backfill import run_backfill
+    from job_assist.gmail.sweep_lock import GmailSweepBusyError, gmail_sweep_slot
     from job_assist.services.gmail_sweep_run import record_sweep
 
     try:
+        # fix(audit): one Gmail sweep at a time. A backfill overlapping the
+        # 15-min cron poll double-spends Gemini on shared messages and then
+        # IntegrityErrors on the unique email_message_id, aborting the batch.
         # feat/gmail-health-check: same sweep recording as the poll path.
-        async with record_sweep("backfill") as sweep:
+        async with gmail_sweep_slot(), record_sweep("backfill") as sweep:
             gmail, classifier = _build_gmail_runtime()
             report = await run_backfill(db, gmail, classifier, days_back=days)
             sweep.set_counts(report)
+    except GmailSweepBusyError:
+        raise HTTPException(
+            status_code=409,
+            detail="A Gmail sweep (poll or backfill) is already running — retry when it finishes.",
+        ) from None
     except HTTPException:
         raise
     except Exception as exc:
@@ -1807,15 +1816,24 @@ async def gmail_poll(db: DbSession) -> dict[str, Any]:
         )
 
     from job_assist.gmail.backfill import run_poll
+    from job_assist.gmail.sweep_lock import GmailSweepBusyError, gmail_sweep_slot
     from job_assist.services.gmail_sweep_run import record_sweep
 
     try:
-        # feat/gmail-health-check: record the sweep (start/finish/runtime/status)
-        # so the health monitor can report Gmail ingestion liveness + runtime.
-        async with record_sweep("poll") as sweep:
+        # fix(audit): one Gmail sweep at a time — see /admin/gmail/backfill.
+        # A 409 here is benign for the cron: the running sweep covers the
+        # same window and the next 15-min tick retries.
+        # feat/gmail-health-check: record the sweep (start/finish/runtime/
+        # status) so the health monitor reports Gmail liveness + runtime.
+        async with gmail_sweep_slot(), record_sweep("poll") as sweep:
             gmail, classifier = _build_gmail_runtime()
             report = await run_poll(db, gmail, classifier)
             sweep.set_counts(report)
+    except GmailSweepBusyError:
+        raise HTTPException(
+            status_code=409,
+            detail="A Gmail sweep (poll or backfill) is already running — the next poll retries.",
+        ) from None
     except HTTPException:
         raise
     except Exception as exc:

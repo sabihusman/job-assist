@@ -169,6 +169,62 @@ async def test_non_json_response_yields_unclassified(fake_genai: _FakeGenAiHolde
     assert result.confidence == 0.0
 
 
+# ── fix(audit): valid-but-non-object JSON must not raise ──────────────────────
+#
+# With response_mime_type=application/json Gemini sometimes returns a
+# top-level ARRAY wrapping the object, or a bare JSON string. json.loads
+# succeeds, then _coerce_result's ``payload.get`` raised AttributeError —
+# violating classify()'s "never raises for malformed model output" contract
+# and wasting the paid call (the orchestrator skipped the message).
+
+
+async def test_top_level_array_json_unwraps_first_object(fake_genai: _FakeGenAiHolder) -> None:
+    from job_assist.gmail.classifier import EmailClassifier
+
+    classifier = EmailClassifier(api_key="test-key")
+    fake_genai.models.queue(  # type: ignore[attr-defined]
+        _FakeResponse(
+            json.dumps(
+                [
+                    {
+                        "outcome_type": "rejection_pre_screen",
+                        "confidence": 0.88,
+                        "extracted_company": "Acmecorp",
+                        "reasoning": "wrapped in an array",
+                    }
+                ]
+            )
+        )
+    )
+    # Must not raise; the single-object wrapping is unwrapped and parsed.
+    result = await classifier.classify(_make_email())
+    assert result.outcome_type == "rejection_pre_screen"
+    assert result.extracted_company == "Acmecorp"
+
+
+async def test_bare_json_string_yields_unclassified_not_attributeerror(
+    fake_genai: _FakeGenAiHolder,
+) -> None:
+    from job_assist.gmail.classifier import EmailClassifier
+
+    classifier = EmailClassifier(api_key="test-key")
+    # A bare string IS valid JSON — json.loads succeeds with a str payload.
+    fake_genai.models.queue(_FakeResponse(json.dumps("rejection_pre_screen")))  # type: ignore[attr-defined]
+    result = await classifier.classify(_make_email())
+    assert result.outcome_type == "unclassified"
+    assert result.confidence == 0.0
+    assert "non-object" in result.reasoning
+
+
+async def test_array_of_non_objects_yields_unclassified(fake_genai: _FakeGenAiHolder) -> None:
+    from job_assist.gmail.classifier import EmailClassifier
+
+    classifier = EmailClassifier(api_key="test-key")
+    fake_genai.models.queue(_FakeResponse(json.dumps(["rejection", 0.9])))  # type: ignore[attr-defined]
+    result = await classifier.classify(_make_email())
+    assert result.outcome_type == "unclassified"
+
+
 async def test_json_embedded_in_prose_is_recovered(fake_genai: _FakeGenAiHolder) -> None:
     from job_assist.gmail.classifier import EmailClassifier
 

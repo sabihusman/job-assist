@@ -18,6 +18,7 @@ from sqlalchemy import func, select
 from job_assist.db.models import OutcomeEvent
 from job_assist.gmail.backfill import (
     POLL_BOOTSTRAP_LOOKBACK,
+    POLL_SAFETY_OVERLAP,
     build_after_query,
     run_poll,
 )
@@ -71,8 +72,11 @@ async def test_poll_uses_max_received_at_as_watermark(db_session: Any) -> None:
 
     assert len(gmail.list_queries) == 1, "list_message_ids called exactly once"
     parsed = _after_seconds(gmail.list_queries[0])
-    assert parsed == int(watermark_ts.timestamp()), (
-        f"poll query should use MAX(received_at) unix seconds; got {parsed}"
+    # fix(audit): the query looks back POLL_SAFETY_OVERLAP before the
+    # watermark so transiently-failed messages get retried; the REPORTED
+    # watermark stays the true MAX(received_at).
+    assert parsed == int((watermark_ts - POLL_SAFETY_OVERLAP).timestamp()), (
+        f"poll query should use MAX(received_at) minus the safety overlap; got {parsed}"
     )
     assert report.watermark_used == watermark_ts
     assert report.outcome_events_inserted == 1
@@ -168,7 +172,9 @@ async def test_poll_advances_watermark(db_session: Any) -> None:
     report_1 = await run_poll(db_session, gmail_1, classifier_1)
 
     assert report_1.outcome_events_inserted == 1
-    assert _after_seconds(gmail_1.list_queries[0]) == int(initial_watermark.timestamp())
+    assert _after_seconds(gmail_1.list_queries[0]) == int(
+        (initial_watermark - POLL_SAFETY_OVERLAP).timestamp()
+    )
     assert report_1.watermark_advanced_to == new_received
 
     # Run 2: fresh fake. The watermark should now be the run-1 inserted row's received_at.
@@ -176,11 +182,64 @@ async def test_poll_advances_watermark(db_session: Any) -> None:
     classifier_2 = _FakeClassifier({})
     report_2 = await run_poll(db_session, gmail_2, classifier_2)
 
-    assert _after_seconds(gmail_2.list_queries[0]) == int(new_received.timestamp()), (
-        "second poll should use the newest received_at as watermark, not the seed value"
-    )
+    assert _after_seconds(gmail_2.list_queries[0]) == int(
+        (new_received - POLL_SAFETY_OVERLAP).timestamp()
+    ), "second poll should use the newest received_at (minus overlap), not the seed value"
     assert report_2.watermark_used == new_received
     assert report_2.outcome_events_inserted == 0
+
+
+@_NEEDS_DB
+async def test_poll_retries_transiently_failed_older_message(db_session: Any) -> None:
+    """fix(audit): a transient failure must not permanently drop a message.
+
+    Poll 1: the newer message inserts (advancing the watermark) while the
+    OLDER message hits a classifier error. Pre-fix, poll 2's ``after:`` window
+    started AT the new watermark, so the failed older message fell outside
+    every future window — silently lost. With the safety overlap, poll 2's
+    window still covers it and it gets classified + inserted.
+    """
+    newer_received = datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC)
+    older_received = newer_received - timedelta(hours=1)
+
+    m_new = _email("M_new", from_address="hr@somecompany.com").model_copy(
+        update={"received_at": newer_received}
+    )
+    m_old = _email("M_old", from_address="recruiter@other.com").model_copy(
+        update={"received_at": older_received}
+    )
+
+    # Poll 1: M_new succeeds, M_old's classifier call blows up (Gemini 429
+    # exhausted / transient 5xx).
+    gmail_1 = _FakeGmail([m_new, m_old])
+    classifier_1 = _FakeClassifier(
+        {"M_new": _verdict("application_confirmation")},
+        fail_ids={"M_old"},
+    )
+    report_1 = await run_poll(db_session, gmail_1, classifier_1)
+    assert report_1.outcome_events_inserted == 1
+    assert report_1.classifier_errors == 1
+    assert report_1.watermark_advanced_to == newer_received
+
+    # Poll 2: the window must still COVER the failed older message even
+    # though the watermark advanced past it — that's the regression.
+    gmail_2 = _FakeGmail([m_new, m_old])
+    classifier_2 = _FakeClassifier({"M_old": _verdict("rejection_pre_screen")})
+    report_2 = await run_poll(db_session, gmail_2, classifier_2)
+
+    window_start = _after_seconds(gmail_2.list_queries[0])
+    assert window_start is not None and window_start <= int(older_received.timestamp()), (
+        "poll 2's after: window must reach back past the failed message; "
+        f"got after:{window_start} vs failed message at {int(older_received.timestamp())}"
+    )
+    # The retry classified ONLY the failed message (the inserted one is
+    # skipped by already_seen — no double Gemini spend).
+    assert classifier_2.classify_calls == ["M_old"]
+    assert report_2.skipped_already_classified == 1
+    assert report_2.outcome_events_inserted == 1
+
+    total = (await db_session.execute(select(func.count()).select_from(OutcomeEvent))).scalar_one()
+    assert total == 2  # both messages recorded, nothing lost
 
 
 def test_build_after_query_shape() -> None:
