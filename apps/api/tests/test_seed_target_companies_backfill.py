@@ -186,3 +186,35 @@ def test_project_row_rejects_unknown_source() -> None:
 
     with _pytest.raises(ValueError, match="source must be one of"):
         _project_row({"name": "X", "tier": None, "source": "bogus"})
+
+
+# ── fix(audit): ats/tier vocabulary validation (422 naming the bad field) ────
+
+
+def test_project_row_rejects_unknown_ats() -> None:
+    import pytest as _pytest
+
+    from job_assist.seed import _project_row
+
+    # Pre-fix a bad ats string sailed through and 500'd at the SAEnum cast.
+    with _pytest.raises(ValueError, match="ats must be one of"):
+        _project_row({"name": "X", "tier": 1, "ats": "taleo"})
+
+
+def test_project_row_rejects_out_of_range_tier() -> None:
+    import pytest as _pytest
+
+    from job_assist.seed import _project_row
+
+    # Pre-fix an out-of-range tier inserted silently.
+    with _pytest.raises(ValueError, match="tier must be null or an integer 1-4"):
+        _project_row({"name": "X", "tier": 9})
+    with _pytest.raises(ValueError, match="tier must be null or an integer 1-4"):
+        _project_row({"name": "X", "tier": "high"})
+
+
+def test_project_row_accepts_valid_tier_and_null_tier() -> None:
+    from job_assist.seed import _project_row
+
+    assert _project_row({"name": "X", "tier": 4})["tier"] == 4
+    assert _project_row({"name": "X", "tier": None})["tier"] is None

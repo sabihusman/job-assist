@@ -164,3 +164,42 @@ async def test_options_preflight_not_blocked_by_auth(restore_auth_settings: None
         )
     # The auth gate must not 401 a preflight (CORS answers it).
     assert resp.status_code != 401
+
+
+# ── fix(audit): malformed / non-ASCII tokens fail auth cleanly, never 500 ─────
+#
+# hmac.compare_digest raises TypeError on str operands containing non-ASCII —
+# a garbage or multibyte bearer token (one curl typo away) used to escape the
+# middleware as an unhandled error instead of a clean 401. HTTP header values
+# are latin-1 bytes on the wire (httpx itself refuses non-ASCII str values),
+# so the tests send BYTES; Starlette decodes them to the non-ASCII str that
+# used to crash the comparison. The comparison is bytes now, which is total.
+
+
+async def _get_raw(path: str, auth_value: bytes) -> int:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(path, headers={b"authorization": auth_value})
+    return resp.status_code
+
+
+async def test_garbage_non_ascii_token_is_401_not_500(restore_auth_settings: None) -> None:
+    settings.api_auth_token = _TOKEN
+    settings.auth_enforce = True
+    # ñ (0xF1) reaches the middleware as a non-ASCII str — the str-mode
+    # compare_digest raised TypeError → opaque 500. Must be a clean 401.
+    assert await _get_raw(_GATED_PATH, "Bearer caña-señal".encode("latin-1")) == 401
+
+
+async def test_garbage_non_ascii_token_warn_mode_allows(restore_auth_settings: None) -> None:
+    settings.api_auth_token = _TOKEN
+    settings.auth_enforce = False
+    # WARN mode: invalid (not a crash) → logged + allowed through.
+    assert await _get_raw(_GATED_PATH, "Bearer caña-señal".encode("latin-1")) == 200
+
+
+async def test_non_ascii_configured_token_round_trips(restore_auth_settings: None) -> None:
+    # Defensive: even a non-ASCII CONFIGURED token must compare, not crash.
+    settings.api_auth_token = "señal-secreta"
+    settings.auth_enforce = True
+    assert await _get_raw(_GATED_PATH, "Bearer señal-secreta".encode("latin-1")) == 200
+    assert await _get(_GATED_PATH, _bearer("wrong")) == 401

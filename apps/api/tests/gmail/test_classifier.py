@@ -166,7 +166,7 @@ async def test_non_json_response_yields_unclassified(fake_genai: _FakeGenAiHolde
     fake_genai.models.queue(_FakeResponse("Here is the answer: it's a rejection."))  # type: ignore[attr-defined]
     result = await classifier.classify(_make_email())
     assert result.outcome_type == "unclassified"
-    assert result.confidence == 0.0
+    assert result.confidence == pytest.approx(0.0)
 
 
 # ── fix(audit): valid-but-non-object JSON must not raise ──────────────────────
@@ -212,7 +212,7 @@ async def test_bare_json_string_yields_unclassified_not_attributeerror(
     fake_genai.models.queue(_FakeResponse(json.dumps("rejection_pre_screen")))  # type: ignore[attr-defined]
     result = await classifier.classify(_make_email())
     assert result.outcome_type == "unclassified"
-    assert result.confidence == 0.0
+    assert result.confidence == pytest.approx(0.0)
     assert "non-object" in result.reasoning
 
 
@@ -248,7 +248,7 @@ async def test_confidence_clamped_to_unit_interval(fake_genai: _FakeGenAiHolder)
         _FakeResponse('{"outcome_type":"offer","confidence":1.7,"reasoning":""}')
     )
     result = await classifier.classify(_make_email())
-    assert result.confidence == 1.0
+    assert result.confidence == pytest.approx(1.0)
 
 
 async def test_429_triggers_retry_then_succeeds(fake_genai: _FakeGenAiHolder) -> None:

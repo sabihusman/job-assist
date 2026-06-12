@@ -47,10 +47,12 @@ async def test_slot_frees_after_exit_even_on_error() -> None:
 
     # Slot is free again — entering succeeds.
     async with gmail_sweep_slot():
+        # Acquiring without raising IS the assertion; no body needed.
         pass
 
 
 async def test_sequential_sweeps_do_not_collide() -> None:
     for _ in range(3):
         async with gmail_sweep_slot():
+            # Each iteration acquires + releases; raising would fail the test.
             pass

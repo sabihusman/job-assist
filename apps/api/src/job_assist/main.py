@@ -139,7 +139,13 @@ async def auth_guard(request: Request, call_next: RequestResponseEndpoint) -> Re
 
     expected = settings.api_auth_token
     provided = _extract_bearer(request.headers.get("authorization", ""))
-    valid = bool(expected) and hmac.compare_digest(provided, expected)
+    # fix(audit): compare BYTES. hmac.compare_digest raises TypeError on str
+    # operands containing non-ASCII — a garbage/multibyte bearer token (one
+    # curl typo away) 500'd every request instead of failing auth cleanly.
+    # UTF-8 encoding is total, so the comparison itself can never raise.
+    valid = bool(expected) and hmac.compare_digest(
+        provided.encode("utf-8"), expected.encode("utf-8")
+    )
 
     if not valid:
         if not expected:
@@ -841,8 +847,11 @@ async def seed_target_companies(
         inserted, skipped, backfilled = await seed_from_rows(
             db, rows, backfill_nullables=backfill_nullables
         )
-    except ValueError as exc:  # malformed row (missing name/tier)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        # fix(audit): 422 naming the bad field — _project_row validates the
+        # ats/tier/source vocabularies now (an out-of-range tier used to
+        # insert silently; a bad ats string 500'd at the SAEnum cast).
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return {
         "inserted": inserted,
@@ -1037,6 +1046,13 @@ async def seed_contacts(
 # ── Public — contacts list (PR #51) ───────────────────────────────────────────
 
 
+def _escape_like(value: str) -> str:
+    """Escape LIKE/ILIKE metacharacters (fix/audit): backslash first, then
+    % and _ — with ``escape='\\'`` on the operator the user's input matches
+    literally instead of acting as wildcards."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 _ALLOWED_CONTACT_SOURCE_TYPES = frozenset(
     {"tippie_alumni", "linkedin_outreach", "recruiter_inbound", "warm_intro"}
 )
@@ -1137,7 +1153,11 @@ async def list_contacts(
                 Contact.current_employer.in_(matching_raw) if matching_raw else false()
             )
     if search:
-        pattern = f"%{search.strip().lower()}%"
+        # fix(audit): escape LIKE metacharacters — a search containing %, _
+        # or \ was interpreted as wildcards (e.g. "100%" matched everything,
+        # "a_c" matched "abc"). _escape_like + ESCAPE '\' make the input
+        # literal.
+        pattern = f"%{_escape_like(search.strip().lower())}%"
         if pattern.strip("%"):
             # Match the name fields independently AND a "first last"
             # concatenation so "jane d" finds "Jane Doe". COALESCE
@@ -1145,9 +1165,9 @@ async def list_contacts(
             full_name = func.lower(func.concat(Contact.first_name, " ", Contact.last_name))
             where_clauses.append(
                 or_(
-                    func.lower(Contact.first_name).like(pattern),
-                    func.lower(Contact.last_name).like(pattern),
-                    full_name.like(pattern),
+                    func.lower(Contact.first_name).like(pattern, escape="\\"),
+                    func.lower(Contact.last_name).like(pattern, escape="\\"),
+                    full_name.like(pattern, escape="\\"),
                 )
             )
 
@@ -1766,7 +1786,10 @@ async def _sync_applied_companies_best_effort(db: AsyncSession) -> None:
         )
 
 
-@app.post("/admin/gmail/backfill")
+@app.post(
+    "/admin/gmail/backfill",
+    responses={409: {"description": "Another Gmail sweep (poll or backfill) is already running"}},
+)
 async def gmail_backfill(
     db: DbSession,
     days: int = 60,
@@ -1820,7 +1843,10 @@ async def gmail_backfill(
     return report.model_dump(mode="json")
 
 
-@app.post("/admin/gmail/poll")
+@app.post(
+    "/admin/gmail/poll",
+    responses={409: {"description": "Another Gmail sweep (poll or backfill) is already running"}},
+)
 async def gmail_poll(db: DbSession) -> dict[str, Any]:
     """Poll Gmail for messages received since the most recent outcome_event.
 
@@ -3982,13 +4008,12 @@ async def get_stats_ingest(db: DbSession, days: int = 14) -> dict[str, Any]:
     return await ingest_daily_stats(db, days=days)
 
 
-# ── Admin — cron status ────────────────────────────────────────────────────────
-
-
-@app.get("/admin/cron-status")
-async def cron_status() -> dict[str, str]:
-    """Cron health-check endpoint.  Returns ok when the API is reachable."""
-    return {"status": "ok"}
+# fix(audit): the /admin/cron-status stub + cron-health.yml dead-man's switch
+# are DELETED. The stub returned {"status": "ok"} unconditionally, so the
+# workflow's "verify yesterday's crons completed" check was a permanent
+# false-green — a fake monitor is worse than none. /admin/ingest/health now
+# carries real per-pipeline checks (curated/broad/warm-path/llm/gmail) and
+# ingest-health.yml is the alerting cron.
 
 
 @app.get("/admin/ingest/runs", tags=["admin"])
@@ -4458,7 +4483,11 @@ async def broad_ingest_run(
 # ── Resume-version tracking (feat/resume-version-tracking) ───────────────────
 
 
-@app.post("/admin/resume-versions", tags=["admin"])
+@app.post(
+    "/admin/resume-versions",
+    tags=["admin"],
+    responses={409: {"description": "A resume_version with this label already exists"}},
+)
 async def create_resume_version(
     payload: ResumeVersionCreate,
     db: DbSession,

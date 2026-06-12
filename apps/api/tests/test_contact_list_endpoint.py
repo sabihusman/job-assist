@@ -430,3 +430,33 @@ async def test_zzz_cleanup_clears_contacts(db_session: Any) -> None:
     await _clear_contacts(db_session)
     remaining = (await db_session.execute(select(Contact))).scalars().all()
     assert remaining == []
+
+
+# ── fix(audit): LIKE metacharacters in ?search= are literal, not wildcards ───
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_search_escapes_like_metacharacters(db_session: Any) -> None:
+    """'_' and '%' in the search term used to act as SQL wildcards: searching
+    "a_na" also matched "Anna", and a stray "%" matched everything."""
+    await _clear_contacts(db_session)
+    db_session.add(_contact(n=1, first_name="Anna", last_name="Smith"))
+    db_session.add(_contact(n=2, first_name="A_na", last_name="Jones"))
+    await db_session.commit()
+
+    client = await _client(db_session)
+    try:
+        # Underscore is literal → only the contact whose name CONTAINS "_".
+        resp = await client.get("/contacts", params={"search": "a_na"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 1, [i["first_name"] for i in body["items"]]
+        assert body["items"][0]["first_name"] == "A_na"
+
+        # Percent is literal → matches nothing (no name contains "%").
+        resp = await client.get("/contacts", params={"search": "%"})
+        assert resp.json()["total"] == 0
+    finally:
+        await _drop_override()
+        await _clear_contacts(db_session)
