@@ -6,9 +6,11 @@ import { Suspense, useMemo } from 'react';
 import { AppliedSortStrip } from '@/components/applied/AppliedSortStrip';
 import { UnifiedAppliedList } from '@/components/applied/UnifiedAppliedList';
 import { AppShell } from '@/components/chrome/AppShell';
+import { ExportCsvButton } from '@/components/shared/ExportCsvButton';
 import { useAllOutcomes, useAppliedPostings } from '@/lib/api/applied';
+import { buildUnifiedCsv } from '@/lib/applied/exportCsv';
 import type { AppliedSort } from '@/lib/applied/types';
-import { unifyApplied } from '@/lib/applied/unify';
+import { sortUnified, unifyApplied } from '@/lib/applied/unify';
 
 /**
  * Applied page (PR #32c).
@@ -55,10 +57,15 @@ function AppliedPageInner() {
   const outcomes = useAllOutcomes(true);
 
   const manualPostings = manual.data?.items ?? [];
-  const count = useMemo(
-    () => unifyApplied(outcomes.data?.items ?? [], manualPostings).length,
-    [outcomes.data, manualPostings],
+  // feat/view-exports: keep the SORTED entries (not just the count) so the
+  // export serializes exactly the list the operator sees — same unify, same
+  // sort. UnifiedAppliedList recomputes from the same cached queries; React
+  // Query dedupes the fetches and unify is a cheap pure fold.
+  const entries = useMemo(
+    () => sortUnified(unifyApplied(outcomes.data?.items ?? [], manualPostings), sort),
+    [outcomes.data, manualPostings, sort],
   );
+  const count = entries.length;
 
   const isError = manual.isError || outcomes.isError;
   const errorMsg =
@@ -71,7 +78,16 @@ function AppliedPageInner() {
         <p className="text-[13px] text-muted-foreground">
           {isLoading ? '…' : `${count} application${count === 1 ? '' : 's'}`}
         </p>
-        <AppliedSortStrip />
+        <div className="flex items-center gap-2">
+          <ExportCsvButton
+            buildCsv={() => buildUnifiedCsv(entries)}
+            filenamePrefix="applied-export"
+            disabled={isLoading || count === 0}
+            testId="applied-export-button"
+            title="Download a .csv of every application currently listed — same merge, same sort."
+          />
+          <AppliedSortStrip />
+        </div>
       </div>
 
       {isError ? (

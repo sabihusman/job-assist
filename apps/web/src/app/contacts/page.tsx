@@ -6,7 +6,7 @@ import { Suspense, useMemo, useState } from 'react';
 import { AppShell } from '@/components/chrome/AppShell';
 import { ContactDetailPanel } from '@/components/contacts/ContactDetailPanel';
 import { ContactsTable } from '@/components/contacts/ContactsTable';
-import { useContacts } from '@/lib/api/contacts';
+import { contactsExportHref, useContacts } from '@/lib/api/contacts';
 import {
   CONTACT_SOURCE_LABELS,
   type ContactSourceType,
@@ -192,8 +192,24 @@ function ContactsPageInner() {
           Show archived
         </label>
 
-        <div className="ml-auto text-[12px] text-muted-foreground">
-          {isLoading ? '…' : `${items.length} of ${total}`}
+        <div className="ml-auto flex items-center gap-3">
+          <span className="text-[12px] text-muted-foreground">
+            {isLoading ? '…' : `${items.length} of ${total}`}
+          </span>
+          {/* feat/view-exports: server-side export. The list is paginated, so
+              the endpoint (same shared clause builder as GET /contacts)
+              serializes the FULL filtered set — every row this view paginates
+              over, no cap. The href carries the live filter state (URL params
+              + the local search/archived bits) so export == what you see. */}
+          <a
+            href={contactsExportHref(filters)}
+            download
+            data-testid="contacts-export-link"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded border border-border bg-surface px-2.5 py-1 text-sm text-muted-foreground ring-1 ring-inset ring-border transition-colors hover:text-foreground"
+            title="Download a .csv of every contact matching the current filters — no row cap."
+          >
+            Export current view
+          </a>
         </div>
       </div>
 

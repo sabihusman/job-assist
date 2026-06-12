@@ -774,6 +774,99 @@
         }
       }
     },
+    "/contacts/export.csv": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Export Contacts Csv",
+        "description": "Export the CURRENT FILTERED VIEW of contacts as CSV (feat/view-exports).\n\nSame filter vocabulary as ``GET /contacts``, built from the SAME\n``_build_contact_filters`` helper so the exported set is provably\nidentical to the visible list's \u2014 same sort (``created_at DESC, id\nASC``), minus ``limit``/``offset``: every matching row, no cap. Zero\nmatches \u2192 a valid CSV with the header row only (not an error).\n\nOutput is RFC-4180 (CRLF, quoted cells) with a UTF-8 BOM so Excel\nopens it without mangling accented names.\n\nTODO: add authentication before exposing publicly \u2014 same PII trust\nmodel as the list endpoint (single-operator deployment).",
+        "operationId": "export_contacts_csv_contacts_export_csv_get",
+        "parameters": [
+          {
+            "name": "source_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Type"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "name": "employer",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Employer"
+            }
+          },
+          {
+            "name": "include_archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Archived"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/contacts/{contact_id}": {
       "get": {
         "tags": [

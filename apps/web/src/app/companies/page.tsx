@@ -2,7 +2,9 @@
 
 import { AppShell } from '@/components/chrome/AppShell';
 import { CompaniesTable } from '@/components/companies/CompaniesTable';
+import { ExportCsvButton } from '@/components/shared/ExportCsvButton';
 import { useCompanies } from '@/lib/api/companies';
+import { buildCompaniesCsv } from '@/lib/companies/exportCsv';
 
 /**
  * Companies page (PR #32c). Read-only target-company table.
@@ -32,8 +34,20 @@ export default function CompaniesPage() {
         ) : items.length === 0 ? (
           <EmptyState />
         ) : (
-          <div className="overflow-x-auto rounded-md border border-border bg-card">
-            <CompaniesTable companies={items} />
+          <div className="flex flex-col gap-3">
+            {/* feat/view-exports: the table renders the full list from one
+                fetch, so the export is a pure serialization of these rows. */}
+            <div className="flex justify-end">
+              <ExportCsvButton
+                buildCsv={() => buildCompaniesCsv(items)}
+                filenamePrefix="companies-export"
+                testId="companies-export-button"
+                title="Download a .csv of every company currently listed — same rows, same order."
+              />
+            </div>
+            <div className="overflow-x-auto rounded-md border border-border bg-card">
+              <CompaniesTable companies={items} />
+            </div>
           </div>
         )}
       </div>

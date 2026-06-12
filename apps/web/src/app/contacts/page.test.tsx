@@ -32,6 +32,8 @@ vi.mock('next/navigation', () => ({
 
 vi.mock('@/lib/api/client', () => ({
   api: { GET: getMock, POST: vi.fn(), PATCH: vi.fn() },
+  // feat/view-exports: the page renders an export link built on the base URL.
+  API_BASE_URL: 'http://api.test',
 }));
 
 vi.mock('@/components/chrome/AppShell', () => ({

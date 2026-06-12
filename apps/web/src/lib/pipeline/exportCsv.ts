@@ -1,4 +1,5 @@
 import { type PipelineStage, STAGE_LABELS } from '@/lib/applied/stages';
+import { buildCsv } from '@/lib/csv';
 import type { Buckets } from '@/lib/pipeline/bucket';
 
 /**
@@ -11,14 +12,12 @@ import type { Buckets } from '@/lib/pipeline/bucket';
  * same on-screen order (stages in the operator's column order; cards in their
  * displayed order). No backend duplication of the bucketing, so the export
  * can't drift from the board.
+ *
+ * feat/view-exports: serialization now rides the shared `buildCsv` (same
+ * RFC-4180 escaping, byte-identical output) so every tab's export agrees.
  */
 
 const HEADERS = ['stage', 'company', 'role', 'date'] as const;
-
-/** RFC-4180 escape: quote a cell iff it contains a comma, quote, CR or LF. */
-function csvCell(value: string): string {
-  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
-}
 
 /**
  * Serialize the pipeline buckets to CSV. ``order`` is the operator's column
@@ -26,12 +25,11 @@ function csvCell(value: string): string {
  * keep their on-screen order. Returns header-only when the pipeline is empty.
  */
 export function buildPipelineCsv(buckets: Buckets, order: readonly PipelineStage[]): string {
-  const lines: string[] = [HEADERS.join(',')];
+  const rows: string[][] = [];
   for (const stage of order) {
     for (const card of buckets[stage]) {
-      const row = [STAGE_LABELS[stage], card.companyName, card.roleTitle, card.appliedAt];
-      lines.push(row.map((cell) => csvCell(String(cell ?? ''))).join(','));
+      rows.push([STAGE_LABELS[stage], card.companyName, card.roleTitle, card.appliedAt]);
     }
   }
-  return lines.join('\r\n');
+  return buildCsv(HEADERS, rows);
 }

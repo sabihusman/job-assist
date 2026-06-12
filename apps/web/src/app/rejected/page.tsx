@@ -6,10 +6,12 @@ import { Suspense, useMemo } from 'react';
 import { AppliedSortStrip } from '@/components/applied/AppliedSortStrip';
 import { AppShell } from '@/components/chrome/AppShell';
 import { UnifiedRejectedList } from '@/components/rejected/UnifiedRejectedList';
+import { ExportCsvButton } from '@/components/shared/ExportCsvButton';
 import { useAllOutcomes } from '@/lib/api/applied';
 import { useRejectedPostings } from '@/lib/api/state-views';
+import { buildUnifiedCsv } from '@/lib/applied/exportCsv';
 import type { AppliedSort } from '@/lib/applied/types';
-import { entryStage, unifyApplied } from '@/lib/applied/unify';
+import { entryStage, sortUnified, unifyApplied } from '@/lib/applied/unify';
 
 /**
  * /rejected — unified rejection view (feat/rejected-unified).
@@ -40,13 +42,20 @@ function RejectedPageInner() {
   const outcomes = useAllOutcomes(true);
 
   const manualPostings = manual.data?.items ?? [];
-  const count = useMemo(
+  // feat/view-exports: keep the SORTED rejected entries (not just the count)
+  // so the export serializes exactly the list the operator sees — same unify,
+  // same rejected-stage filter, same sort as UnifiedRejectedList.
+  const entries = useMemo(
     () =>
-      unifyApplied(outcomes.data?.items ?? [], manualPostings).filter(
-        (e) => entryStage(e) === 'rejected',
-      ).length,
-    [outcomes.data, manualPostings],
+      sortUnified(
+        unifyApplied(outcomes.data?.items ?? [], manualPostings).filter(
+          (e) => entryStage(e) === 'rejected',
+        ),
+        sort,
+      ),
+    [outcomes.data, manualPostings, sort],
   );
+  const count = entries.length;
 
   const isError = manual.isError || outcomes.isError;
   const errorMsg =
@@ -59,7 +68,16 @@ function RejectedPageInner() {
         <p className="text-[13px] text-muted-foreground">
           {isLoading ? '…' : `${count} rejection${count === 1 ? '' : 's'}`}
         </p>
-        <AppliedSortStrip />
+        <div className="flex items-center gap-2">
+          <ExportCsvButton
+            buildCsv={() => buildUnifiedCsv(entries)}
+            filenamePrefix="rejected-export"
+            disabled={isLoading || count === 0}
+            testId="rejected-export-button"
+            title="Download a .csv of every rejection currently listed — same merge, same sort."
+          />
+          <AppliedSortStrip />
+        </div>
       </div>
 
       {isError ? (

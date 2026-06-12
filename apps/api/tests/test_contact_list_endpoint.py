@@ -460,3 +460,77 @@ async def test_search_escapes_like_metacharacters(db_session: Any) -> None:
     finally:
         await _drop_override()
         await _clear_contacts(db_session)
+
+
+# ── feat/view-exports: GET /contacts/export.csv ───────────────────────────────
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_export_csv_matches_filtered_list(db_session: Any) -> None:
+    """The export uses the SAME clause builder as the list — same filters,
+    same sort, no pagination. Archived rows excluded by default; the
+    normalized employer filter applies identically."""
+    await _clear_contacts(db_session)
+    db_session.add(_contact(n=1, employer="Acme Corp", first_name="Alpha"))
+    db_session.add(_contact(n=2, employer="acme", first_name="Beta"))
+    db_session.add(_contact(n=3, employer="Acmesoft", first_name="Gamma"))
+    db_session.add(
+        _contact(
+            n=4,
+            employer="Acme, Inc.",
+            first_name="Zeta",
+            archived_at=datetime.now(tz=UTC),
+        )
+    )
+    await db_session.commit()
+
+    client = await _client(db_session)
+    try:
+        resp = await client.get("/contacts/export.csv", params={"employer": "Acme"})
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/csv")
+        assert "attachment; filename=" in resp.headers["content-disposition"]
+
+        body = resp.text.lstrip("﻿")
+        lines = [ln for ln in body.split("\r\n") if ln]
+        # Header + the two non-archived Acme-key contacts; Acmesoft and the
+        # archived row excluded — exactly what the list shows.
+        assert lines[0].startswith("first_name,")
+        assert len(lines) == 3, lines
+        joined = "\n".join(lines[1:])
+        assert "Alpha" in joined and "Beta" in joined
+        assert "Gamma" not in joined and "Zeta" not in joined
+
+        # Parity by construction: list total == export data-row count.
+        list_resp = await client.get("/contacts", params={"employer": "Acme"})
+        assert list_resp.json()["total"] == len(lines) - 1
+    finally:
+        await _drop_override()
+        await _clear_contacts(db_session)
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_export_csv_empty_result_is_header_only(db_session: Any) -> None:
+    await _clear_contacts(db_session)
+    client = await _client(db_session)
+    try:
+        resp = await client.get("/contacts/export.csv", params={"search": "nobody-matches"})
+        assert resp.status_code == 200
+        lines = [ln for ln in resp.text.lstrip("﻿").split("\r\n") if ln]
+        assert len(lines) == 1  # header only — a valid CSV, not an error
+    finally:
+        await _drop_override()
+        await _clear_contacts(db_session)
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_export_csv_rejects_unknown_source_type(db_session: Any) -> None:
+    client = await _client(db_session)
+    try:
+        resp = await client.get("/contacts/export.csv", params={"source_type": "bogus"})
+        assert resp.status_code == 422
+    finally:
+        await _drop_override()

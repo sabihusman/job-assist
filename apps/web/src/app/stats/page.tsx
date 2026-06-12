@@ -3,12 +3,14 @@
 import { useMemo } from 'react';
 
 import { AppShell } from '@/components/chrome/AppShell';
+import { ExportCsvButton } from '@/components/shared/ExportCsvButton';
 import { IngestPanel } from '@/components/stats/IngestPanel';
 import { KPICard } from '@/components/stats/KPICard';
 import { type FunnelRow, OutcomeFunnel } from '@/components/stats/OutcomeFunnel';
 import { useAllOutcomes, useAppliedPostings } from '@/lib/api/applied';
 import { useCalibration } from '@/lib/api/hooks';
 import { stageOf } from '@/lib/applied/stages';
+import { buildStatsCsv } from '@/lib/stats/exportCsv';
 
 /**
  * Stats page (PR #32c).
@@ -100,6 +102,38 @@ export default function StatsPage() {
           />
         ) : (
           <>
+            {/* feat/view-exports: the page's own client-computed numbers
+                (KPIs + funnel) as (section, metric, value) rows — exactly as
+                displayed. The ingest panel self-fetches and stays out. */}
+            <div className="flex justify-end">
+              <ExportCsvButton
+                buildCsv={() =>
+                  buildStatsCsv(
+                    [
+                      { metric: 'Postings ingested (7d)', value: fmtNum(calib?.surfaced, false) },
+                      { metric: 'Applications (7d)', value: fmtNum(calib?.applied, false) },
+                      {
+                        metric: 'Response rate',
+                        value: fmtPct(
+                          appliedCount > 0 ? recruiterPlusCount / appliedCount : null,
+                          false,
+                        ),
+                      },
+                      {
+                        metric: 'Offer rate',
+                        value: fmtPct(appliedCount > 0 ? offerCount / appliedCount : null, false),
+                      },
+                    ],
+                    funnelRows,
+                  )
+                }
+                filenamePrefix="stats-export"
+                disabled={isLoading}
+                testId="stats-export-button"
+                title="Download a .csv of the KPI cards and outcome funnel as currently shown."
+              />
+            </div>
+
             {/* KPI grid — 5 cards (30d cards stripped per audit). */}
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-5">
               <KPICard label="Postings ingested (7d)" value={fmtNum(calib?.surfaced, isLoading)} />

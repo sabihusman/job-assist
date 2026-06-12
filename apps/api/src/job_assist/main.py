@@ -1058,6 +1058,87 @@ _ALLOWED_CONTACT_SOURCE_TYPES = frozenset(
 )
 
 
+async def _build_contact_filters(
+    db: AsyncSession,
+    *,
+    source_type: list[str] | None,
+    search: str | None,
+    employer: str | None,
+    include_archived: bool,
+) -> list[Any]:
+    """Shared WHERE-clause builder for the contacts list AND its CSV export
+    (feat/view-exports) — one source of truth so the exported set is provably
+    identical to the visible list's, same pattern as the postings export's
+    shared ``build_view_parts``. Raises 422 on an unknown ``source_type``."""
+    from sqlalchemy import false, func, or_, select
+
+    from job_assist.db.models import Contact
+
+    if source_type:
+        for s in source_type:
+            if s not in _ALLOWED_CONTACT_SOURCE_TYPES:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(f"source_type={s!r} not in {sorted(_ALLOWED_CONTACT_SOURCE_TYPES)}"),
+                )
+
+    where_clauses: list[Any] = []
+    if not include_archived:
+        where_clauses.append(Contact.archived_at.is_(None))
+    if source_type:
+        where_clauses.append(Contact.source_type.in_(source_type))
+    # feat/warm-path-badge + fix(audit badge parity): ``?employer=Acme``
+    # filters by the SAME normalizer the badge count uses
+    # (company_name_match.normalize_company_name) — so the click-through
+    # destination shows EXACTLY the contacts that produced "N alumni here".
+    # Normalized-equality is computed in Python over the small
+    # distinct-employer set (~hundreds) because the normalizer is
+    # regex-based; the resulting raw strings filter in SQL so
+    # COUNT/pagination stay server-side.
+    if employer and employer.strip():
+        from job_assist.services.company_name_match import normalize_company_name
+
+        employer_key = normalize_company_name(employer)
+        if not employer_key:
+            # Normalizes to nothing (e.g. bare "Inc.") → no possible match.
+            where_clauses.append(false())
+        else:
+            distinct_employers = (
+                (
+                    await db.execute(
+                        select(Contact.current_employer)
+                        .where(Contact.current_employer.is_not(None))
+                        .distinct()
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            matching_raw = [
+                raw
+                for raw in distinct_employers
+                if raw is not None and normalize_company_name(raw) == employer_key
+            ]
+            where_clauses.append(
+                Contact.current_employer.in_(matching_raw) if matching_raw else false()
+            )
+    if search:
+        # fix(audit): escape LIKE metacharacters — %, _ and \ are literal.
+        pattern = f"%{_escape_like(search.strip().lower())}%"
+        if pattern.strip("%"):
+            # Match the name fields independently AND a "first last"
+            # concatenation so "jane d" finds "Jane Doe".
+            full_name = func.lower(func.concat(Contact.first_name, " ", Contact.last_name))
+            where_clauses.append(
+                or_(
+                    func.lower(Contact.first_name).like(pattern, escape="\\"),
+                    func.lower(Contact.last_name).like(pattern, escape="\\"),
+                    full_name.like(pattern, escape="\\"),
+                )
+            )
+    return where_clauses
+
+
 @app.get("/contacts", tags=["public"])
 async def list_contacts(
     db: DbSession,
@@ -1092,7 +1173,7 @@ async def list_contacts(
     real PII; the single-operator trust model is the only thing holding
     until proper auth lands.
     """
-    from sqlalchemy import false, func, or_, select
+    from sqlalchemy import func, select
 
     from job_assist.db.models import Contact
 
@@ -1101,76 +1182,15 @@ async def list_contacts(
     if offset < 0:
         raise HTTPException(status_code=422, detail="offset must be >= 0")
 
-    if source_type:
-        for s in source_type:
-            if s not in _ALLOWED_CONTACT_SOURCE_TYPES:
-                raise HTTPException(
-                    status_code=422,
-                    detail=(f"source_type={s!r} not in {sorted(_ALLOWED_CONTACT_SOURCE_TYPES)}"),
-                )
-
-    where_clauses: list[Any] = []
-    if not include_archived:
-        where_clauses.append(Contact.archived_at.is_(None))
-    if source_type:
-        where_clauses.append(Contact.source_type.in_(source_type))
-    # feat/warm-path-badge + fix(audit badge parity): ``?employer=Acme``
-    # filters by the SAME normalizer the badge count uses
-    # (company_name_match.normalize_company_name) — so the click-through
-    # destination shows EXACTLY the contacts that produced "N alumni here".
-    # The old raw ILIKE substring could both under-match (an outcome-derived
-    # display_name like "Acme Recruiting" finds no employer containing it)
-    # and over-match ("Acme" found "Acmesoft"), so the badge said N while
-    # the list showed 0 or N+k. Normalized-equality is computed in Python
-    # over the small distinct-employer set (~hundreds) because the
-    # normalizer is regex-based; the resulting raw strings filter in SQL so
-    # COUNT/pagination stay server-side.
-    if employer and employer.strip():
-        from job_assist.services.company_name_match import normalize_company_name
-
-        employer_key = normalize_company_name(employer)
-        if not employer_key:
-            # Normalizes to nothing (e.g. bare "Inc.") → no possible match.
-            where_clauses.append(false())
-        else:
-            distinct_employers = (
-                (
-                    await db.execute(
-                        select(Contact.current_employer)
-                        .where(Contact.current_employer.is_not(None))
-                        .distinct()
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            matching_raw = [
-                raw
-                for raw in distinct_employers
-                if raw is not None and normalize_company_name(raw) == employer_key
-            ]
-            where_clauses.append(
-                Contact.current_employer.in_(matching_raw) if matching_raw else false()
-            )
-    if search:
-        # fix(audit): escape LIKE metacharacters — a search containing %, _
-        # or \ was interpreted as wildcards (e.g. "100%" matched everything,
-        # "a_c" matched "abc"). _escape_like + ESCAPE '\' make the input
-        # literal.
-        pattern = f"%{_escape_like(search.strip().lower())}%"
-        if pattern.strip("%"):
-            # Match the name fields independently AND a "first last"
-            # concatenation so "jane d" finds "Jane Doe". COALESCE
-            # guards a NULL preferred_first_name from breaking concat.
-            full_name = func.lower(func.concat(Contact.first_name, " ", Contact.last_name))
-            where_clauses.append(
-                or_(
-                    func.lower(Contact.first_name).like(pattern, escape="\\"),
-                    func.lower(Contact.last_name).like(pattern, escape="\\"),
-                    full_name.like(pattern, escape="\\"),
-                )
-            )
-
+    # feat/view-exports: clause construction shared with /contacts/export.csv
+    # so the export is provably identical to this list (minus pagination).
+    where_clauses = await _build_contact_filters(
+        db,
+        source_type=source_type,
+        search=search,
+        employer=employer,
+        include_archived=include_archived,
+    )
     count_stmt = select(func.count()).select_from(Contact)
     for clause in where_clauses:
         count_stmt = count_stmt.where(clause)
@@ -1209,6 +1229,92 @@ async def list_contacts(
         for c in rows
     ]
     return {"total": total, "offset": offset, "limit": limit, "items": items}
+
+
+@app.get("/contacts/export.csv", tags=["public"])
+async def export_contacts_csv(
+    db: DbSession,
+    source_type: Annotated[list[str] | None, Query()] = None,
+    search: str | None = None,
+    employer: str | None = None,
+    include_archived: bool = False,
+) -> Response:
+    """Export the CURRENT FILTERED VIEW of contacts as CSV (feat/view-exports).
+
+    Same filter vocabulary as ``GET /contacts``, built from the SAME
+    ``_build_contact_filters`` helper so the exported set is provably
+    identical to the visible list's — same sort (``created_at DESC, id
+    ASC``), minus ``limit``/``offset``: every matching row, no cap. Zero
+    matches → a valid CSV with the header row only (not an error).
+
+    Output is RFC-4180 (CRLF, quoted cells) with a UTF-8 BOM so Excel
+    opens it without mangling accented names.
+
+    TODO: add authentication before exposing publicly — same PII trust
+    model as the list endpoint (single-operator deployment).
+    """
+    import csv as _csv
+    import io as _io
+
+    from sqlalchemy import select
+
+    from job_assist.db.models import Contact
+
+    where_clauses = await _build_contact_filters(
+        db,
+        source_type=source_type,
+        search=search,
+        employer=employer,
+        include_archived=include_archived,
+    )
+
+    rows_stmt = select(Contact).order_by(Contact.created_at.desc(), Contact.id.asc())
+    for clause in where_clauses:
+        rows_stmt = rows_stmt.where(clause)
+    rows = (await db.execute(rows_stmt)).scalars().all()
+
+    buf = _io.StringIO()
+    writer = _csv.writer(buf, lineterminator="\r\n")
+    writer.writerow(
+        [
+            "first_name",
+            "preferred_first_name",
+            "last_name",
+            "current_position",
+            "current_employer",
+            "source_type",
+            "email_primary",
+            "email_secondary",
+            "linkedin_url",
+            "archived_at",
+            "added",
+        ]
+    )
+    for c in rows:
+        writer.writerow(
+            [
+                c.first_name,
+                c.preferred_first_name or "",
+                c.last_name,
+                c.current_position or "",
+                c.current_employer or "",
+                c.source_type,
+                c.email_primary or "",
+                c.email_secondary or "",
+                c.linkedin_url or "",
+                c.archived_at.isoformat() if c.archived_at else "",
+                c.created_at.date().isoformat(),
+            ]
+        )
+
+    stamp = datetime.now(tz=UTC).strftime("%Y%m%d-%H%M%S")
+    return Response(
+        content="\ufeff" + buf.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="contacts-export-{stamp}.csv"',
+        },
+    )
 
 
 # ── Contact CRUD + outreach (PR #52) ──────────────────────────────────────────
