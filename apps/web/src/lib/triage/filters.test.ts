@@ -47,6 +47,15 @@ describe('parseFilters', () => {
     expect(f.role_family).toEqual(['other']);
   });
 
+  // feat/strategy-spine regression: strategy_ops must survive parseFilters
+  // (VALID_FAMILY allowlist). Without it the Strategy/Ops chip is a no-op —
+  // parse strips the param and the queue falls back to pm_only PM/PO.
+  test('preserves strategy_ops (the Strategy/Ops chip is a real selection)', () => {
+    const f = parseFilters(new URLSearchParams('role_family=strategy_ops'));
+    expect(f.role_family).toEqual(['strategy_ops']);
+    expect(encodeFilters(f).getAll('role_family')).toEqual(['strategy_ops']);
+  });
+
   // ── PR #49: sort ──────────────────────────────────────────────────────
 
   test('PR #49: default sort is newest when no param', () => {
