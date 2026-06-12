@@ -123,10 +123,13 @@ async def ingest_curated_via_fantastic(
             )
         # feat/warm-path-ingest: stamp the sweep time on the company row —
         # the warm_path_fresh health check reads MAX(last_swept_at) per cohort.
-        # Stamped even on a failed run (the SWEEP visited the employer; a
-        # board-level failure is surfaced via the failed ingest_run, not via
-        # a stale-cohort alarm).
-        tc.last_swept_at = datetime.now(tz=UTC)
+        # fix/ingest-lifecycle (audit HIGH #2): stamp ONLY on a non-failed run.
+        # Stamping on failure kept last_seen_at fresh in the health check's eyes
+        # while the employer's postings actually went un-refreshed — so a dead
+        # Sunday sweep read green AND its postings got wrongly stale-closed.
+        # A failed run must leave last_swept_at stale so warm_path_fresh trips.
+        if run.status != "failed":
+            tc.last_swept_at = datetime.now(tz=UTC)
         results.append(
             {
                 "company": tc.name,
