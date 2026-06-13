@@ -40,6 +40,7 @@ const CHECK_LABELS: Record<keyof IngestHealth['checks'], string> = {
   llm_healthy: 'LLM (Gemini) healthy',
   gmail_healthy: 'Gmail sweep running',
   warm_path_fresh: 'Warm-path sweep fresh',
+  wellfound_fresh: 'Wellfound sweep fresh',
 };
 
 /** Format a sweep runtime in seconds → "12.4s" / "1m 03s" / "—". */

@@ -601,3 +601,96 @@ async def test_warm_path_seeded_never_swept_flags_degraded(db_session: Any) -> N
 
     assert h["checks"]["warm_path_fresh"] is False
     assert h["severity"] == "degraded"
+
+
+# ── feat/wellfound-cron-health ────────────────────────────────────────────────
+
+
+def _wellfound_company(*, swept_days_ago: float | None, name_suffix: str = "") -> Any:
+    from job_assist.db.models import TargetCompany
+
+    now = datetime.now(tz=UTC)
+    return TargetCompany(
+        name=f"WellfoundCo{name_suffix or uuid.uuid4().hex[:6]}",
+        tier=None,
+        ats="unknown",  # type: ignore[arg-type]  # shells carry ats='unknown'
+        domain="wellfoundco.com",
+        source="wellfound",
+        last_swept_at=(None if swept_days_ago is None else now - timedelta(days=swept_days_ago)),
+    )
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_wellfound_fresh_trivially_true_when_cohort_empty(db_session: Any) -> None:
+    """No wellfound companies (feature unseeded) → the check passes; healthy
+    world stays fully green, mirroring the warm_path_fresh empty-cohort contract."""
+    from job_assist.main import app
+
+    db_session.add_all(_healthy_fixtures())
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["checks"]["wellfound_fresh"] is True
+    assert h["metrics"]["wellfound_companies"] == 0
+    assert h["metrics"]["wellfound_last_swept_at"] is None
+    assert h["metrics"]["wellfound_stale_days"] == 3
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_wellfound_single_bad_run_stays_green(db_session: Any) -> None:
+    """Daily cadence, variable actor: a SINGLE missed/failed day (last good
+    sweep 1 day ago) must NOT trip the dot — sustained-failure semantics."""
+    from job_assist.main import app
+
+    db_session.add_all(_healthy_fixtures())
+    db_session.add(_wellfound_company(swept_days_ago=1))
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["checks"]["wellfound_fresh"] is True
+    assert h["severity"] == "ok"
+    assert h["metrics"]["wellfound_companies"] == 1
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_wellfound_sustained_failure_flags_degraded(db_session: Any) -> None:
+    """No successful sweep in >3 days (three+ consecutive bad days) → SOFT/
+    yellow. Soft, never red — the variable actor can't down the dot."""
+    from job_assist.main import app
+
+    db_session.add_all(_healthy_fixtures())
+    db_session.add(_wellfound_company(swept_days_ago=4))
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["ok"] is False
+    assert h["severity"] == "degraded"
+    assert h["checks"]["wellfound_fresh"] is False
+    assert any("Wellfound sweep" in p for p in h["problems"])
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_wellfound_seeded_never_swept_flags_degraded(db_session: Any) -> None:
+    """Cohort materialized but never swept successfully (last_swept_at NULL) →
+    degraded, so a never-armed daily cron can't read green forever."""
+    from job_assist.main import app
+
+    db_session.add_all(_healthy_fixtures())
+    db_session.add(_wellfound_company(swept_days_ago=None))
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["checks"]["wellfound_fresh"] is False
+    assert h["severity"] == "degraded"

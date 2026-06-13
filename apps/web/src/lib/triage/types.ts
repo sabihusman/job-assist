@@ -33,9 +33,10 @@ export type ActionReason =
 export type RemoteType = 'remote' | 'hybrid' | 'onsite';
 
 // PR #33 added Workday to the backend ATS vocabulary; PR #43 wires it into
-// the frontend filter chips. PR #55 added iCIMS. Keeping the union closed
-// so a typo in chip definitions surfaces at typecheck.
-export type Ats = 'greenhouse' | 'lever' | 'ashby' | 'workday' | 'icims';
+// the frontend filter chips. PR #55 added iCIMS. feat/wellfound-cron-health
+// adds Wellfound — the startup board's postings ride on posting_source.ats.
+// Keeping the union closed so a typo in chip definitions surfaces at typecheck.
+export type Ats = 'greenhouse' | 'lever' | 'ashby' | 'workday' | 'icims' | 'wellfound';
 
 export type RoleFamilyWire =
   | 'product_management'

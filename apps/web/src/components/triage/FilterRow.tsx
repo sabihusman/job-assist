@@ -37,6 +37,9 @@ const ATS_CHIPS = [
   // PR #55: iCIMS adapter chip. Same row, no badge color — falls through
   // to the muted-foreground default in TriageCard/CompaniesTable.
   { wire: 'icims' as Ats, label: 'icims' },
+  // feat/wellfound-cron-health: Wellfound startup-board chip. Same fall-through
+  // styling — CompaniesTable's null-fallback already renders unknown ATS rows.
+  { wire: 'wellfound' as Ats, label: 'wellfound' },
 ] as const;
 const REMOTE_CHIPS = [
   { wire: 'remote' as RemoteType, label: 'remote' },
