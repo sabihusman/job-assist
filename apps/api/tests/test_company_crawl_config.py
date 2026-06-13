@@ -49,12 +49,19 @@ async def test_deactivate_drops_from_plan_and_keeps_row(db_session: Any) -> None
     but preserves the row + domain (Gmail-match history)."""
     from job_assist.main import app
 
-    carrier = _company("Athene-Test", tier=2, source="curated")
+    # A direct-plan board (greenhouse) so being in the plan depends on tier+
+    # source, NOT ats — otherwise (e.g. workday) the row is excluded by
+    # _DIRECT_PLAN_ATS anyway and the deactivation drop wouldn't be exercised.
+    carrier = _company("Athene-Test", tier=2, source="curated", ats="greenhouse")
     db_session.add(carrier)
     await db_session.commit()
     original_domain = carrier.domain
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        # Precondition: a curated greenhouse company with a handle IS in the plan.
+        before = {p["handle"] for p in (await client.get("/admin/ingest/plan")).json()}
+        assert carrier.ats_handle in before, "curated greenhouse company should start in the plan"
+
         resp = await _post(client, [{"name": "Athene-Test", "tier": None, "source": "deactivated"}])
         assert resp.status_code == 200, resp.text
         assert resp.json()["counts"]["updated"] == 1
@@ -62,7 +69,7 @@ async def test_deactivate_drops_from_plan_and_keeps_row(db_session: Any) -> None
         plan = (await client.get("/admin/ingest/plan")).json()
 
     handles = {p["handle"] for p in plan}
-    assert carrier.ats_handle not in handles  # dropped from the curated plan
+    assert carrier.ats_handle not in handles  # deactivation dropped it from the plan
 
     # Row preserved (NOT deleted) with domain intact.
     await db_session.refresh(carrier)
