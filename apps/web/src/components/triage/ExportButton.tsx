@@ -3,7 +3,7 @@
 import { useSearchParams } from 'next/navigation';
 
 import { API_BASE_URL } from '@/lib/api/client';
-import { PM_PO_FAMILIES } from '@/lib/triage/filters';
+import { encodeFilters, parseFilters, resolveRoleFamilies } from '@/lib/triage/filters';
 
 /**
  * "Export current view" button on the Triage page (feat/triage-export-xlsx).
@@ -11,23 +11,29 @@ import { PM_PO_FAMILIES } from '@/lib/triage/filters';
  * Renders as a plain `<a href>` so the browser's native download handles
  * the Content-Disposition response — no fetch + blob + URL.createObjectURL
  * dance, no JS error path to worry about, works exactly the way Save-As
- * already works for every other download in the browser. Same searchParams
- * the user's currently viewing are appended verbatim so the export ==
- * what they see (per backend's shared query helper) — ALL matching rows in
- * the same sort, no row cap.
+ * already works for every other download in the browser.
+ *
+ * The export URL is built through the SAME parse→encode round-trip the list
+ * view uses (lib/triage/filters), NOT a verbatim copy of the raw URL params.
+ * That matters because the Triage view's filters carry RESOLVED DEFAULTS that
+ * never appear in the URL — chiefly ``state=['triage']`` (parseFilters) and the
+ * ``pm_only`` → PM/PO ``role_family`` resolution. Forwarding the raw params
+ * dropped the implicit ``state=triage`` default, so a bare triage URL exported
+ * EVERY state (applied/rejected/snoozed too) instead of only the pending rows
+ * the operator sees. Routing through parse→encode reproduces every default in
+ * one place, so the export can't silently diverge from the list again.
  */
 export function ExportButton() {
   const searchParams = useSearchParams();
-  // feat/pm-po-only-filter: mirror the list view's PM/PO-only default so the
-  // export == what's shown. The list resolves pm_only into role_family in
-  // hooks.ts; here we do the same on the raw params (this button forwards the
-  // URL verbatim). pm_only is a frontend concept — translate then drop it.
-  const params = new URLSearchParams(searchParams.toString());
-  const pmOnly = params.get('pm_only') !== 'false';
-  if (pmOnly && !params.has('role_family')) {
-    for (const fam of PM_PO_FAMILIES) params.append('role_family', fam);
-  }
+  const filters = parseFilters(searchParams);
+  const params = encodeFilters(filters);
+  // pm_only is a frontend-only concept the API doesn't understand; encodeFilters
+  // may emit it (pm_only=false), so strip it and re-append the RESOLVED family
+  // set the list query actually sends — explicit chips, else the PM/PO default,
+  // else nothing (gate off → all families).
   params.delete('pm_only');
+  params.delete('role_family');
+  for (const fam of resolveRoleFamilies(filters)) params.append('role_family', fam);
   const query = params.toString();
   const href = `${API_BASE_URL}/postings/export.xlsx${query ? `?${query}` : ''}`;
   return (

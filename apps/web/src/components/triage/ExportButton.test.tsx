@@ -18,15 +18,17 @@ function setParams(s: string) {
 }
 
 describe('ExportButton', () => {
-  test('renders an anchor pointing at /postings/export.xlsx', () => {
+  test('bare URL applies BOTH resolved defaults: state=triage AND PM/PO families', () => {
+    // Regression guard: a bare triage URL carries no `state` param, but the
+    // list view defaults state to ['triage'] (parseFilters). The export must
+    // reproduce that default — without it the xlsx dumped every state
+    // (applied/rejected/snoozed), not just the pending rows the operator sees.
     setParams('');
     render(<ExportButton />);
     const a = screen.getByTestId('triage-export-button') as HTMLAnchorElement;
     expect(a.tagName).toBe('A');
-    // feat/pm-po-only-filter: bare params → PM/PO-only default is applied so
-    // the export == the gated list view.
     expect(a.getAttribute('href')).toBe(
-      'http://api.test/postings/export.xlsx?role_family=product_management&role_family=product_owner',
+      'http://api.test/postings/export.xlsx?state=triage&role_family=product_management&role_family=product_owner',
     );
   });
 
@@ -35,7 +37,7 @@ describe('ExportButton', () => {
     render(<ExportButton />);
     const a = screen.getByTestId('triage-export-button') as HTMLAnchorElement;
     expect(a.getAttribute('href')).toBe(
-      'http://api.test/postings/export.xlsx?tier=1&tier=2&sort=best_fit&state=triage&role_family=product_management&role_family=product_owner',
+      'http://api.test/postings/export.xlsx?tier=1&tier=2&state=triage&sort=best_fit&role_family=product_management&role_family=product_owner',
     );
   });
 
@@ -52,7 +54,16 @@ describe('ExportButton', () => {
     render(<ExportButton />);
     const a = screen.getByTestId('triage-export-button') as HTMLAnchorElement;
     expect(a.getAttribute('href')).toBe(
-      'http://api.test/postings/export.xlsx?role_family=product_marketing&state=triage',
+      'http://api.test/postings/export.xlsx?state=triage&role_family=product_marketing',
+    );
+  });
+
+  test('an explicit non-triage state (e.g. a saved filter row) is preserved, not overridden', () => {
+    setParams('state=snoozed&include_snoozed_past_only=true');
+    render(<ExportButton />);
+    const a = screen.getByTestId('triage-export-button') as HTMLAnchorElement;
+    expect(a.getAttribute('href')).toBe(
+      'http://api.test/postings/export.xlsx?state=snoozed&include_snoozed_past_only=true&role_family=product_management&role_family=product_owner',
     );
   });
 
