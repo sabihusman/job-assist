@@ -204,7 +204,16 @@ def _map_geo(rec: dict[str, Any]) -> tuple[list[dict[str, Any]], str | None, str
 
 
 def _seniority_from_years(years: Any) -> str | None:
-    """Map ``years_experience_min`` → a seniority hint (secondary to title)."""
+    """Map ``years_experience_min`` → a seniority hint (secondary to title).
+
+    Every branch MUST return a value present in the ``seniority_level`` Postgres
+    enum (db/enums.py ``SeniorityLevel``) — this string is written straight to
+    the column pre-classification, so an off-enum value (the original
+    ``"associate_pm"``, which is NOT a member — the member is ``"apm"``) makes
+    the INSERT raise asyncpg ``InvalidTextRepresentationError`` and fails the
+    whole per-company ingest_run. test_wellfound asserts membership so a future
+    drift fails a test, not the prod gate.
+    """
     n = _coerce_int(years)
     if n is None:
         return None
@@ -212,7 +221,7 @@ def _seniority_from_years(years: Any) -> str | None:
         return "senior_pm"
     if n >= 3:
         return "pm"
-    return "associate_pm"
+    return "apm"
 
 
 # Substrings that mark a ``company_badges`` entry as a FUNDING/INVESTOR

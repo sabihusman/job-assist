@@ -202,7 +202,54 @@ def test_map_record_years_experience_fills_unknown_seniority() -> None:
         "Acme Labs",
         source_job_id="x",
     )
-    assert np.seniority_level in {"senior_pm", "pm", "associate_pm"}
+    assert np.seniority_level in {"senior_pm", "pm", "apm"}
+
+
+# Regression guard for the asyncpg InvalidTextRepresentationError that failed
+# every low-years Wellfound INSERT in prod: _seniority_from_years returned
+# "associate_pm", which is NOT a member of the seniority_level enum (the member
+# is "apm"). The seniority string is written to the column pre-classification,
+# so an off-enum value fails the whole ingest_run. Assert EVERY branch maps to a
+# real SeniorityLevel member — exercising the <3 branch the old test skipped.
+@pytest.mark.parametrize(
+    ("years", "expected"),
+    [
+        # years<=0 → None (_coerce_int guards float(v) > 0): "unspecified", defer
+        # to title/classifier rather than guess.
+        (0, None),
+        (1, "apm"),
+        (2, "apm"),
+        (3, "pm"),
+        (5, "pm"),
+        (6, "senior_pm"),
+        (12, "senior_pm"),
+    ],
+)
+def test_seniority_from_years_is_always_a_valid_enum_member(
+    years: int, expected: str | None
+) -> None:
+    from job_assist.adapters.wellfound import _seniority_from_years
+    from job_assist.db.enums import SeniorityLevel
+
+    result = _seniority_from_years(years)
+    assert result == expected
+    # The real guard: a non-None return MUST be a Postgres enum value, or the
+    # INSERT raises and the per-company ingest_run fails. (None = no hint, fine.)
+    assert result is None or result in {m.value for m in SeniorityLevel}
+
+
+def test_map_record_low_years_maps_to_valid_apm_not_associate_pm() -> None:
+    # End-to-end through the mapper: a junior role (years_experience_min=1) must
+    # land 'apm', never the off-enum 'associate_pm' that broke prod inserts.
+    from job_assist.db.enums import SeniorityLevel
+
+    np = map_wellfound_record(
+        _rec(title="Revenue Operations Manager", years_experience_min=1),
+        "FlexPoint",
+        source_job_id="y",
+    )
+    assert np.seniority_level == "apm"
+    assert np.seniority_level in {m.value for m in SeniorityLevel}
 
 
 def test_company_name_of_reads_flat_company_name() -> None:
