@@ -285,13 +285,28 @@ async def auth_status() -> dict[str, bool]:
 # strip-philosophy "no base-class refactor" rule.
 _INGESTABLE_ATS = ("greenhouse", "lever", "ashby", "workday", "icims")
 
+# chore/drop-workday-icims-direct-plan: the DAILY PLAN's adapter set. Workday and
+# iCIMS are deliberately EXCLUDED from the direct daily fetch: their boards block
+# Railway's egress IP, so a direct fetch always returns 0 (a guaranteed no-op
+# that just adds a pointless call). Those curated employers are sourced instead
+# by the Apify Fantastic.jobs path (services/fantastic_ingest.FANTASTIC_SOURCED_ATS
+# = workday/icims, targeting by domain), which runs as its own daily cron step.
+# _INGESTABLE_ATS stays the FULL set so the /postings ats filter
+# (_ALLOWED_ATS_VALUES) can still surface the Apify-sourced workday/icims
+# postings; only the direct PLAN query narrows to the three free boards that
+# actually fetch from Railway.
+_DIRECT_PLAN_ATS = ("greenhouse", "lever", "ashby")
+
 
 @app.get("/admin/ingest/plan")
 async def get_ingest_plan(db: DbSession) -> list[dict[str, str]]:
     """List ``(ats, handle)`` pairs the daily *curated* cron should ingest.
 
     Filters to rows where:
-      * ``ats`` is one of the three currently-supported adapters
+      * ``ats`` is one of the three free direct boards (``_DIRECT_PLAN_ATS`` =
+        greenhouse/lever/ashby). workday/icims are EXCLUDED — their boards block
+        Railway's egress IP (direct fetch = guaranteed 0), so they're sourced by
+        the Apify Fantastic path instead, not the direct daily plan.
       * ``ats_handle IS NOT NULL`` (we can't ingest without a handle)
       * ``tier IS NOT NULL`` — the curated/broad separation (Slice 2).
         Curated companies carry a hand-assigned pedigree tier (1-4);
@@ -338,7 +353,12 @@ async def get_ingest_plan(db: DbSession) -> list[dict[str, str]]:
     rows = (
         await db.execute(
             select(TargetCompany.ats, TargetCompany.ats_handle)
-            .where(TargetCompany.ats.in_(_INGESTABLE_ATS))
+            # _DIRECT_PLAN_ATS, NOT _INGESTABLE_ATS: workday/icims boards block
+            # Railway's egress IP (direct fetch = guaranteed 0), so they're
+            # sourced by the Apify Fantastic path instead and excluded from the
+            # direct daily plan. _INGESTABLE_ATS stays full for the /postings
+            # filter so Apify-sourced workday/icims postings remain filterable.
+            .where(TargetCompany.ats.in_(_DIRECT_PLAN_ATS))
             .where(TargetCompany.ats_handle.isnot(None))
             # Curated only — exclude broad-ingest shells (tier IS NULL).
             .where(TargetCompany.tier.isnot(None))

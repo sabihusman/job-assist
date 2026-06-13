@@ -57,20 +57,23 @@ async def _call_plan(db_session: Any) -> list[dict[str, str]]:
 
 
 @_NEEDS_DB
-async def test_returns_only_supported_ats(db_session: Any) -> None:
-    """Rows with ats='unknown' must NOT appear in the plan.
+async def test_returns_only_direct_plan_ats(db_session: Any) -> None:
+    """The DIRECT daily plan is the three free boards (greenhouse/lever/ashby).
 
-    Workday is a supported adapter as of PR #33, so workday rows with a
-    handle now show up in the plan. adapter_config validation happens at
-    trigger time, not plan time — the plan endpoint just lists what's
-    eligible for ingest.
+    chore/drop-workday-icims-direct-plan: workday/icims are EXCLUDED from the
+    direct plan — their boards block Railway's egress IP (direct fetch = 0), so
+    they're sourced by the Apify Fantastic path instead. ats='unknown' is also
+    excluded. The plan endpoint just lists what's eligible for the direct cron.
     """
     db_session.add_all(
         [
             _tc("AlphaCo", ats="greenhouse", handle="alphaco", tier=1),
             _tc("BetaCo", ats="lever", handle="betaco", tier=2),
             _tc("GammaCo", ats="ashby", handle="gammaco", tier=3),
+            # workday/icims curated rows WITH handles are now excluded from the
+            # direct plan (Apify-sourced), not fetched directly.
             _tc("WorkdayCo", ats="workday", handle="workdayco", tier=2),
+            _tc("IcimsCo", ats="icims", handle="icimsco", tier=2),
             _tc("UnknownCo", ats="unknown", handle=None, tier=3),
         ]
     )
@@ -78,7 +81,9 @@ async def test_returns_only_supported_ats(db_session: Any) -> None:
 
     plan = await _call_plan(db_session)
     handles = {item["handle"] for item in plan}
-    assert handles == {"alphaco", "betaco", "gammaco", "workdayco"}
+    assert handles == {"alphaco", "betaco", "gammaco"}
+    assert "workdayco" not in handles, "workday is Apify-sourced, not in the direct plan"
+    assert "icimsco" not in handles, "icims is Apify-sourced, not in the direct plan"
 
 
 @_NEEDS_DB
