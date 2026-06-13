@@ -25,17 +25,28 @@ _NEEDS_DB = pytest.mark.skipif(
 
 
 def _rec(company: str, *, jid: str, title: str = "Senior Product Manager") -> dict[str, Any]:
+    # Real clearpath shape (Gate-1-confirmed): flat company_name, min_value/
+    # max_value salary, unix live_start_at, company_badges for legitimacy.
     return {
         "id": jid,
         "title": title,
+        "company_name": company,
+        "company_slug": company.lower().replace(" ", "-").replace(",", "").replace(".", ""),
+        "company_badges": ["Top Investors", "Actively Hiring"],
         "url": f"https://wellfound.com/jobs/{jid}",
         "description": "Own the product roadmap end to end. Real cash comp.",
-        "live_start_at": "2026-06-04T12:00:00Z",
-        "compensation_parsed": {"base_salary": {"min": 160000, "max": 200000, "currency": "USD"}},
-        "equity": {"min": 0.1, "max": 0.4},
-        "locations": ["Remote (US)"],
+        "live_start_at": 1780574400,
+        "compensation_parsed": {
+            "base_salary": {
+                "min_value": 160000,
+                "max_value": 200000,
+                "currency": "USD",
+                "unit": "YEARLY",
+            }
+        },
+        "equity_parsed": {"min_value": 0.1, "max_value": 0.4},
+        "location_names": ["Remote (US)"],
         "remote": True,
-        "company": {"name": company, "slug": company.lower().replace(" ", "-")},
     }
 
 

@@ -113,38 +113,6 @@ def _first(rec: dict[str, Any], *keys: str) -> Any:
     return None
 
 
-def _company_of(rec: dict[str, Any]) -> dict[str, Any]:
-    c = rec.get("company")
-    return c if isinstance(c, dict) else {}
-
-
-def company_name_of(rec: dict[str, Any]) -> str:
-    """The posting's company name (used to group records + materialize shells)."""
-    c = _company_of(rec)
-    return str(_first(c, "name") or _first(rec, "company_name", "companyName") or "").strip()
-
-
-def _base_salary(rec: dict[str, Any]) -> tuple[int | None, int | None, str]:
-    """(min, max, currency) from ``compensation_parsed.base_salary`` — CASH only.
-
-    Equity is deliberately NOT touched here: a 0.1-0.5% equity figure parsed as
-    salary would wreck the salary-floor hard rule. Equity stays in raw_payload.
-    """
-    comp = rec.get("compensation_parsed")
-    comp = comp if isinstance(comp, dict) else {}
-    base = comp.get("base_salary")
-    currency = str(_first(comp, "currency") or "USD")
-    if isinstance(base, dict):
-        lo = _coerce_int(_first(base, "min", "minimum", "low"))
-        hi = _coerce_int(_first(base, "max", "maximum", "high"))
-        currency = str(_first(base, "currency") or currency)
-        return lo, (hi if hi is not None else lo), currency
-    if isinstance(base, int | float) and base > 0:
-        v = int(base)
-        return v, v, currency
-    return None, None, currency
-
-
 def _coerce_int(v: Any) -> int | None:
     try:
         return int(v) if v is not None and float(v) > 0 else None
@@ -152,10 +120,64 @@ def _coerce_int(v: Any) -> int | None:
         return None
 
 
-def _parse_dt(value: Any) -> datetime | None:
-    """Parse ``live_start_at`` (ISO) → aware UTC datetime; None on anything off."""
-    if not value:
+def company_name_of(rec: dict[str, Any]) -> str:
+    """The posting's company name (used to group records + materialize shells).
+
+    clearpath keys it FLAT as ``company_name`` (confirmed against the real
+    record at Gate 1); the nested ``company.name`` fallback is defensive.
+    """
+    nested = rec.get("company")
+    nested_name = nested.get("name") if isinstance(nested, dict) else None
+    return str(_first(rec, "company_name", "companyName") or nested_name or "").strip()
+
+
+def _period_from_unit(unit: Any) -> str:
+    """Map clearpath's ``base_salary.unit`` → our SalaryPeriod. Wellfound comp is
+    annual unless the unit says hourly."""
+    u = str(unit or "").upper()
+    if "HOUR" in u:
+        return "hourly"
+    return "annual"
+
+
+def _base_salary(rec: dict[str, Any]) -> tuple[int | None, int | None, str, str]:
+    """(min, max, currency, period) from ``compensation_parsed.base_salary`` —
+    CASH only. Real clearpath shape (Gate-1-confirmed):
+    ``{min_value, max_value, currency, unit}`` — note ``min_value``/``max_value``,
+    NOT ``min``/``max``. A top-level ``base_salary`` mirror is the fallback.
+
+    Equity is deliberately NOT touched here: a 0.1-0.5% equity figure parsed as
+    salary would wreck the salary-floor hard rule. Equity stays in raw_payload.
+    """
+    comp = rec.get("compensation_parsed")
+    comp = comp if isinstance(comp, dict) else {}
+    base = comp.get("base_salary")
+    if not isinstance(base, dict):
+        # Top-level mirror fallback (clearpath exposes both).
+        top = rec.get("base_salary")
+        base = top if isinstance(top, dict) else {}
+    lo = _coerce_int(base.get("min_value"))
+    hi = _coerce_int(base.get("max_value"))
+    currency = str(base.get("currency") or comp.get("currency") or "USD")
+    period = _period_from_unit(base.get("unit"))
+    return lo, (hi if hi is not None else lo), currency, period
+
+
+def _parse_posted(rec: dict[str, Any]) -> datetime | None:
+    """``live_start_at`` → aware UTC datetime. It's a UNIX EPOCH INT on the real
+    record (NOT ISO); guard ms vs s. Falls back to an ISO string if a future
+    schema ever switches. None on anything unparseable."""
+    value = _first(rec, "live_start_at", "liveStartAt", "posted_at", "postedAt")
+    if value is None:
         return None
+    if isinstance(value, int | float) and value > 0:
+        secs = float(value)
+        if secs > 1e12:  # milliseconds → seconds
+            secs /= 1000.0
+        try:
+            return datetime.fromtimestamp(secs, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            return None
     try:
         dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except (TypeError, ValueError):
@@ -164,18 +186,17 @@ def _parse_dt(value: Any) -> datetime | None:
 
 
 def _map_geo(rec: dict[str, Any]) -> tuple[list[dict[str, Any]], str | None, str]:
-    """(locations_normalized, location_raw, remote_type) from Wellfound fields."""
-    raw_locs = _first(rec, "locations", "location_names") or []
+    """(locations_normalized, location_raw, remote_type) from Wellfound fields.
+    Real clearpath: ``location_names`` (array) + ``remote`` (bool)."""
+    raw_locs = _first(rec, "location_names", "locations") or []
     locs = (
         [str(x).strip() for x in raw_locs if str(x).strip()] if isinstance(raw_locs, list) else []
     )
     location_raw = ", ".join(locs) if locs else None
 
-    work_mode = str(_first(rec, "workMode", "work_mode", "remote_type") or "").lower()
-    only_remote_flag = bool(_first(rec, "remote", "is_remote", "onlyRemoteJobs"))
-    is_remote = (
-        only_remote_flag or "remote" in work_mode or any("remote" in lo.lower() for lo in locs)
-    )
+    remote_flag = bool(_first(rec, "remote", "is_remote"))
+    work_mode = str(_first(rec, "workMode", "work_mode") or "").lower()
+    is_remote = remote_flag or "remote" in work_mode or any("remote" in lo.lower() for lo in locs)
     remote_type = "remote" if is_remote else ("onsite" if locs else "unknown")
 
     normalized = [{"raw": lo} for lo in locs]
@@ -194,20 +215,34 @@ def _seniority_from_years(years: Any) -> str | None:
     return "associate_pm"
 
 
+# Substrings that mark a ``company_badges`` entry as a FUNDING/INVESTOR
+# legitimacy signal. Gate-1 confirmed the field is ``company_badges`` (array of
+# strings like "Scale Stage", "Top Investors", "Actively Hiring"). "Actively
+# Hiring" is deliberately EXCLUDED — every live post has it, so it's no signal.
+_BADGE_LEGITIMACY_MARKERS = (
+    "investor",
+    "stage",  # "Scale Stage", "Seed Stage", "Growth Stage", "Early Stage"
+    "series",
+    "seed",
+    "funding",
+    "funded",
+    "ipo",
+    "public",
+    "unicorn",
+)
+
+
 def _has_legitimacy_badge(rec: dict[str, Any]) -> bool:
-    """True when the record carries a trust signal — a Top-Investors / funding
-    badge, or a non-empty funding stage. Tuned against real records at Gate 1."""
-    if _first(rec, "funding_stage", "fundingStage"):
-        return True
-    c = _company_of(rec)
-    if _first(c, "funding_stage", "fundingStage", "totalRaised", "total_raised"):
-        return True
-    badges = _first(rec, "badges") or _first(c, "badges") or []
+    """True when ``company_badges`` carries a funding/investor trust signal.
+    Gate-1-confirmed field name + values; ``funding_stage`` is a defensive
+    fallback."""
+    badges = _first(rec, "company_badges", "companyBadges", "badges") or []
     if isinstance(badges, list):
-        joined = " ".join(str(b).lower() for b in badges)
-        if "investor" in joined or "funding" in joined or "top" in joined:
-            return True
-    return bool(_first(rec, "top_investors", "topInvestors"))
+        for b in badges:
+            bl = str(b).lower()
+            if any(m in bl for m in _BADGE_LEGITIMACY_MARKERS):
+                return True
+    return bool(_first(rec, "funding_stage", "fundingStage"))
 
 
 def passes_quality_gate(rec: dict[str, Any]) -> bool:
@@ -216,7 +251,7 @@ def passes_quality_gate(rec: dict[str, Any]) -> bool:
     the wider Wellfound feed. Pure + tunable; unit-tested directly."""
     if _has_legitimacy_badge(rec):
         return True
-    lo, _hi, _cur = _base_salary(rec)
+    lo, _hi, _cur, _period = _base_salary(rec)
     return lo is not None and lo >= _QUALITY_SALARY_FLOOR_USD
 
 
@@ -233,10 +268,10 @@ def map_wellfound_record(
     norm_title = normalize_title(raw_title)
 
     locations_normalized, location_raw, remote_type = _map_geo(rec)
-    salary_min, salary_max, salary_currency = _base_salary(rec)
+    salary_min, salary_max, salary_currency, salary_period = _base_salary(rec)
     jd_text = str(_first(rec, "description", "description_text", "jd_text", "jd") or "")
     url = str(_first(rec, "url", "apply_url", "applyUrl") or "")
-    posted_at = _parse_dt(_first(rec, "live_start_at", "liveStartAt", "posted_at", "postedAt"))
+    posted_at = _parse_posted(rec)
 
     # Title detection is primary; years_experience_min only fills an 'unknown'.
     seniority = detect_seniority(norm_title)
@@ -257,7 +292,7 @@ def map_wellfound_record(
         salary_min=salary_min,
         salary_max=salary_max,
         salary_currency=salary_currency if salary_min is not None else None,
-        salary_period="annual" if salary_min is not None else "unknown",
+        salary_period=salary_period if salary_min is not None else "unknown",
         jd_text=jd_text,
         jd_text_hash=_sha256(jd_text),
         content_hash=compute_content_hash(canonical_company_name, norm_title, locations_normalized),
