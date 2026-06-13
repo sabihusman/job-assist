@@ -51,7 +51,9 @@ jobs:
           SOURCE=""
           OFFSET=0
           while : ; do
-            RESP=$(curl -fsS --max-time 30 "${API_URL}/companies?limit=100&offset=${OFFSET}")
+            RESP=$(curl -fsS --max-time 30 \
+              -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+              "${API_URL}/companies?limit=100&offset=${OFFSET}")
             TOTAL=$(echo "$RESP" | jq '.total')
             ROW=$(echo "$RESP" | jq -c --arg a "$ATS" --arg h "$HANDLE" 'first(.items[] | select(.ats == $a and .ats_handle == $h))')
             if [ "$ROW" != "null" ] && [ -n "$ROW" ]; then
