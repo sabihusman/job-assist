@@ -1,0 +1,101 @@
+name: Deactivate company handle
+
+# Ops tool: stop crawling a curated company whose board is dead (persistent
+# handle_not_found) WITHOUT deleting it — preserves the row, its domain, and
+# all Gmail-match history. Resolves the company NAME from (ats, ats_handle) via
+# the public /companies list, then POSTs /admin/companies/crawl-config with
+# tier=null + source=deactivated, which drops it out of BOTH the daily plan and
+# the Apify sweep.
+#
+# Safe by default: `apply=false` is a DRY RUN (resolve + show current state,
+# no write). Set apply=true to actually deactivate.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ats:
+        description: 'ATS of the dead board (e.g. ashby)'
+        required: true
+      handle:
+        description: 'ats_handle of the dead board (e.g. increase)'
+        required: true
+      apply:
+        description: 'false = dry-run (resolve only); true = write tier=null, source=deactivated'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: read
+
+jobs:
+  deactivate:
+    name: Deactivate ${{ github.event.inputs.ats }}/${{ github.event.inputs.handle }}
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+      ATS: ${{ github.event.inputs.ats }}
+      HANDLE: ${{ github.event.inputs.handle }}
+      APPLY: ${{ github.event.inputs.apply }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Resolve company name from (ats, handle)
+        id: resolve
+        run: |
+          NAME=""
+          TIER=""
+          SOURCE=""
+          OFFSET=0
+          while : ; do
+            RESP=$(curl -fsS --max-time 30 "${API_URL}/companies?limit=100&offset=${OFFSET}")
+            TOTAL=$(echo "$RESP" | jq '.total')
+            ROW=$(echo "$RESP" | jq -c --arg a "$ATS" --arg h "$HANDLE" 'first(.items[] | select(.ats == $a and .ats_handle == $h))')
+            if [ "$ROW" != "null" ] && [ -n "$ROW" ]; then
+              NAME=$(echo "$ROW" | jq -r '.name')
+              TIER=$(echo "$ROW" | jq -r '.tier')
+              SOURCE=$(echo "$ROW" | jq -r '.source')
+              break
+            fi
+            OFFSET=$((OFFSET + 100))
+            if [ "$OFFSET" -ge "$TOTAL" ]; then break; fi
+          done
+          if [ -z "$NAME" ]; then
+            echo "::error::no company found with ats=${ATS} ats_handle=${HANDLE}"
+            exit 1
+          fi
+          echo "Resolved: ats=${ATS} handle=${HANDLE} -> name='${NAME}' (current tier=${TIER}, source=${SOURCE})"
+          {
+            echo "name=${NAME}"
+            echo "tier=${TIER}"
+            echo "source=${SOURCE}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Dry-run notice
+        if: ${{ github.event.inputs.apply != 'true' }}
+        env:
+          NAME: ${{ steps.resolve.outputs.name }}
+        run: |
+          echo "DRY RUN — would set name='${NAME}' to tier=null, source=deactivated."
+          echo "Re-run with apply=true to write."
+
+      - name: Deactivate (write)
+        if: ${{ github.event.inputs.apply == 'true' }}
+        env:
+          NAME: ${{ steps.resolve.outputs.name }}
+        run: |
+          BODY=$(jq -n --arg n "$NAME" '[{name: $n, tier: null, source: "deactivated"}]')
+          echo "POST /admin/companies/crawl-config  body=${BODY}"
+          RESP=$(curl -fsS --max-time 30 -X POST \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$BODY" \
+            "${API_URL}/admin/companies/crawl-config")
+          echo "$RESP" | jq .
+          UPDATED=$(echo "$RESP" | jq -r '.counts.updated')
+          if [ "$UPDATED" != "1" ]; then
+            echo "::warning::expected updated=1, got updated=${UPDATED} (already deactivated, or name drift)"
+          fi
