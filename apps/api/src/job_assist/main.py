@@ -4225,6 +4225,16 @@ _HEALTH_GMAIL_STALE_HOURS = 13
 # the check passes trivially when no warm_path companies exist (pre-seeding).
 _HEALTH_WARM_PATH_STALE_DAYS = 9
 
+# Wellfound sweep health (feat/wellfound-cron-health). The Wellfound cohort is
+# swept DAILY (ingest-daily.yml), but the clearpath actor is variable (~80%
+# single-run success) — so a SINGLE bad/missed run must NOT yellow the dot. A
+# ~3-day window (daily cadence + grace) means only SUSTAINED failure (three
+# consecutive days with no successful sweep) trips it. Shells stamp
+# last_swept_at only on non-failed runs, so a failed day leaves the prior
+# stamp standing — exactly the sustained-failure semantics we want. Soft
+# (yellow), and trivially healthy while no wellfound companies exist.
+_HEALTH_WELLFOUND_STALE_DAYS = 3
+
 
 @app.get("/admin/ingest/health", tags=["admin"])
 async def ingest_health(db: DbSession) -> dict[str, Any]:
@@ -4440,6 +4450,24 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
         warm_path_last_swept is not None and warm_path_last_swept >= warm_path_cutoff
     )
 
+    # ── Wellfound sweep health (feat/wellfound-cron-health) ───────────────
+    # Daily cadence, variable actor → ~3-day SUSTAINED-failure window over the
+    # cohort's last_swept_at (a single bad/missed day stays green; three
+    # consecutive trips it). Trivially healthy when the cohort is empty.
+    wellfound_cutoff = now - timedelta(days=_HEALTH_WELLFOUND_STALE_DAYS)
+    wellfound_count, wellfound_last_swept = (
+        await db.execute(
+            select(
+                func.count(),
+                func.max(TargetCompany.last_swept_at),
+            ).where(TargetCompany.source == "wellfound")
+        )
+    ).one()
+    wellfound_count = int(wellfound_count or 0)
+    wellfound_fresh = wellfound_count == 0 or (
+        wellfound_last_swept is not None and wellfound_last_swept >= wellfound_cutoff
+    )
+
     checks = {
         # fix(audit health split): per-pipeline freshness — the curated cron's
         # own check (HARD). Pre-split, any broad/warm-path success satisfied
@@ -4463,6 +4491,10 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
         # feat/warm-path-ingest: the weekly alumni-cohort sweep ran within
         # ~9 days (trivially true while the cohort is empty). Soft (yellow).
         "warm_path_fresh": warm_path_fresh,
+        # feat/wellfound-cron-health: the daily Wellfound sweep succeeded within
+        # ~3 days (SUSTAINED-failure window — the variable actor's single bad
+        # runs don't trip it; trivially true while the cohort is empty). Soft.
+        "wellfound_fresh": wellfound_fresh,
     }
     messages = {
         "curated_fresh": f"curated cron has not swept in the last {_HEALTH_RECENT_HOURS}h "
@@ -4491,6 +4523,10 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
             f"warm-path sweep has not run in the last {_HEALTH_WARM_PATH_STALE_DAYS} days "
             f"({warm_path_count} warm-path companies; last swept: {warm_path_last_swept})"
         ),
+        "wellfound_fresh": (
+            f"Wellfound sweep has not succeeded in the last {_HEALTH_WELLFOUND_STALE_DAYS} days "
+            f"({wellfound_count} wellfound companies; last swept: {wellfound_last_swept})"
+        ),
     }
     problems = [messages[name] for name, passed in checks.items() if not passed]
 
@@ -4513,6 +4549,9 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
         or not checks["gmail_healthy"]
         # feat/warm-path-ingest: a stalled weekly warm-path sweep is soft.
         or not checks["warm_path_fresh"]
+        # feat/wellfound-cron-health: a SUSTAINED Wellfound failure is soft —
+        # the variable actor must never red the dot on a single bad run.
+        or not checks["wellfound_fresh"]
     )
     severity = "down" if hard_down else ("degraded" if soft_degraded else "ok")
 
@@ -4556,6 +4595,13 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
                 warm_path_last_swept.isoformat() if warm_path_last_swept else None
             ),
             "warm_path_stale_days": _HEALTH_WARM_PATH_STALE_DAYS,
+            # feat/wellfound-cron-health: daily Wellfound sweep freshness
+            # (sustained-failure window).
+            "wellfound_companies": wellfound_count,
+            "wellfound_last_swept_at": (
+                wellfound_last_swept.isoformat() if wellfound_last_swept else None
+            ),
+            "wellfound_stale_days": _HEALTH_WELLFOUND_STALE_DAYS,
         },
     }
 

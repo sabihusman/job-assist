@@ -18,6 +18,7 @@ function makeHealth(over: Partial<IngestHealth> = {}): IngestHealth {
       llm_healthy: true,
       gmail_healthy: true,
       warm_path_fresh: true,
+      wellfound_fresh: true,
     },
     metrics: {
       last_success_at: '2026-06-07T22:00:00Z',
@@ -45,6 +46,9 @@ function makeHealth(over: Partial<IngestHealth> = {}): IngestHealth {
       warm_path_companies: 0,
       warm_path_last_swept_at: null,
       warm_path_stale_days: 9,
+      wellfound_companies: 0,
+      wellfound_last_swept_at: null,
+      wellfound_stale_days: 3,
     },
     ...over,
   };
@@ -77,6 +81,7 @@ describe('HealthDotView', () => {
         llm_healthy: true,
         gmail_healthy: true,
         warm_path_fresh: true,
+        wellfound_fresh: true,
       },
     });
     render(<HealthDotView state="degraded" health={health} isError={false} />);
@@ -102,6 +107,7 @@ describe('HealthDotView', () => {
         llm_healthy: true,
         gmail_healthy: true,
         warm_path_fresh: true,
+        wellfound_fresh: true,
       },
     });
     render(<HealthDotView state="down" health={health} isError={false} />);
@@ -129,11 +135,35 @@ describe('HealthDotView', () => {
         llm_healthy: true,
         gmail_healthy: false,
         warm_path_fresh: true,
+        wellfound_fresh: true,
       },
     });
     render(<HealthDotView state="degraded" health={health} isError={false} />);
     await userEvent.click(screen.getByTestId('health-dot'));
     expect(screen.getByTestId('health-check-gmail_healthy')).toHaveAttribute('data-pass', 'false');
+  });
+
+  test('WELLFOUND: a sustained Wellfound failure shows the check failing (soft/yellow)', async () => {
+    const health = makeHealth({
+      ok: false,
+      severity: 'degraded',
+      problems: ['Wellfound sweep has not succeeded in the last 3 days (2 wellfound companies)'],
+      checks: {
+        curated_fresh: true,
+        no_hard_failures: true,
+        broad_fresh: true,
+        not_starved: true,
+        llm_healthy: true,
+        gmail_healthy: true,
+        warm_path_fresh: true,
+        wellfound_fresh: false,
+      },
+    });
+    render(<HealthDotView state="degraded" health={health} isError={false} />);
+    await userEvent.click(screen.getByTestId('health-dot'));
+    const row = screen.getByTestId('health-check-wellfound_fresh');
+    expect(row).toHaveAttribute('data-pass', 'false');
+    expect(row).toHaveTextContent('Wellfound sweep fresh');
   });
 
   test('GMAIL: popover shows the last sweep time + runtime', async () => {
@@ -188,6 +218,7 @@ describe('HealthDotView', () => {
         llm_healthy: false,
         gmail_healthy: true,
         warm_path_fresh: true,
+        wellfound_fresh: true,
       },
     });
     render(<HealthDotView state="degraded" health={health} isError={false} />);

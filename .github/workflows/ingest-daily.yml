@@ -73,6 +73,25 @@ jobs:
             "$API_URL/admin/ingest/fantastic")
           echo "$resp" | python3 -m json.tool
 
+      # feat/wellfound-cron-health: query Wellfound (clearpath Apify actor) for
+      # the first-PM-hire / 0-to-1 startup roles the curated+broad sets miss.
+      # HARD COST CAP: page_limit=1 — same ceiling the Gate-1 probe validated
+      # (~$0.15/run, 41/43 kept). ONE role for the first week (product-manager +
+      # remote); the role list is the knob — widen only after a baseline week of
+      # daily yield/cost. The server holds APIFY_API_TOKEN (Railway env) and an
+      # in-adapter record/cost ceiling, so a filter regression can't fail open
+      # into an unbounded paid fetch. Soft-fails inside the service (one bad
+      # actor run never crashes the cron), and runs BEFORE mark-stale so the
+      # Wellfound postings get last_seen_at refreshed first. ``|| true`` keeps a
+      # whole-step HTTP hiccup from failing the daily run — wellfound_fresh's
+      # sustained-failure window is the real alarm, not a single 502.
+      - name: Ingest Wellfound startups via clearpath (Apify)
+        run: |
+          resp=$(curl -sS --max-time 300 -X POST \
+            -H "Authorization: Bearer $API_AUTH_TOKEN" \
+            "$API_URL/admin/ingest/wellfound?role=product-manager&page_limit=1") || true
+          echo "$resp" | python3 -m json.tool || echo "$resp"
+
       # Mark postings stale AFTER the board loop, so every still-live posting
       # has had its last_seen_at refreshed this run first. Postings not seen
       # in 7+ days get closed_at set and drop out of the default Triage view

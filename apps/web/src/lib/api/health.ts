@@ -38,6 +38,10 @@ export type IngestHealth = {
     // feat/warm-path-ingest: the weekly alumni-cohort sweep ran within ~9 days
     // (trivially true while no warm-path companies exist).
     warm_path_fresh: boolean;
+    // feat/wellfound-cron-health: the daily Wellfound sweep succeeded within ~3
+    // days (sustained-failure window — the variable actor's single bad runs
+    // don't trip it; trivially true while no wellfound companies exist).
+    wellfound_fresh: boolean;
   };
   metrics: {
     last_success_at: string | null;
@@ -70,6 +74,10 @@ export type IngestHealth = {
     warm_path_companies: number;
     warm_path_last_swept_at: string | null;
     warm_path_stale_days: number;
+    // feat/wellfound-cron-health: daily Wellfound sweep freshness.
+    wellfound_companies: number;
+    wellfound_last_swept_at: string | null;
+    wellfound_stale_days: number;
   };
 };
 

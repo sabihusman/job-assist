@@ -214,10 +214,11 @@ function PausedBadge({ title }: { title: string }) {
 }
 
 function AtsBadge({ ats }: { ats: string }) {
-  // PR #33 added "workday"; PR #55 added "icims". Neither has a brand
-  // color yet, so both fall through to the muted-foreground default —
-  // same tone the spec asks for ("neutral slate/gray"). Explicit entries
-  // here make the omissions intentional rather than accidental.
+  // PR #33 added "workday"; PR #55 added "icims"; feat/wellfound-cron-health
+  // added "wellfound". None has a brand color yet, so they fall through to the
+  // muted-foreground default — same tone the spec asks for ("neutral
+  // slate/gray"). Explicit entries here make the omissions intentional rather
+  // than accidental.
   const cls =
     (
       {
@@ -226,8 +227,9 @@ function AtsBadge({ ats }: { ats: string }) {
         ashby: 'text-ats-ashby',
         workday: 'text-muted-foreground',
         icims: 'text-muted-foreground',
+        wellfound: 'text-muted-foreground',
       } as const
-    )[ats.toLowerCase() as 'greenhouse' | 'lever' | 'ashby' | 'workday' | 'icims'] ??
+    )[ats.toLowerCase() as 'greenhouse' | 'lever' | 'ashby' | 'workday' | 'icims' | 'wellfound'] ??
     'text-muted-foreground';
   return <span className={cn('font-mono text-[10px] uppercase tracking-wide', cls)}>{ats}</span>;
 }
