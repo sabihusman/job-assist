@@ -36,37 +36,25 @@ jobs:
       - name: Fetch + isolate failed runs
         run: |
           LIM="${LIMIT:-200}"
-          echo "── GET /admin/ingest/runs?limit=${LIM} ───────────────────"
+          echo "-- GET /admin/ingest/runs?limit=${LIM} --"
           RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
             -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
-            "${API_URL}/admin/ingest/runs?limit=${LIM}" || echo -e "\n000")
+            "${API_URL}/admin/ingest/runs?limit=${LIM}" || printf '\n000')
           CODE=$(echo "$RESP" | tail -n1)
           BODY=$(echo "$RESP" | head -n -1)
-          echo "── HTTP ${CODE} ──────────────────────────────────────────"
+          echo "-- HTTP ${CODE} --"
           if [ "$CODE" != "200" ]; then
             echo "::error::/admin/ingest/runs returned HTTP ${CODE}"
             echo "$BODY"
             exit 1
           fi
-          echo "$BODY" | python3 -c '
-import json, sys
-d = json.load(sys.stdin)
-items = d.get("items", [])
-failed = [r for r in items if r.get("status") == "failed"]
-nf = [r for r in items if r.get("status") == "handle_not_found"]
-print(f"scanned={len(items)}  failed={len(failed)}  handle_not_found={len(nf)}")
-print()
-print("=== FAILED runs (status=failed) ===")
-for r in failed:
-    print(f"- {r.get(\"started_at\")}  source={r.get(\"source\")}  "
-          f"fetched={r.get(\"postings_fetched\")}  err={(r.get(\"error_message\") or \"\")[:200]!r}")
-if not failed:
-    print("(none)")
-print()
-print("=== handle_not_found (stale handles, informational) ===")
-for r in nf:
-    print(f"- {r.get(\"started_at\")}  source={r.get(\"source\")}  "
-          f"err={(r.get(\"error_message\") or \"\")[:120]!r}")
-if not nf:
-    print("(none)")
-'
+          SCANNED=$(echo "$BODY" | jq '.items | length')
+          NFAILED=$(echo "$BODY" | jq '[.items[] | select(.status == "failed")] | length')
+          NNF=$(echo "$BODY" | jq '[.items[] | select(.status == "handle_not_found")] | length')
+          echo "scanned=${SCANNED}  failed=${NFAILED}  handle_not_found=${NNF}"
+          echo
+          echo "=== FAILED runs (status=failed) ==="
+          echo "$BODY" | jq -r '.items[] | select(.status == "failed") | "- \(.started_at)  source=\(.source)  fetched=\(.postings_fetched)  err=\(.error_message // "null")"'
+          echo
+          echo "=== handle_not_found (stale handles, informational) ==="
+          echo "$BODY" | jq -r '.items[] | select(.status == "handle_not_found") | "- \(.started_at)  source=\(.source)  err=\(.error_message // "null")"'
