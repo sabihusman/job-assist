@@ -1,0 +1,72 @@
+name: Ingest runs probe
+
+# Read-only diagnostic: dumps recent ingest_run rows and isolates the FAILED
+# ones (status='failed') with their source + error_message — the detail the
+# health dot's `no_hard_failures` check counts but doesn't list. Pure GET
+# against /admin/ingest/runs; no writes, no Apify cost. Manual only.
+#
+# Use when the health dot reads red on `no_hard_failures` and you need to know
+# WHICH runs failed and WHY (transient 5xx/timeout vs a real persistent break).
+#
+# Required secrets: API_URL, API_AUTH_TOKEN (same as ingest-daily.yml).
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'How many recent runs to scan (1-200)'
+        required: false
+        default: '200'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: List recent failed ingest runs
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+      LIMIT: ${{ github.event.inputs.limit }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Fetch + isolate failed runs
+        run: |
+          LIM="${LIMIT:-200}"
+          echo "── GET /admin/ingest/runs?limit=${LIM} ───────────────────"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/ingest/runs?limit=${LIM}" || echo -e "\n000")
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "── HTTP ${CODE} ──────────────────────────────────────────"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::/admin/ingest/runs returned HTTP ${CODE}"
+            echo "$BODY"
+            exit 1
+          fi
+          echo "$BODY" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+items = d.get("items", [])
+failed = [r for r in items if r.get("status") == "failed"]
+nf = [r for r in items if r.get("status") == "handle_not_found"]
+print(f"scanned={len(items)}  failed={len(failed)}  handle_not_found={len(nf)}")
+print()
+print("=== FAILED runs (status=failed) ===")
+for r in failed:
+    print(f"- {r.get(\"started_at\")}  source={r.get(\"source\")}  "
+          f"fetched={r.get(\"postings_fetched\")}  err={(r.get(\"error_message\") or \"\")[:200]!r}")
+if not failed:
+    print("(none)")
+print()
+print("=== handle_not_found (stale handles, informational) ===")
+for r in nf:
+    print(f"- {r.get(\"started_at\")}  source={r.get(\"source\")}  "
+          f"err={(r.get(\"error_message\") or \"\")[:120]!r}")
+if not nf:
+    print("(none)")
+'
