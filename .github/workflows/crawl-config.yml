@@ -1,0 +1,73 @@
+name: Set company crawl-config
+
+# Ops tool: patch crawl-controlling fields (tier, source, ats, ats_handle) on
+# existing target_company rows via POST /admin/companies/crawl-config. The body
+# is a JSON array matched by name; a field is patched only when its key is
+# present (JSON null => set NULL). Used for tier backfill, re-routing, and the
+# dedup canonical-adopt / dupe-deactivate steps.
+#
+# Safe by default: apply=false is a DRY RUN — it validates the JSON and echoes
+# what WOULD be sent, but does not POST. Set apply=true to write.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch:
+    inputs:
+      body:
+        description: 'JSON array, e.g. [{"name":"Relay","tier":2}]'
+        required: true
+      apply:
+        description: 'false = dry-run (validate + echo only); true = POST the write'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: read
+
+jobs:
+  crawl-config:
+    name: crawl-config (apply=${{ github.event.inputs.apply }})
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+      BODY: ${{ github.event.inputs.body }}
+      APPLY: ${{ github.event.inputs.apply }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Validate JSON body
+        run: |
+          if ! echo "$BODY" | jq -e 'type == "array" and length > 0' >/dev/null; then
+            echo "::error::body must be a non-empty JSON array"
+            echo "$BODY"
+            exit 1
+          fi
+          echo "Parsed body:"
+          echo "$BODY" | jq .
+
+      - name: Dry-run notice
+        if: ${{ github.event.inputs.apply != 'true' }}
+        run: |
+          echo "DRY RUN — would POST the above body to /admin/companies/crawl-config."
+          echo "Re-run with apply=true to write."
+
+      - name: POST crawl-config (write)
+        if: ${{ github.event.inputs.apply == 'true' }}
+        run: |
+          echo "POST /admin/companies/crawl-config"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$BODY" \
+            "${API_URL}/admin/companies/crawl-config" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          OUT=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          echo "$OUT" | jq .
+          if [ "$CODE" != "200" ]; then
+            echo "::error::crawl-config returned HTTP ${CODE}"
+            exit 1
+          fi
