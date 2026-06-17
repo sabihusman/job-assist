@@ -1,0 +1,48 @@
+name: Read back resume text
+
+# Read-only: GET /admin/resumes/{id}/text — prints the stored resume_text +
+# metadata for one application_resume row, so extraction quality can be verified
+# against real output. Never returns the file blob. Manual only.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch:
+    inputs:
+      id:
+        description: 'application_resume id (UUID)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  readback:
+    name: Read resume text
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+      RID: ${{ github.event.inputs.id }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Fetch resume text
+        run: |
+          echo "-- GET /admin/resumes/${RID}/text --"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/resumes/${RID}/text" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::readback returned HTTP ${CODE}"
+            echo "$BODY"
+            exit 1
+          fi
+          echo "$BODY" | jq '{id, file_name, content_type, has_file_blob, char_count}'
+          echo
+          echo "=== resume_text ==="
+          echo "$BODY" | jq -r '.resume_text'

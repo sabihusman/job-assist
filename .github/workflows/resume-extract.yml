@@ -1,0 +1,60 @@
+name: Extract resume text
+
+# Backfill resume_text from .docx file_blobs via POST /admin/resumes/extract-text.
+# DRY-RUN BY DEFAULT (dry_run=true) — prints per-row char counts + previews and
+# writes NOTHING. Set dry_run=false to persist (writes resume_text only). Manual
+# only; not wired to any cron.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'true = preview only (default); false = WRITE resume_text'
+        required: false
+        default: 'true'
+      limit:
+        description: 'Optional cap on rows processed (blank = all)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    name: Extract resume text (dry_run=${{ github.event.inputs.dry_run }})
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+      DRY_RUN: ${{ github.event.inputs.dry_run }}
+      LIMIT: ${{ github.event.inputs.limit }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Run extract-text
+        run: |
+          URL="${API_URL}/admin/resumes/extract-text?dry_run=${DRY_RUN:-true}"
+          if [ -n "${LIMIT}" ]; then URL="${URL}&limit=${LIMIT}"; fi
+          echo "-- POST ${URL} --"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 120 -X POST \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${URL}" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::extract-text returned HTTP ${CODE}"
+            echo "$BODY"
+            exit 1
+          fi
+          echo "$BODY" | jq '{dry_run, message, scanned, extracted, written, skipped_non_docx, failed}'
+          echo
+          echo "=== per-row (id · file · chars) ==="
+          echo "$BODY" | jq -r '.per_row[] | "- \(.id)  \(.file_name)  chars=\(.chars_extracted)"'
+          echo
+          echo "=== previews (first ~500 chars each) ==="
+          echo "$BODY" | jq -r '.per_row[] | "──────── \(.file_name) (\(.chars_extracted) chars) ────────\n\(.preview)\n"'
