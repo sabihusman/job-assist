@@ -3297,6 +3297,30 @@
         }
       }
     },
+    "/admin/diagnostics/resume-storage": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Resume Storage Diagnostic",
+        "description": "Read-only: where uploaded resumes actually live.\n\nResumes attach via ``POST /postings/{id}/resume`` \u2192 ``application_resume``\n(keyed on job_posting_id, holds the file blob), INDEPENDENT of\n``application_state`` (written only by ``PUT /postings/{id}/status`` + the\nGmail backfill) and of the apply action (``posting_action``, action_type=\n'applied'). ``resume_version`` is the LEGACY label-only pool referenced by\n``posting_action.resume_version_id``. Fixed diagnostic SELECTs; no writes.\n\n  * ``counts`` \u2014 row counts of all four tables (+ applied posting_actions).\n  * ``resume_version_rows`` \u2014 the legacy pool, with whether each is\n    referenced by an applied posting_action (capped at 100).\n  * ``application_resume_rows`` \u2014 the real uploaded resumes, with whether\n    each posting has an 'applied' posting_action (capped at 100).",
+        "operationId": "resume_storage_diagnostic_admin_diagnostics_resume_storage_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Resume Storage Diagnostic Admin Diagnostics Resume Storage Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/enrichment/companies/sweep": {
       "post": {
         "tags": [

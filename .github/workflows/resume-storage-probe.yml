@@ -1,0 +1,51 @@
+name: Resume storage probe
+
+# Read-only: GETs /admin/diagnostics/resume-storage and prints where uploaded
+# resumes live — row counts of resume_version / application_resume /
+# application_state / applied posting_actions, plus the legacy resume_version
+# rows and the real application_resume rows. Pure GET; no writes. Manual only.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Resume storage breakdown
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Fetch + print resume storage
+        run: |
+          echo "-- GET /admin/diagnostics/resume-storage --"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/diagnostics/resume-storage" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::diagnostic returned HTTP ${CODE}"
+            echo "$BODY"
+            exit 1
+          fi
+          echo
+          echo "=== 1. Counts ==="
+          echo "$BODY" | jq '.counts'
+          echo
+          echo "=== 2. resume_version rows (legacy label pool) ==="
+          echo "$BODY" | jq -r '.resume_version_rows[] | "- \(.created_at[0:10])  label=\(.label)  angle=\(.angle)  referenced_by_apply=\(.referenced_by_apply)"'
+          echo "(count: $(echo "$BODY" | jq '.resume_version_rows | length'))"
+          echo
+          echo "=== 3. application_resume rows (real uploaded resumes) ==="
+          echo "$BODY" | jq -r '.application_resume_rows[] | "- \(.created_at[0:10])  file=\(.file_name)  type=\(.content_type)  blob=\(.has_file_blob)  posting=\(.job_posting_id)  applied=\(.has_applied_action)"'
+          echo "(count: $(echo "$BODY" | jq '.application_resume_rows | length'))"
