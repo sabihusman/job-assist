@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from job_assist.db.enums import ActionReason, ActionType
-from job_assist.db.models import JobPosting, PostingAction
+from job_assist.db.models import ApplicationResume, JobPosting, PostingAction
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +145,26 @@ async def record_action(
 
 
 # ── Read path ────────────────────────────────────────────────────────────────
+
+
+async def application_resume_exists(
+    session: AsyncSession,
+    job_posting_id: uuid.UUID,
+) -> bool:
+    """Return True if an ``application_resume`` row exists for this posting.
+
+    feat/triple-aware-apply (1b): the corpus link between an APPLY action and
+    its resume is the shared ``job_posting_id`` (``application_resume`` is
+    UNIQUE per posting), NOT the legacy ``resume_version_id`` FK. The apply
+    endpoint calls this to surface a warn-but-allow ``resume_attached`` flag —
+    it never blocks the apply and never writes. Tiny EXISTS scalar.
+    """
+    exists = (
+        await session.execute(
+            select(literal(1)).where(ApplicationResume.job_posting_id == job_posting_id).limit(1),
+        )
+    ).scalar_one_or_none()
+    return exists is not None
 
 
 def _row_to_state(row: PostingAction) -> CurrentState:

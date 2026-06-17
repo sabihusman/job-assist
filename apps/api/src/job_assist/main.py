@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.base import RequestResponseEndpoint
 
 from job_assist.config import settings
+from job_assist.db.enums import ActionType
 from job_assist.db.session import get_db
 from job_assist.schemas.contact import ContactCreate, ContactUpdate
 from job_assist.schemas.embeddings import (
@@ -3541,7 +3542,7 @@ async def post_posting_state(
     the rest of the public surface — single-user dev mode, TODO to lock
     down before any wider deployment.
     """
-    from job_assist.services.posting_actions import record_action
+    from job_assist.services.posting_actions import application_resume_exists, record_action
 
     try:
         row = await record_action(
@@ -3558,7 +3559,19 @@ async def post_posting_state(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    return _state_block(row.action_type, row.reason, row.snooze_until, row.created_at)
+    # feat/triple-aware-apply (1b): warn-but-allow resume signal. ONLY on an
+    # applied action do we report whether this posting has an application_resume
+    # (the corpus link is the shared job_posting_id, not resume_version_id). The
+    # apply already succeeded above — this is a read-only flag the UI warns on;
+    # it never blocks the apply and never writes. null for non-applied actions
+    # so the key is always present (matches the _state_block convention).
+    resume_attached: bool | None = None
+    if payload.action_type == ActionType.applied:
+        resume_attached = await application_resume_exists(db, posting_id)
+
+    block = _state_block(row.action_type, row.reason, row.snooze_until, row.created_at)
+    block["resume_attached"] = resume_attached
+    return block
 
 
 # ── Bulk triage actions (feat/bulk-triage-actions) ───────────────────────────
@@ -4967,6 +4980,119 @@ async def outcome_linking_diagnostic(db: DbSession) -> dict[str, Any]:
         "q2_by_outcome_type": [_ser(r) for r in q2],
         "q3_complete_triples": int(q3),
         "q4_resume_coverage": _ser(q4),
+    }
+
+
+@app.get("/admin/diagnostics/triples", tags=["admin"])
+async def application_triples(db: DbSession) -> dict[str, Any]:
+    """Read-only corpus-completeness surface: one row per APPLIED posting.
+
+    feat/triple-aware-apply (1b). Assembles the (posting, resume, outcome)
+    triple per applied posting so the operator can watch how much complete
+    training signal exists AND see the standing "applied but no resume" gap
+    list (filter ``resume_attached = false``). Pure SELECT; no writes.
+
+    Membership is ``resolved_status = 'applied'`` — identical to
+    ``resolved_status_expr`` / the Applied tab: ``COALESCE(manual
+    application_state.status, CASE WHEN the latest posting_action = 'applied'
+    THEN 'applied' END)``. This is OPTION (a): latest-action, so an
+    applied-THEN-reset posting (latest action 'reset', no manual status)
+    resolves to NULL and is correctly EXCLUDED. We deliberately do NOT use a
+    raw ``EXISTS posting_action='applied'`` (that would keep reset postings).
+    Note: a posting the operator advanced to interview/offer/accepted has a
+    manual status other than 'applied' and is therefore not in this literal
+    'applied' set — by design, matching the explicit 1b decision.
+
+    The outcome column is a read-only LEFT JOIN LATERAL (latest
+    ``outcome_event`` linked by ``job_posting_id``); it is informational and
+    NEVER drives membership — preserving the no-fanout firewall. Single SELECT
+    (within the 2-query read budget), reusing the lateral pattern already in
+    ``latest_action_lateral``.
+    """
+    from sqlalchemy import text
+
+    rows = (
+        (
+            await db.execute(
+                text(
+                    "SELECT "
+                    "  jp.id AS posting_id, "
+                    "  COALESCE(tc.name, jp.canonical_company_name) AS company, "
+                    "  jp.normalized_title AS title, "
+                    "  jp.fit_score AS fit_score, "
+                    "  ar.id AS resume_id, "
+                    "  ar.file_name AS file_name, "
+                    "  (ar.resume_text IS NOT NULL AND ar.resume_text <> '') AS has_resume_text, "
+                    "  (ar.id IS NOT NULL) AS resume_attached, "
+                    "  oe.outcome_type AS outcome_type, "
+                    "  oe.received_at AS received_at "
+                    "FROM job_posting jp "
+                    "LEFT JOIN target_company tc ON tc.id = jp.target_company_id "
+                    "LEFT JOIN application_resume ar ON ar.job_posting_id = jp.id "
+                    "LEFT JOIN LATERAL ("
+                    "  SELECT outcome_type, received_at FROM outcome_event "
+                    "  WHERE job_posting_id = jp.id ORDER BY received_at DESC LIMIT 1"
+                    ") oe ON true "
+                    "WHERE COALESCE("
+                    "  (SELECT status FROM application_state "
+                    "   WHERE job_posting_id = jp.id LIMIT 1), "
+                    "  CASE WHEN (SELECT action_type FROM posting_action "
+                    "             WHERE job_posting_id = jp.id "
+                    "             ORDER BY created_at DESC LIMIT 1) = 'applied' "
+                    "       THEN 'applied' END"
+                    ") = 'applied' "
+                    "ORDER BY oe.received_at DESC NULLS LAST, jp.fit_score DESC NULLS LAST"
+                )
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+    triples = [
+        {
+            "posting": {
+                "id": str(r["posting_id"]),
+                "company": r["company"],
+                "title": r["title"],
+                "fit_score": r["fit_score"],
+            },
+            "resume": (
+                {
+                    "id": str(r["resume_id"]),
+                    "file_name": r["file_name"],
+                    "has_resume_text": bool(r["has_resume_text"]),
+                }
+                if r["resume_id"] is not None
+                else None
+            ),
+            "outcome": (
+                {
+                    "outcome_type": r["outcome_type"],
+                    "received_at": r["received_at"].isoformat() if r["received_at"] else None,
+                }
+                if r["outcome_type"] is not None
+                else None
+            ),
+            "resume_attached": bool(r["resume_attached"]),
+        }
+        for r in rows
+    ]
+
+    total = len(triples)
+    with_resume = sum(1 for t in triples if t["resume_attached"])
+    with_outcome = sum(1 for t in triples if t["outcome"] is not None)
+    complete = sum(1 for t in triples if t["resume_attached"] and t["outcome"] is not None)
+
+    return {
+        "summary": {
+            "applied_postings": total,
+            "with_resume": with_resume,
+            "applied_no_resume": total - with_resume,
+            "with_outcome": with_outcome,
+            "complete_triples": complete,
+        },
+        "triples": triples,
     }
 
 

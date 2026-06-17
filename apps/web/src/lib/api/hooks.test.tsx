@@ -18,6 +18,14 @@ vi.mock('@/lib/api/client', () => ({
   },
 }));
 
+// feat/triple-aware-apply (1b): the hook fires a sonner warning toast when an
+// applied action returns resume_attached=false. Mock sonner so the contract
+// tests can assert exactly when toast.warning is (and isn't) called.
+const { warnMock } = vi.hoisted(() => ({ warnMock: vi.fn() }));
+vi.mock('sonner', () => ({
+  toast: { warning: warnMock, success: vi.fn(), error: vi.fn() },
+}));
+
 function seedListCache(client: QueryClient, items: PostingsListResponse['items']) {
   const key = queryKeys.postings({ limit: 20, offset: 0 });
   client.setQueryData<PostingsListResponse>(key, {
@@ -58,6 +66,7 @@ const fakePosting = (id: string) =>
 
 beforeEach(() => {
   postMock.mockReset();
+  warnMock.mockReset();
 });
 
 afterEach(() => {
@@ -283,6 +292,79 @@ describe('useRecordAction', () => {
 
     const [, opts] = postMock.mock.calls[0] as [string, { body: Record<string, unknown> }];
     expect(opts.body).toHaveProperty('resume_version_id', 'rv-123');
+  });
+
+  // ── feat/triple-aware-apply (1b): resume_attached response contract ────────
+  //
+  // Sibling to the wire-shape lock above, but for the RESPONSE: the hook must
+  // read ``resume_attached`` from the body and surface a non-blocking warning
+  // toast ONLY when an applied action returns ``false``. No request-body field
+  // is added (the request contract above is unchanged). These pin the
+  // read-side contract so a refactor can't silently drop the gap warning.
+
+  const applyResponse = (resume_attached: boolean | null) => ({
+    data: {
+      current: 'applied',
+      reason: null,
+      snooze_until: null,
+      current_at: new Date().toISOString(),
+      resume_attached,
+    },
+    error: null,
+    response: new Response(null, { status: 200 }),
+  });
+
+  test('applied with resume_attached=false fires the gap warning toast', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    seedListCache(client, [fakePosting('a')]);
+    postMock.mockResolvedValue(applyResponse(false));
+
+    const { result } = renderHook(() => useRecordAction(), { wrapper: wrap(client) });
+    act(() => {
+      result.current.mutate({ postingId: 'a', action_type: 'applied' });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(warnMock).toHaveBeenCalledTimes(1);
+    expect(warnMock).toHaveBeenCalledWith('Applied — no resume attached');
+  });
+
+  test('applied with resume_attached=true does NOT warn', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    seedListCache(client, [fakePosting('a')]);
+    postMock.mockResolvedValue(applyResponse(true));
+
+    const { result } = renderHook(() => useRecordAction(), { wrapper: wrap(client) });
+    act(() => {
+      result.current.mutate({ postingId: 'a', action_type: 'applied' });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(warnMock).not.toHaveBeenCalled();
+  });
+
+  test('non-applied action (resume_attached null) does NOT warn', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    seedListCache(client, [fakePosting('a')]);
+    postMock.mockResolvedValue({
+      data: {
+        current: 'interested',
+        reason: null,
+        snooze_until: null,
+        current_at: new Date().toISOString(),
+        resume_attached: null,
+      },
+      error: null,
+      response: new Response(null, { status: 200 }),
+    });
+
+    const { result } = renderHook(() => useRecordAction(), { wrapper: wrap(client) });
+    act(() => {
+      result.current.mutate({ postingId: 'a', action_type: 'interested' });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(warnMock).not.toHaveBeenCalled();
   });
 
   // ── PR #68 / Bestiary 5.12 cache-collision regression ─────────────────────

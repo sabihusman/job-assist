@@ -3273,6 +3273,30 @@
         }
       }
     },
+    "/admin/diagnostics/triples": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Application Triples",
+        "description": "Read-only corpus-completeness surface: one row per APPLIED posting.\n\nfeat/triple-aware-apply (1b). Assembles the (posting, resume, outcome)\ntriple per applied posting so the operator can watch how much complete\ntraining signal exists AND see the standing \"applied but no resume\" gap\nlist (filter ``resume_attached = false``). Pure SELECT; no writes.\n\nMembership is ``resolved_status = 'applied'`` \u2014 identical to\n``resolved_status_expr`` / the Applied tab: ``COALESCE(manual\napplication_state.status, CASE WHEN the latest posting_action = 'applied'\nTHEN 'applied' END)``. This is OPTION (a): latest-action, so an\napplied-THEN-reset posting (latest action 'reset', no manual status)\nresolves to NULL and is correctly EXCLUDED. We deliberately do NOT use a\nraw ``EXISTS posting_action='applied'`` (that would keep reset postings).\nNote: a posting the operator advanced to interview/offer/accepted has a\nmanual status other than 'applied' and is therefore not in this literal\n'applied' set \u2014 by design, matching the explicit 1b decision.\n\nThe outcome column is a read-only LEFT JOIN LATERAL (latest\n``outcome_event`` linked by ``job_posting_id``); it is informational and\nNEVER drives membership \u2014 preserving the no-fanout firewall. Single SELECT\n(within the 2-query read budget), reusing the lateral pattern already in\n``latest_action_lateral``.",
+        "operationId": "application_triples_admin_diagnostics_triples_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Application Triples Admin Diagnostics Triples Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/diagnostics/no-candidate-breakdown": {
       "get": {
         "tags": [
