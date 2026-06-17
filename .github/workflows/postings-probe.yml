@@ -23,6 +23,14 @@ on:
         description: 'Highlight rows at this seniority (e.g. apm = associate)'
         required: false
         default: 'apm'
+      include_filtered:
+        description: 'Also include postings dropped by a hard rule (true/false)'
+        required: false
+        default: 'false'
+      include_closed:
+        description: 'Also include closed postings (ATS stopped surfacing, true/false)'
+        required: false
+        default: 'false'
 
 permissions:
   contents: read
@@ -37,6 +45,8 @@ jobs:
       ROLE_FAMILY: ${{ github.event.inputs.role_family }}
       STATE: ${{ github.event.inputs.state }}
       SENIORITY: ${{ github.event.inputs.seniority }}
+      INCLUDE_FILTERED: ${{ github.event.inputs.include_filtered }}
+      INCLUDE_CLOSED: ${{ github.event.inputs.include_closed }}
     steps:
       - name: Verify API is up
         run: curl -fsS --max-time 10 "$API_URL/health"
@@ -46,6 +56,8 @@ jobs:
           QS="per_company_cap=0&limit=100&state=${STATE}"
           IFS=',' read -ra FAMS <<< "$ROLE_FAMILY"
           for f in "${FAMS[@]}"; do QS="${QS}&role_family=${f}"; done
+          [ "${INCLUDE_FILTERED}" = "true" ] && QS="${QS}&include_filtered=true"
+          [ "${INCLUDE_CLOSED}" = "true" ] && QS="${QS}&include_closed=true"
           echo "-- GET /postings?${QS} --"
           RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
             -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
