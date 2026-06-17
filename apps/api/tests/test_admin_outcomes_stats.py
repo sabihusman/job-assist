@@ -211,3 +211,47 @@ async def test_company_filtered_stats_unknown_company_returns_zero(
     data = resp.json()
     assert data["total_rows"] == 0
     assert data["by_outcome_type"] == []
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_no_candidate_breakdown_runs_and_classifies_zero_posting_company(
+    db_session: Any,
+) -> None:
+    """The no_candidate breakdown executes all three queries and correctly counts
+    a company-resolved, unlinked, linkable outcome whose company has no postings
+    into the zero-postings bucket."""
+    from job_assist.main import app
+
+    # Company with NO job_posting rows + one unlinked, company-resolved, linkable
+    # outcome — exactly the "company we never crawled" shape the query isolates.
+    tc = _company("NoPostingsCo")
+    db_session.add(tc)
+    await db_session.flush()
+    db_session.add(_outcome(outcome_type="rejection_post_screen", target_company_id=tc.id))
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/admin/diagnostics/no-candidate-breakdown")
+
+    assert resp.status_code == 200, resp.text
+    d = resp.json()
+
+    q1 = d["q1_company_posting_coverage"]
+    assert q1["scanned"] >= 1
+    assert q1["company_zero_postings"] >= 1  # NoPostingsCo's outcome lands here
+
+    # q2 runs (companies-with-postings set) and exposes its buckets; this company
+    # contributes nothing to it (no postings) but the shape must be present.
+    q2 = d["q2_recency_for_companies_with_postings"]
+    assert set(q2.keys()) == {
+        "with_postings",
+        "has_open_posting",
+        "closed_le_90d",
+        "closed_90_180d",
+        "closed_gt_180d",
+    }
+
+    # q3 source breakdown ran and is a list of {source, companies, outcomes}.
+    assert isinstance(d["q3_by_company_source"], list)
+    assert all({"source", "companies", "outcomes"} <= set(r) for r in d["q3_by_company_source"])
