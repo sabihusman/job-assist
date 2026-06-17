@@ -1,6 +1,7 @@
 'use client';
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 
 import { api } from '@/lib/api/client';
 import { MutationError, extractDetail } from '@/lib/api/mutation-error';
@@ -190,6 +191,19 @@ export type RecordActionVars = {
 };
 
 /**
+ * Result of ``POST /postings/{id}/state``.
+ *
+ * feat/triple-aware-apply (1b): the server folds ``resume_attached`` into the
+ * state block — ``true``/``false`` on an APPLIED action (whether an
+ * application_resume exists for the posting), ``null`` for every other action.
+ * The endpoint returns ``dict[str, Any]`` (widened to ``Record<string,
+ * never>`` by openapi-typescript), so we read the field through this narrow
+ * type rather than the generated one. The rest of the StateEmbedded fields are
+ * not consumed here, so only ``resume_attached`` is modelled.
+ */
+export type RecordActionResult = { resume_attached?: boolean | null };
+
+/**
  * Wire-body serializer for ``POST /postings/{id}/state``.
  *
  * **PR #58 root cause**: a production probe confirmed the deployed
@@ -278,7 +292,17 @@ export function useRecordAction() {
           message: extractDetail(error) ?? `Action failed (${response?.status ?? 'no status'})`,
         });
       }
-      return data;
+      return data as RecordActionResult;
+    },
+    onSuccess: (data, vars) => {
+      // feat/triple-aware-apply (1b): warn-but-allow. The apply already
+      // succeeded server-side; if the operator applied with no resume attached
+      // (resume_attached === false), surface a non-blocking warning so the
+      // corpus gap is visible. Only fires on an applied action with an explicit
+      // false — never on true, null (non-applied), or undefined (older server).
+      if (vars.action_type === 'applied' && data?.resume_attached === false) {
+        toast.warning('Applied — no resume attached');
+      }
     },
     onMutate: async (vars) => {
       // Pause any in-flight list refetches so they don't clobber our

@@ -1,0 +1,49 @@
+name: Application triples probe
+
+# Read-only: GETs /admin/diagnostics/triples and prints the per-applied-posting
+# (posting + resume + outcome) corpus-completeness view. Doubles as the standing
+# "applied but no resume" gap list. Membership is resolved_status = 'applied'
+# (latest-action; applied-then-reset is excluded). Pure GET; no writes. Manual only.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Application triples
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Fetch + print triples
+        run: |
+          echo "-- GET /admin/diagnostics/triples --"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/diagnostics/triples" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::diagnostic returned HTTP ${CODE}"
+            echo "$BODY"
+            exit 1
+          fi
+          echo
+          echo "=== summary ==="
+          echo "$BODY" | jq '.summary'
+          echo
+          echo "=== triples (posting · resume · outcome) ==="
+          echo "$BODY" | jq -r '.triples[] | "- \(.posting.company) — \(.posting.title) [fit=\(.posting.fit_score)]  resume=\(if .resume then .resume.file_name + " (text=" + (.resume.has_resume_text|tostring) + ")" else "NONE" end)  outcome=\(if .outcome then .outcome.outcome_type + "@" + .outcome.received_at else "none" end)"'
+          echo
+          echo "=== applied but NO resume (the gap list) ==="
+          echo "$BODY" | jq -r '.triples[] | select(.resume_attached == false) | "- \(.posting.company) — \(.posting.title)  (posting_id=\(.posting.id))"'

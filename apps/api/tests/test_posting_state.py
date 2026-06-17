@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from job_assist.db.models import JobPosting, PostingAction, TargetCompany
+from job_assist.db.models import ApplicationResume, JobPosting, PostingAction, TargetCompany
 
 _NEEDS_DB = pytest.mark.skipif(
     not os.getenv("TEST_DATABASE_URL"),
@@ -325,6 +325,75 @@ async def test_post_state_applied(db_session: Any) -> None:
         await _drop_override()
     assert resp.status_code == 200
     assert resp.json()["current"] == "applied"
+
+
+# ── feat/triple-aware-apply (1b): resume_attached signal ─────────────────────
+
+
+@_NEEDS_DB
+async def test_post_state_applied_resume_attached_false_without_resume(
+    db_session: Any,
+) -> None:
+    """Applying with NO application_resume succeeds (warn-but-allow) and the
+    response reports resume_attached=false — never a 4xx."""
+    posting_id = await _make_posting(db_session)
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp = await ac.post(
+                f"/postings/{posting_id}/state",
+                json={"action_type": "applied"},
+            )
+    finally:
+        await _drop_override()
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["current"] == "applied"
+    assert body["resume_attached"] is False
+
+
+@_NEEDS_DB
+async def test_post_state_applied_resume_attached_true_with_resume(
+    db_session: Any,
+) -> None:
+    """When an application_resume exists for the posting, an applied action
+    reports resume_attached=true (the corpus link is the shared job_posting_id)."""
+    posting_id = await _make_posting(db_session)
+    db_session.add(
+        ApplicationResume(job_posting_id=posting_id, file_name="r.docx", resume_text="hi")
+    )
+    await db_session.commit()
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp = await ac.post(
+                f"/postings/{posting_id}/state",
+                json={"action_type": "applied"},
+            )
+    finally:
+        await _drop_override()
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["resume_attached"] is True
+
+
+@_NEEDS_DB
+async def test_post_state_non_applied_resume_attached_null(db_session: Any) -> None:
+    """resume_attached is null for non-applied actions even when a resume
+    exists — the field is only meaningful for an applied action."""
+    posting_id = await _make_posting(db_session)
+    db_session.add(ApplicationResume(job_posting_id=posting_id, file_name="r.docx"))
+    await db_session.commit()
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp = await ac.post(
+                f"/postings/{posting_id}/state",
+                json={"action_type": "interested"},
+            )
+    finally:
+        await _drop_override()
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["resume_attached"] is None
 
 
 @_NEEDS_DB
