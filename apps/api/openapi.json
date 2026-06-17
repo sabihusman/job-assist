@@ -3379,6 +3379,16 @@
               ],
               "title": "Limit"
             }
+          },
+          {
+            "name": "preview_chars",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 500,
+              "title": "Preview Chars"
+            }
           }
         ],
         "responses": {

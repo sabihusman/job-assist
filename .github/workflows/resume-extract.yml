@@ -18,6 +18,10 @@ on:
         description: 'Optional cap on rows processed (blank = all)'
         required: false
         default: ''
+      preview_chars:
+        description: 'How many chars of extracted text to preview per row'
+        required: false
+        default: '2000'
 
 permissions:
   contents: read
@@ -31,13 +35,14 @@ jobs:
       API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
       DRY_RUN: ${{ github.event.inputs.dry_run }}
       LIMIT: ${{ github.event.inputs.limit }}
+      PREVIEW_CHARS: ${{ github.event.inputs.preview_chars }}
     steps:
       - name: Verify API is up
         run: curl -fsS --max-time 10 "$API_URL/health"
 
       - name: Run extract-text
         run: |
-          URL="${API_URL}/admin/resumes/extract-text?dry_run=${DRY_RUN:-true}"
+          URL="${API_URL}/admin/resumes/extract-text?dry_run=${DRY_RUN:-true}&preview_chars=${PREVIEW_CHARS:-500}"
           if [ -n "${LIMIT}" ]; then URL="${URL}&limit=${LIMIT}"; fi
           echo "-- POST ${URL} --"
           RESP=$(curl -s -w "\n%{http_code}" --max-time 120 -X POST \

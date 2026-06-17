@@ -5259,6 +5259,7 @@ async def extract_resume_text(
     db: DbSession,
     dry_run: bool = True,
     limit: int | None = None,
+    preview_chars: int = 500,
 ) -> dict[str, Any]:
     """Backfill ``resume_text`` from ``.docx`` ``file_blob``s (Phase 2). Read-mostly.
 
@@ -5314,7 +5315,7 @@ async def extract_resume_text(
                 "id": str(r.id),
                 "file_name": r.file_name,
                 "chars_extracted": len(text),
-                "preview": text[:500],
+                "preview": text[: max(0, preview_chars)],
             }
         )
         if not dry_run:
