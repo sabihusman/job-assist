@@ -1,0 +1,49 @@
+name: No-candidate breakdown probe
+
+# Read-only: GETs /admin/diagnostics/no-candidate-breakdown and prints the three
+# breakdowns (company posting coverage, close-recency vs the outcome, source
+# split) — to diagnose why the outcome→posting matcher's no_candidate bucket is
+# large. Pure GET; no writes. Manual only.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: No-candidate breakdown
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Fetch + print breakdown
+        run: |
+          echo "-- GET /admin/diagnostics/no-candidate-breakdown --"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/diagnostics/no-candidate-breakdown" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::diagnostic returned HTTP ${CODE}"
+            echo "$BODY"
+            exit 1
+          fi
+          echo
+          echo "=== 1. Company posting coverage (zero vs >=1) ==="
+          echo "$BODY" | jq '.q1_company_posting_coverage'
+          echo
+          echo "=== 2. Close-recency for companies WITH postings ==="
+          echo "$BODY" | jq '.q2_recency_for_companies_with_postings'
+          echo
+          echo "=== 3. By company source ==="
+          echo "$BODY" | jq -r '.q3_by_company_source[] | "\(.source): companies=\(.companies) outcomes=\(.outcomes)"'

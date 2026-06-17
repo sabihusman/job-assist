@@ -3273,6 +3273,30 @@
         }
       }
     },
+    "/admin/diagnostics/no-candidate-breakdown": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "No Candidate Breakdown",
+        "description": "Read-only: why the outcome\u2192posting matcher's ``no_candidate`` bucket is\nlarge. Over the same scanned set the matcher uses (``job_posting_id IS NULL``\nAND ``target_company_id IS NOT NULL`` AND a linkable ``outcome_type``), break\ndown by whether the resolved company has corpus postings, how recently those\npostings closed relative to the outcome, and the company's source.\n\n  * ``q1_company_posting_coverage`` \u2014 outcomes whose company has ZERO corpus\n    postings vs \u22651 (distinguishes \"never crawled\" from \"window too short\").\n  * ``q2_recency_for_companies_with_postings`` \u2014 for the \u22651 set: has an open\n    posting / most-recent close \u226490d / 90-180d / >180d before received_at\n    (the 90-180d bucket = what widening the window would recover).\n  * ``q3_by_company_source`` \u2014 source breakdown of the scanned companies\n    (applied vs curated/etc.).\n\nFixed diagnostic queries (the type list is bound from the matcher's\n``_LINKABLE_TYPES`` so it can't drift). Pure SELECT; no writes.",
+        "operationId": "no_candidate_breakdown_admin_diagnostics_no_candidate_breakdown_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response No Candidate Breakdown Admin Diagnostics No Candidate Breakdown Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/enrichment/companies/sweep": {
       "post": {
         "tags": [

@@ -4970,6 +4970,103 @@ async def outcome_linking_diagnostic(db: DbSession) -> dict[str, Any]:
     }
 
 
+@app.get("/admin/diagnostics/no-candidate-breakdown", tags=["admin"])
+async def no_candidate_breakdown(db: DbSession) -> dict[str, Any]:
+    """Read-only: why the outcome→posting matcher's ``no_candidate`` bucket is
+    large. Over the same scanned set the matcher uses (``job_posting_id IS NULL``
+    AND ``target_company_id IS NOT NULL`` AND a linkable ``outcome_type``), break
+    down by whether the resolved company has corpus postings, how recently those
+    postings closed relative to the outcome, and the company's source.
+
+      * ``q1_company_posting_coverage`` — outcomes whose company has ZERO corpus
+        postings vs ≥1 (distinguishes "never crawled" from "window too short").
+      * ``q2_recency_for_companies_with_postings`` — for the ≥1 set: has an open
+        posting / most-recent close ≤90d / 90-180d / >180d before received_at
+        (the 90-180d bucket = what widening the window would recover).
+      * ``q3_by_company_source`` — source breakdown of the scanned companies
+        (applied vs curated/etc.).
+
+    Fixed diagnostic queries (the type list is bound from the matcher's
+    ``_LINKABLE_TYPES`` so it can't drift). Pure SELECT; no writes.
+    """
+    from sqlalchemy import text
+
+    from job_assist.services.outcome_posting_match import _LINKABLE_TYPES
+
+    params = {"types": list(_LINKABLE_TYPES)}
+    scanned = (
+        "WITH scanned AS ("
+        " SELECT oe.id, oe.target_company_id, oe.received_at FROM outcome_event oe"
+        " WHERE oe.job_posting_id IS NULL AND oe.target_company_id IS NOT NULL"
+        " AND oe.outcome_type = ANY(:types)) "
+    )
+
+    q1 = (
+        (
+            await db.execute(
+                text(
+                    scanned + "SELECT COUNT(*) AS scanned,"
+                    " COUNT(*) FILTER (WHERE p.n IS NULL OR p.n = 0) AS company_zero_postings,"
+                    " COUNT(*) FILTER (WHERE p.n >= 1) AS company_has_postings"
+                    " FROM scanned s LEFT JOIN LATERAL (SELECT COUNT(*) n FROM job_posting jp"
+                    " WHERE jp.target_company_id = s.target_company_id) p ON TRUE"
+                ),
+                params,
+            )
+        )
+        .mappings()
+        .one()
+    )
+
+    q2 = (
+        (
+            await db.execute(
+                text(
+                    scanned + ", best AS (SELECT s.id, s.received_at,"
+                    " bool_or(jp.closed_at IS NULL) AS has_open, MAX(jp.closed_at) AS latest_close"
+                    " FROM scanned s JOIN job_posting jp ON jp.target_company_id = s.target_company_id"
+                    " GROUP BY s.id, s.received_at)"
+                    " SELECT COUNT(*) AS with_postings,"
+                    " COUNT(*) FILTER (WHERE has_open) AS has_open_posting,"
+                    " COUNT(*) FILTER (WHERE NOT has_open AND latest_close >="
+                    " received_at - INTERVAL '90 days') AS closed_le_90d,"
+                    " COUNT(*) FILTER (WHERE NOT has_open AND latest_close <"
+                    " received_at - INTERVAL '90 days' AND latest_close >="
+                    " received_at - INTERVAL '180 days') AS closed_90_180d,"
+                    " COUNT(*) FILTER (WHERE NOT has_open AND latest_close <"
+                    " received_at - INTERVAL '180 days') AS closed_gt_180d"
+                    " FROM best"
+                ),
+                params,
+            )
+        )
+        .mappings()
+        .one()
+    )
+
+    q3 = (
+        (
+            await db.execute(
+                text(
+                    scanned + "SELECT tc.source,"
+                    " COUNT(DISTINCT s.target_company_id) AS companies, COUNT(*) AS outcomes"
+                    " FROM scanned s JOIN target_company tc ON tc.id = s.target_company_id"
+                    " GROUP BY tc.source ORDER BY outcomes DESC"
+                ),
+                params,
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+    return {
+        "q1_company_posting_coverage": dict(q1),
+        "q2_recency_for_companies_with_postings": dict(q2),
+        "q3_by_company_source": [dict(r) for r in q3],
+    }
+
+
 # ── Company enrichment (PR #27) ───────────────────────────────────────────────
 
 
