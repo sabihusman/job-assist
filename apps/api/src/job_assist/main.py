@@ -5096,6 +5096,151 @@ async def application_triples(db: DbSession) -> dict[str, Any]:
     }
 
 
+@app.get("/admin/diagnostics/curated-zero-postings", tags=["admin"])
+async def curated_zero_postings(db: DbSession) -> dict[str, Any]:
+    """Read-only: why curated target_company rows have ZERO corpus postings.
+
+    SCHEMA NOTE (read before trusting the buckets): ``ingest_run`` is one row
+    per (ATS source, invocation) and stores NEITHER target_company_id NOR the
+    handle — so a run's status (handle_not_found / failed / success) CANNOT be
+    attributed to a specific company. The only reliable per-company crawl
+    footprint is ``target_company.last_swept_at``, stamped on BOTH success and
+    handle_not_found (the sweep "visited") but NEVER on a generic failure (see
+    ingestion.py). The per-company buckets below are derived from that proxy;
+    the recent-run status counts in ``source_level_context`` are SOURCE-level
+    only and are NOT company-attributable. Pure SELECT; no writes.
+
+      * ``q1_companies`` — every curated company with zero job_posting rows:
+        name, ats, ats_handle, tier, source, last_swept_at, and a derived
+        ``bucket`` (see below).
+      * ``q2_buckets`` — mutually exclusive, priority-ordered:
+          - ``excluded_from_plan``  : ats_handle IS NULL OR tier IS NULL — the
+            daily ingest plan gates on a non-null handle + tier, so these never
+            enter it (checked FIRST, regardless of last_swept_at).
+          - ``never_swept``         : in-plan but last_swept_at IS NULL — eligible
+            yet never successfully visited (never crawled, or only ever failed —
+            failure does not stamp last_swept_at).
+          - ``swept_zero_postings`` : last_swept_at IS NOT NULL but still zero
+            postings — visited but nothing persisted. Per-company we CANNOT
+            tell apart "no open roles right now" vs a stale-handle 404
+            (handle_not_found also stamps last_swept_at) vs the Bestiary 5.9
+            silent-404. See source_level_context for whether 404s are happening.
+      * ``q3_plan_exclusion_crosscheck`` — within the zero-posting curated set,
+        how many have ats_handle NULL, tier NULL, or either (the plan gate).
+      * ``source_level_context`` — recent (<=30d) ingest_run counts by
+        (source, status). SOURCE-level, NOT company-attributable; included only
+        so the operator can see whether handle_not_found/failed are occurring
+        at all when reading the swept_zero_postings bucket.
+    """
+    from sqlalchemy import text
+
+    def _ser_row(m: Any) -> dict[str, Any]:
+        d = dict(m)
+        lsa = d.get("last_swept_at")
+        d["last_swept_at"] = lsa.isoformat() if lsa else None
+        return d
+
+    # q1 + the per-row bucket, computed in SQL with the documented priority.
+    bucket_case = (
+        "CASE "
+        "  WHEN tc.ats_handle IS NULL OR tc.tier IS NULL THEN 'excluded_from_plan' "
+        "  WHEN tc.last_swept_at IS NULL THEN 'never_swept' "
+        "  ELSE 'swept_zero_postings' END"
+    )
+    q1 = (
+        (
+            await db.execute(
+                text(
+                    "SELECT tc.name, tc.ats, tc.ats_handle, tc.tier, tc.source, "
+                    "  tc.last_swept_at, "
+                    f"  {bucket_case} AS bucket "
+                    "FROM target_company tc "
+                    "WHERE tc.source = 'curated' "
+                    "  AND NOT EXISTS ("
+                    "    SELECT 1 FROM job_posting jp WHERE jp.target_company_id = tc.id) "
+                    "ORDER BY tc.tier NULLS LAST, tc.name"
+                )
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+    q2 = (
+        (
+            await db.execute(
+                text(
+                    "SELECT bucket, COUNT(*) AS companies FROM ("
+                    "  SELECT "
+                    f"    {bucket_case} AS bucket "
+                    "  FROM target_company tc "
+                    "  WHERE tc.source = 'curated' "
+                    "    AND NOT EXISTS ("
+                    "      SELECT 1 FROM job_posting jp WHERE jp.target_company_id = tc.id)"
+                    ") s GROUP BY bucket ORDER BY companies DESC"
+                )
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+    q3 = (
+        (
+            await db.execute(
+                text(
+                    "SELECT "
+                    "  COUNT(*) FILTER (WHERE tc.ats_handle IS NULL) AS handle_null, "
+                    "  COUNT(*) FILTER (WHERE tc.tier IS NULL) AS tier_null, "
+                    "  COUNT(*) FILTER (WHERE tc.ats_handle IS NULL OR tc.tier IS NULL) "
+                    "    AS either_null, "
+                    "  COUNT(*) AS total_zero_posting_curated "
+                    "FROM target_company tc "
+                    "WHERE tc.source = 'curated' "
+                    "  AND NOT EXISTS ("
+                    "    SELECT 1 FROM job_posting jp WHERE jp.target_company_id = tc.id)"
+                )
+            )
+        )
+        .mappings()
+        .one()
+    )
+
+    # SOURCE-level only — NOT company-attributable (ingest_run has no company key).
+    ctx = (
+        (
+            await db.execute(
+                text(
+                    "SELECT source, status, COUNT(*) AS runs, MAX(finished_at) AS latest "
+                    "FROM ingest_run "
+                    "WHERE started_at >= now() - interval '30 days' "
+                    "GROUP BY source, status ORDER BY source, status"
+                )
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+    def _ser_ctx(m: Any) -> dict[str, Any]:
+        d = dict(m)
+        latest = d.get("latest")
+        d["latest"] = latest.isoformat() if latest else None
+        return d
+
+    return {
+        "schema_note": (
+            "ingest_run has no target_company_id/handle; per-company buckets are "
+            "derived from target_company.last_swept_at. source_level_context is "
+            "SOURCE-level and NOT company-attributable."
+        ),
+        "q1_companies": [_ser_row(r) for r in q1],
+        "q2_buckets": [dict(r) for r in q2],
+        "q3_plan_exclusion_crosscheck": dict(q3),
+        "source_level_context": [_ser_ctx(r) for r in ctx],
+    }
+
+
 @app.get("/admin/diagnostics/no-candidate-breakdown", tags=["admin"])
 async def no_candidate_breakdown(db: DbSession) -> dict[str, Any]:
     """Read-only: why the outcome→posting matcher's ``no_candidate`` bucket is
