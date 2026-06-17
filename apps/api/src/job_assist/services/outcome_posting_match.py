@@ -35,9 +35,10 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+from datetime import timedelta
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from job_assist.db.models import JobPosting, OutcomeEvent
@@ -113,6 +114,13 @@ _STOPWORDS: frozenset[str] = frozenset(
 _MIN_SCORE = 0.6  # ≥60% of the title's significant tokens appear in the email
 _MIN_MATCHED_TOKENS = 2  # at least 2 significant role tokens overlap
 _MARGIN = 0.2  # best must beat runner-up by this when >1 candidate
+# Outcome emails (rejections, interview invites) routinely arrive WEEKS after the
+# application — by which point the posting is usually closed (filled or 7-day
+# stale-closed). Matching only OPEN postings therefore misses the bulk of real
+# outcomes. A posting is a valid candidate for an email if it was still open at,
+# or closed within this window before, the email's received_at — anchored
+# per-outcome so a newer email can't reach back to a long-closed role.
+OUTCOME_LINK_CLOSED_WINDOW_DAYS = 90
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
@@ -211,8 +219,21 @@ async def link_outcomes_to_postings(
     events = (await session.execute(query)).scalars().all()
     report.scanned = len(events)
 
+    # Outcome emails lag the application by weeks, so OPEN-only candidates miss
+    # the bulk of real outcomes (the role has usually closed by the time the
+    # rejection/interview email lands). A posting is a candidate for an email if
+    # it was open at, or closed within OUTCOME_LINK_CLOSED_WINDOW_DAYS before,
+    # that email's received_at — anchored PER-OUTCOME below.
+    #
+    # ``events`` is ordered received_at ASC, so events[0] is the oldest in the
+    # batch. Bound the per-company fetch to "open OR closed since the oldest
+    # outcome's window" so we never pull a company's entire all-time history;
+    # the exact per-outcome window is then applied in Python in the loop.
+    window = timedelta(days=OUTCOME_LINK_CLOSED_WINDOW_DAYS)
+    batch_floor = events[0].received_at - window if events else None
+
     # Cache candidate postings per company so N emails at one company hit the DB
-    # once. OPEN postings only (closed roles aren't a live application target).
+    # once. OPEN postings plus those closed within the batch window.
     candidates_by_company: dict[uuid.UUID, list[JobPosting]] = {}
 
     for event in events:
@@ -224,13 +245,27 @@ async def link_outcomes_to_postings(
                     await session.execute(
                         select(JobPosting)
                         .where(JobPosting.target_company_id == company_id)
-                        .where(JobPosting.closed_at.is_(None))
+                        .where(
+                            or_(
+                                JobPosting.closed_at.is_(None),
+                                JobPosting.closed_at >= batch_floor,
+                            )
+                        )
                     )
                 )
                 .scalars()
                 .all()
             )
-        candidates = candidates_by_company[company_id]
+        # Per-outcome window: keep candidates open at, or closed within the
+        # window before, THIS email's received_at — so a newer email can't reach
+        # back to a role that closed long before it arrived. Cheap in-Python
+        # filter over the already-cached set (no extra query).
+        event_floor = event.received_at - window
+        candidates = [
+            c
+            for c in candidates_by_company[company_id]
+            if c.closed_at is None or c.closed_at >= event_floor
+        ]
         if not candidates:
             report.no_candidate += 1
             continue
