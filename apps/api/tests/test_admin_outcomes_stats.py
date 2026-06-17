@@ -255,3 +255,26 @@ async def test_no_candidate_breakdown_runs_and_classifies_zero_posting_company(
     # q3 source breakdown ran and is a list of {source, companies, outcomes}.
     assert isinstance(d["q3_by_company_source"], list)
     assert all({"source", "companies", "outcomes"} <= set(r) for r in d["q3_by_company_source"])
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_resume_storage_diagnostic_runs_all_queries(db_session: Any) -> None:
+    """The resume-storage diagnostic executes its count query + both listings and
+    returns the right shape — proves the SQL (table/column names) is valid."""
+    from job_assist.main import app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/admin/diagnostics/resume-storage")
+
+    assert resp.status_code == 200, resp.text
+    d = resp.json()
+    assert set(d["counts"].keys()) == {
+        "resume_version",
+        "application_resume",
+        "application_state",
+        "posting_action_applied",
+    }
+    assert all(isinstance(v, int) for v in d["counts"].values())
+    assert isinstance(d["resume_version_rows"], list)
+    assert isinstance(d["application_resume_rows"], list)

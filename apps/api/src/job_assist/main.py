@@ -5067,6 +5067,93 @@ async def no_candidate_breakdown(db: DbSession) -> dict[str, Any]:
     }
 
 
+@app.get("/admin/diagnostics/resume-storage", tags=["admin"])
+async def resume_storage_diagnostic(db: DbSession) -> dict[str, Any]:
+    """Read-only: where uploaded resumes actually live.
+
+    Resumes attach via ``POST /postings/{id}/resume`` → ``application_resume``
+    (keyed on job_posting_id, holds the file blob), INDEPENDENT of
+    ``application_state`` (written only by ``PUT /postings/{id}/status`` + the
+    Gmail backfill) and of the apply action (``posting_action``, action_type=
+    'applied'). ``resume_version`` is the LEGACY label-only pool referenced by
+    ``posting_action.resume_version_id``. Fixed diagnostic SELECTs; no writes.
+
+      * ``counts`` — row counts of all four tables (+ applied posting_actions).
+      * ``resume_version_rows`` — the legacy pool, with whether each is
+        referenced by an applied posting_action (capped at 100).
+      * ``application_resume_rows`` — the real uploaded resumes, with whether
+        each posting has an 'applied' posting_action (capped at 100).
+    """
+    from datetime import datetime as _dt
+    from uuid import UUID as _UUID
+
+    from sqlalchemy import text
+
+    def _ser(m: Any) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for k, v in dict(m).items():
+            if isinstance(v, _UUID):
+                out[k] = str(v)
+            elif isinstance(v, _dt):
+                out[k] = v.isoformat()
+            else:
+                out[k] = v
+        return out
+
+    counts = (
+        (
+            await db.execute(
+                text(
+                    "SELECT (SELECT COUNT(*) FROM resume_version) AS resume_version,"
+                    " (SELECT COUNT(*) FROM application_resume) AS application_resume,"
+                    " (SELECT COUNT(*) FROM application_state) AS application_state,"
+                    " (SELECT COUNT(*) FROM posting_action WHERE action_type = 'applied')"
+                    " AS posting_action_applied"
+                )
+            )
+        )
+        .mappings()
+        .one()
+    )
+
+    rv_rows = (
+        (
+            await db.execute(
+                text(
+                    "SELECT rv.id, rv.label, rv.angle, rv.created_at,"
+                    " EXISTS (SELECT 1 FROM posting_action pa WHERE pa.resume_version_id = rv.id)"
+                    " AS referenced_by_apply"
+                    " FROM resume_version rv ORDER BY rv.created_at LIMIT 100"
+                )
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+    ar_rows = (
+        (
+            await db.execute(
+                text(
+                    "SELECT ar.id, ar.job_posting_id, ar.file_name, ar.content_type, ar.created_at,"
+                    " (ar.file_blob IS NOT NULL) AS has_file_blob,"
+                    " EXISTS (SELECT 1 FROM posting_action pa WHERE pa.job_posting_id = ar.job_posting_id"
+                    " AND pa.action_type = 'applied') AS has_applied_action"
+                    " FROM application_resume ar ORDER BY ar.created_at LIMIT 100"
+                )
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+    return {
+        "counts": dict(counts),
+        "resume_version_rows": [_ser(r) for r in rv_rows],
+        "application_resume_rows": [_ser(r) for r in ar_rows],
+    }
+
+
 # ── Company enrichment (PR #27) ───────────────────────────────────────────────
 
 
