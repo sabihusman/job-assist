@@ -7,9 +7,8 @@ unlinked-WHERE-clause idempotency guarantee.
 
 from __future__ import annotations
 
+import asyncio
 import os
-import sys
-import types as _types
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -305,42 +304,28 @@ async def test_relink_use_classifier_requires_classifier_argument() -> None:
 # raising-stub relink test don't cover together.
 
 
-class _FakeResp:
-    def __init__(self, text: str) -> None:
-        self.text = text
-
-
 @contextmanager
-def _real_classifier_returning(raw_json: str) -> Iterator[Any]:
-    """Build a real EmailClassifier whose model replays ``raw_json`` verbatim.
+def _real_classify_returning(raw_json: str) -> Iterator[Any]:
+    """Yield a real EmailClassifier whose model output is ``raw_json``.
 
-    Mirrors the fake-SDK shim in tests/gmail/test_classifier.py so we drive the
-    genuine JSON-parsing path (not a stub) through relink.
+    We bypass ``__init__`` (which imports the google-genai SDK) and patch the
+    network call ``_call_model`` to replay ``raw_json`` verbatim, so the GENUINE
+    ``classify()`` JSON-parsing / non-object-handling path runs — no SDK, no
+    fragile sys.modules shim that the full-suite import order can defeat.
     """
+    from job_assist.gmail.classifier import EmailClassifier
 
-    class _Models:
-        def generate_content(self, *, model: str, contents: Any, config: Any) -> _FakeResp:
-            return _FakeResp(raw_json)
+    clf = object.__new__(EmailClassifier)
+    clf._model = "test-model"  # type: ignore[attr-defined]
+    clf._last_request_ts = 0.0  # type: ignore[attr-defined]
+    clf._lock = asyncio.Lock()  # type: ignore[attr-defined]
 
-    class _Client:
-        def __init__(self, api_key: str) -> None:
-            self.models = _Models()
+    async def _fake_call_model(prompt: str) -> str:
+        return raw_json
 
-    genai_mod = _types.ModuleType("genai")
-    types_mod = _types.ModuleType("types")
-    genai_mod.Client = _Client  # type: ignore[attr-defined]
-    types_mod.GenerateContentConfig = lambda **kw: object()  # type: ignore[attr-defined]
-    genai_mod.types = types_mod  # type: ignore[attr-defined]
-    sys.modules["google.genai"] = genai_mod
-    sys.modules["google.genai.types"] = types_mod
-    try:
-        with patch("job_assist.gmail.classifier._MIN_REQUEST_GAP_S", 0.0):
-            from job_assist.gmail.classifier import EmailClassifier
-
-            yield EmailClassifier(api_key="test-key")
-    finally:
-        sys.modules.pop("google.genai", None)
-        sys.modules.pop("google.genai.types", None)
+    clf._call_model = _fake_call_model  # type: ignore[attr-defined,method-assign]
+    with patch("job_assist.gmail.classifier._MIN_REQUEST_GAP_S", 0.0):
+        yield clf
 
 
 @_NEEDS_DB
@@ -353,8 +338,9 @@ def _real_classifier_returning(raw_json: str) -> Iterator[Any]:
     ],
 )
 async def test_relink_non_object_json_leaves_row_unlinked(db_session: Any, raw_json: str) -> None:
-    """Gemini returning non-object JSON must NOT crash relink: the row stays
-    unlinked, the run completes, and it counts as unmatched (not a
+    """Gemini returning non-object JSON must NOT crash relink: the real
+    classify() degrades it to unclassified/no-company, so the row stays
+    unlinked, the run completes, and it counts as unmatched (NOT a
     classifier_error — no exception was raised)."""
     tc = _company("MeridianLink", domain=None)  # domain path misses
     db_session.add(tc)
@@ -368,7 +354,7 @@ async def test_relink_non_object_json_leaves_row_unlinked(db_session: Any, raw_j
     )
     await db_session.commit()
 
-    with _real_classifier_returning(raw_json) as classifier:
+    with _real_classify_returning(raw_json) as classifier:
         # Must not raise.
         report = await relink_unmatched(db_session, classifier, use_classifier=True)
 
