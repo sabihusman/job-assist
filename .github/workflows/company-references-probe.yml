@@ -1,0 +1,54 @@
+name: Company references probe
+
+# Read-only: GETs /admin/diagnostics/company-references?names=... and prints each
+# target_company's full row (id, domain, ats, handle, tier, source) plus counts
+# of referencing rows (job_posting, outcome_event incl. by-type, contact,
+# closed_channel, division). For confirming a dedup/merge before any write —
+# matching domains => same company. Pure GET; no writes.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch:
+    inputs:
+      names:
+        description: 'Comma-separated exact company names'
+        required: true
+        default: 'Lpl,LPL Financial,Nymbusinc,Nymbus'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Company references
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+      NAMES: ${{ github.event.inputs.names }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Fetch + print
+        run: |
+          ENCODED=$(jq -rn --arg v "$NAMES" '$v|@uri')
+          echo "-- GET /admin/diagnostics/company-references?names=${NAMES} --"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/diagnostics/company-references?names=${ENCODED}" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::diagnostic returned HTTP ${CODE}"
+            echo "$BODY"
+            exit 1
+          fi
+          echo
+          echo "=== requested / not_found ==="
+          echo "$BODY" | jq '{requested, not_found}'
+          echo
+          echo "=== companies ==="
+          echo "$BODY" | jq -r '.companies[] | "- \(.name)  id=\(.id)\n    domain=\(.domain // "NULL")  ats=\(.ats)/\(.ats_handle // "NULL")  tier=\(.tier // "NULL")  source=\(.source)\n    refs: job_posting=\(.job_posting) outcome_event=\(.outcome_event) contact=\(.contact) closed_channel=\(.closed_channel) division=\(.division)\n    outcomes_by_type=\(.outcome_event_by_type)"'

@@ -5249,6 +5249,92 @@ async def curated_zero_postings(db: DbSession) -> dict[str, Any]:
     }
 
 
+@app.get("/admin/diagnostics/company-references", tags=["admin"])
+async def company_references(db: DbSession, names: str) -> dict[str, Any]:
+    """Read-only: for each target_company in ``names`` (comma-separated, matched
+    EXACTLY on name), return its full row + counts of every row that references
+    it, so a dedup/merge can be planned WITHOUT orphaning anything. Pure SELECT;
+    no writes.
+
+    Reports per company: id, name, domain, ats, ats_handle, tier, source,
+    last_swept_at, and reference counts across the five FKs to target_company —
+    ``job_posting`` (SET NULL), ``outcome_event`` (SET NULL, also broken out by
+    outcome_type), ``contact`` (SET NULL), ``closed_channel`` (SET NULL), and
+    ``division`` (CASCADE — the one that would hard-delete on a company DELETE,
+    which is why the dedup retires via deactivate, not delete). Use this to
+    confirm two rows are the same company (matching ``domain``) before merging.
+    """
+    from sqlalchemy import bindparam, text
+
+    wanted = [n.strip() for n in names.split(",") if n.strip()]
+    if not wanted:
+        raise HTTPException(status_code=422, detail="names must be a non-empty CSV list")
+
+    rows = (
+        (
+            await db.execute(
+                text(
+                    "SELECT tc.id, tc.name, tc.domain, tc.ats, tc.ats_handle, tc.tier, "
+                    "  tc.source, tc.last_swept_at, "
+                    "  (SELECT COUNT(*) FROM job_posting jp "
+                    "     WHERE jp.target_company_id = tc.id) AS job_posting, "
+                    "  (SELECT COUNT(*) FROM outcome_event oe "
+                    "     WHERE oe.target_company_id = tc.id) AS outcome_event, "
+                    "  (SELECT COUNT(*) FROM contact c "
+                    "     WHERE c.target_company_id = tc.id) AS contact, "
+                    "  (SELECT COUNT(*) FROM closed_channel cc "
+                    "     WHERE cc.target_company_id = tc.id) AS closed_channel, "
+                    "  (SELECT COUNT(*) FROM division d "
+                    "     WHERE d.target_company_id = tc.id) AS division "
+                    "FROM target_company tc "
+                    "WHERE tc.name IN :names "
+                    "ORDER BY tc.name"
+                ).bindparams(bindparam("names", expanding=True)),
+                {"names": wanted},
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+    # outcome_event broken out by type, for the matched companies only.
+    by_type = (
+        (
+            await db.execute(
+                text(
+                    "SELECT tc.name, oe.outcome_type, COUNT(*) AS n "
+                    "FROM outcome_event oe "
+                    "JOIN target_company tc ON tc.id = oe.target_company_id "
+                    "WHERE tc.name IN :names "
+                    "GROUP BY tc.name, oe.outcome_type "
+                    "ORDER BY tc.name, oe.outcome_type"
+                ).bindparams(bindparam("names", expanding=True)),
+                {"names": wanted},
+            )
+        )
+        .mappings()
+        .all()
+    )
+    outcomes_by_type: dict[str, dict[str, int]] = {}
+    for r in by_type:
+        outcomes_by_type.setdefault(r["name"], {})[r["outcome_type"]] = int(r["n"])
+
+    def _ser(m: Any) -> dict[str, Any]:
+        d = dict(m)
+        d["id"] = str(d["id"])
+        lsa = d.get("last_swept_at")
+        d["last_swept_at"] = lsa.isoformat() if lsa else None
+        d["outcome_event_by_type"] = outcomes_by_type.get(d["name"], {})
+        return d
+
+    found = {r["name"] for r in rows}
+    return {
+        "requested": wanted,
+        "not_found": [n for n in wanted if n not in found],
+        "companies": [_ser(r) for r in rows],
+    }
+
+
 @app.get("/admin/diagnostics/no-candidate-breakdown", tags=["admin"])
 async def no_candidate_breakdown(db: DbSession) -> dict[str, Any]:
     """Read-only: why the outcome→posting matcher's ``no_candidate`` bucket is
