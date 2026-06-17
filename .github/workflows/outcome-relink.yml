@@ -1,0 +1,89 @@
+name: Outcome relink (free pass)
+
+# Measured FREE-PASS company re-link: POST /admin/outcomes/relink?use_classifier=false
+# (domain/name match only, NO Gemini, no LLM cost). Sets target_company_id on
+# unlinked job-related outcome_event rows; the service filters to
+# _JOB_RELATED_TYPES_TO_RELINK and excludes 'unrelated'/'unclassified'. This is
+# the COMPANY matcher only — it never sets job_posting_id and never touches the
+# posting matcher / no-fanout firewall.
+#
+# use_classifier is intentionally NOT exposed here — this workflow is free-pass
+# only, by design. The Gemini pass is a separate, out-of-scope step.
+#
+# Safe by default: apply=false is a DRY RUN — prints the BEFORE company-link
+# stats (unlinked by outcome_type) and does NOT write. apply=true runs the
+# relink and prints BEFORE + RelinkReport + AFTER for the before/after delta.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'false = dry-run (BEFORE stats only); true = run free-pass relink + AFTER stats'
+        required: false
+        default: 'false'
+      limit:
+        description: 'Optional cap on rows scanned (blank = whole backlog)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  relink:
+    name: relink free-pass (apply=${{ github.event.inputs.apply }})
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+      APPLY: ${{ github.event.inputs.apply }}
+      LIMIT: ${{ github.event.inputs.limit }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: BEFORE — company-link stats (unlinked by outcome_type)
+        run: |
+          FUNNEL='["application_confirmation","recruiter_screen_invite","phone_interview_invite","video_interview_invite","onsite_interview_invite","panel_interview_invite","offer","rejection_pre_screen","rejection_post_screen","rejection_post_interview","withdrawn"]'
+          RESP=$(curl -fsS --max-time 30 -H "Authorization: Bearer ${API_AUTH_TOKEN}" "${API_URL}/admin/outcomes/stats")
+          echo "$RESP" > /tmp/before.json
+          echo "totals:"; echo "$RESP" | jq '{total_rows, total_linked_to_company, total_linked_to_posting}'
+          echo "funnel rows still UNLINKED to a company (the prize):"
+          echo "$RESP" | jq --argjson f "$FUNNEL" -r '.by_outcome_type[] | select(.outcome_type as $t | $f | index($t)) | "  \(.outcome_type): unlinked=\(.unlinked) linked=\(.linked_to_company)"'
+          echo "$RESP" | jq --argjson f "$FUNNEL" '[.by_outcome_type[] | select(.outcome_type as $t | $f | index($t)) | .unlinked] | add | {funnel_unlinked_total: .}'
+
+      - name: Dry-run notice
+        if: ${{ github.event.inputs.apply != 'true' }}
+        run: echo "DRY RUN — no write. Re-run with apply=true to run the free-pass relink."
+
+      - name: Run free-pass relink (write)
+        if: ${{ github.event.inputs.apply == 'true' }}
+        run: |
+          URL="${API_URL}/admin/outcomes/relink?use_classifier=false"
+          if [ -n "$LIMIT" ]; then URL="${URL}&limit=${LIMIT}"; fi
+          echo "POST ${URL}"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 300 -X POST \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" "$URL" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          OUT=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          echo "$OUT" | jq .
+          if [ "$CODE" != "200" ]; then echo "::error::relink returned HTTP ${CODE}"; exit 1; fi
+
+      - name: AFTER — company-link stats + delta by type
+        if: ${{ github.event.inputs.apply == 'true' }}
+        run: |
+          FUNNEL='["application_confirmation","recruiter_screen_invite","phone_interview_invite","video_interview_invite","onsite_interview_invite","panel_interview_invite","offer","rejection_pre_screen","rejection_post_screen","rejection_post_interview","withdrawn"]'
+          RESP=$(curl -fsS --max-time 30 -H "Authorization: Bearer ${API_AUTH_TOKEN}" "${API_URL}/admin/outcomes/stats")
+          echo "$RESP" > /tmp/after.json
+          echo "totals:"; echo "$RESP" | jq '{total_rows, total_linked_to_company, total_linked_to_posting}'
+          echo "newly linked (BEFORE.unlinked - AFTER.unlinked) per funnel type:"
+          jq -n --argjson f "$FUNNEL" \
+            --slurpfile b /tmp/before.json --slurpfile a /tmp/after.json '
+            ($b[0].by_outcome_type | map({(.outcome_type): .unlinked}) | add) as $bu |
+            ($a[0].by_outcome_type | map({(.outcome_type): .unlinked}) | add) as $au |
+            $f | map({type: ., newly_linked: (($bu[.] // 0) - ($au[.] // 0))})
+            | (map(.newly_linked) | add) as $tot
+            | {by_type: ., total_newly_linked: $tot}'
