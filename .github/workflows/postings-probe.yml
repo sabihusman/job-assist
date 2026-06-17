@@ -1,0 +1,72 @@
+name: Postings probe
+
+# Read-only queue inspector: GETs /postings for a role-family + state slice and
+# prints each row's seniority / title / company / score, then a per-seniority
+# count. Used to answer "is the queue surfacing <seniority> roles" — e.g.
+# associate-level (seniority=apm) PM/PO roles after the associate_pm enum fix.
+# Pure GET; no writes, no Apify cost. Manual only.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch:
+    inputs:
+      role_family:
+        description: 'Comma-separated role_family values'
+        required: false
+        default: 'product_management,product_owner'
+      state:
+        description: 'Posting state filter'
+        required: false
+        default: 'triage'
+      seniority:
+        description: 'Highlight rows at this seniority (e.g. apm = associate)'
+        required: false
+        default: 'apm'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Inspect the postings queue
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+      ROLE_FAMILY: ${{ github.event.inputs.role_family }}
+      STATE: ${{ github.event.inputs.state }}
+      SENIORITY: ${{ github.event.inputs.seniority }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Fetch + summarize the queue
+        run: |
+          QS="per_company_cap=0&limit=100&state=${STATE}"
+          IFS=',' read -ra FAMS <<< "$ROLE_FAMILY"
+          for f in "${FAMS[@]}"; do QS="${QS}&role_family=${f}"; done
+          echo "-- GET /postings?${QS} --"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/postings?${QS}" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::/postings returned HTTP ${CODE}"
+            echo "$BODY"
+            exit 1
+          fi
+          TOTAL=$(echo "$BODY" | jq '.total')
+          SHOWN=$(echo "$BODY" | jq '.items | length')
+          echo "total matching=${TOTAL}  shown=${SHOWN}  state=${STATE}  families=${ROLE_FAMILY}"
+          echo
+          echo "=== seniority breakdown (shown rows) ==="
+          echo "$BODY" | jq -r '.items | group_by(.role.seniority) | map({seniority: .[0].role.seniority, n: length}) | .[] | "\(.seniority): \(.n)"'
+          echo
+          echo "=== rows at seniority='${SENIORITY}' (the target) ==="
+          echo "$BODY" | jq -r --arg s "$SENIORITY" '.items[] | select(.role.seniority == $s) | "- [\(.score)] \(.role.family)/\(.role.seniority)  \"\(.role.title)\"  @ \(.company.name)  (\(.source.ats))"'
+          N=$(echo "$BODY" | jq --arg s "$SENIORITY" '[.items[] | select(.role.seniority == $s)] | length')
+          echo
+          echo "=> ${N} row(s) at seniority='${SENIORITY}' in the shown slice"
