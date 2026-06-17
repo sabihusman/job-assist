@@ -77,8 +77,8 @@ jobs:
           echo "=== seniority breakdown (shown rows) ==="
           echo "$BODY" | jq -r '.items | group_by(.role.seniority) | map({seniority: .[0].role.seniority, n: length}) | .[] | "\(.seniority): \(.n)"'
           echo
-          echo "=== rows at seniority='${SENIORITY}' (the target) ==="
-          echo "$BODY" | jq -r --arg s "$SENIORITY" '.items[] | select(.role.seniority == $s) | "- [\(.score)] \(.role.family)/\(.role.seniority)  \"\(.role.title)\"  @ \(.company.name)  (\(.source.ats))"'
+          echo "=== rows at seniority='${SENIORITY}' (the target) — with the fields the hard rules read ==="
+          echo "$BODY" | jq -r --arg s "$SENIORITY" '.items[] | select(.role.seniority == $s) | "- [\(.score)] \(.company.name): \"\(.role.title)\" (\(.role.family)/\(.role.seniority), \(.source.ats))\n    salary=\(if .salary then "\(.salary.min)-\(.salary.max) \(.salary.currency)/\(.salary.period)" else "null (unknown)" end)  remote=\(.remote_type)  seen=\((.first_seen_at // "?")[0:10])\n    locations=\(.locations_normalized // [] | join(" | "))"'
           N=$(echo "$BODY" | jq --arg s "$SENIORITY" '[.items[] | select(.role.seniority == $s)] | length')
           echo
           echo "=> ${N} row(s) at seniority='${SENIORITY}' in the shown slice"
