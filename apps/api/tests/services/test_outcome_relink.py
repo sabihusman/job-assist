@@ -8,9 +8,14 @@ unlinked-WHERE-clause idempotency guarantee.
 from __future__ import annotations
 
 import os
+import sys
+import types as _types
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import select
@@ -287,3 +292,100 @@ async def test_relink_use_classifier_requires_classifier_argument() -> None:
     classifier raises rather than silently no-op'ing."""
     with pytest.raises(ValueError, match="classifier is required"):
         await relink_unmatched(None, None, use_classifier=True)  # type: ignore[arg-type]
+
+
+# ── Non-object JSON through the FULL classifier→relink path ───────────────────
+# Regression coverage: a REAL EmailClassifier whose model returns syntactically
+# valid but non-object JSON (a top-level array, or a bare string) must not raise
+# through relink — the row is left UNLINKED and the sweep continues. classify()
+# degrades non-object JSON to unclassified/no-company (gmail/classifier.py, PR
+# #198 fix(audit)), so relink sees extracted_company=None → unmatched (NOT a
+# classifier_error, which is reserved for an actual raised exception). This
+# exercises the end-to-end path the isolated classifier tests + the
+# raising-stub relink test don't cover together.
+
+
+class _FakeResp:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+@contextmanager
+def _real_classifier_returning(raw_json: str) -> Iterator[Any]:
+    """Build a real EmailClassifier whose model replays ``raw_json`` verbatim.
+
+    Mirrors the fake-SDK shim in tests/gmail/test_classifier.py so we drive the
+    genuine JSON-parsing path (not a stub) through relink.
+    """
+
+    class _Models:
+        def generate_content(self, *, model: str, contents: Any, config: Any) -> _FakeResp:
+            return _FakeResp(raw_json)
+
+    class _Client:
+        def __init__(self, api_key: str) -> None:
+            self.models = _Models()
+
+    genai_mod = _types.ModuleType("genai")
+    types_mod = _types.ModuleType("types")
+    genai_mod.Client = _Client  # type: ignore[attr-defined]
+    types_mod.GenerateContentConfig = lambda **kw: object()  # type: ignore[attr-defined]
+    genai_mod.types = types_mod  # type: ignore[attr-defined]
+    sys.modules["google.genai"] = genai_mod
+    sys.modules["google.genai.types"] = types_mod
+    try:
+        with patch("job_assist.gmail.classifier._MIN_REQUEST_GAP_S", 0.0):
+            from job_assist.gmail.classifier import EmailClassifier
+
+            yield EmailClassifier(api_key="test-key")
+    finally:
+        sys.modules.pop("google.genai", None)
+        sys.modules.pop("google.genai.types", None)
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_json",
+    [
+        '["MeridianLink", "another"]',  # top-level array of non-objects
+        '"just a bare string"',  # bare JSON string
+    ],
+)
+async def test_relink_non_object_json_leaves_row_unlinked(db_session: Any, raw_json: str) -> None:
+    """Gemini returning non-object JSON must NOT crash relink: the row stays
+    unlinked, the run completes, and it counts as unmatched (not a
+    classifier_error — no exception was raised)."""
+    tc = _company("MeridianLink", domain=None)  # domain path misses
+    db_session.add(tc)
+    await db_session.flush()
+    db_session.add(
+        _outcome(
+            outcome_type="application_confirmation",
+            from_domain="ashbyhq.com",  # ATS sender — not the company domain
+            raw_snippet="Thanks for applying to MeridianLink",
+        )
+    )
+    await db_session.commit()
+
+    with _real_classifier_returning(raw_json) as classifier:
+        # Must not raise.
+        report = await relink_unmatched(db_session, classifier, use_classifier=True)
+
+    assert report.scanned == 1
+    assert report.classifier_errors == 0  # graceful degrade, not an exception
+    assert report.domain_matched == 0
+    assert report.fuzzy_matched == 0
+    assert report.unmatched == 1
+
+    # The row is left UNLINKED, never crashed.
+    still_unlinked = (
+        (
+            await db_session.execute(
+                select(OutcomeEvent).where(OutcomeEvent.target_company_id.is_(None))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(still_unlinked) == 1
