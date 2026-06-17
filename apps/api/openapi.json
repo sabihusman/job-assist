@@ -3297,6 +3297,30 @@
         }
       }
     },
+    "/admin/diagnostics/curated-zero-postings": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Curated Zero Postings",
+        "description": "Read-only: why curated target_company rows have ZERO corpus postings.\n\nSCHEMA NOTE (read before trusting the buckets): ``ingest_run`` is one row\nper (ATS source, invocation) and stores NEITHER target_company_id NOR the\nhandle \u2014 so a run's status (handle_not_found / failed / success) CANNOT be\nattributed to a specific company. The only reliable per-company crawl\nfootprint is ``target_company.last_swept_at``, stamped on BOTH success and\nhandle_not_found (the sweep \"visited\") but NEVER on a generic failure (see\ningestion.py). The per-company buckets below are derived from that proxy;\nthe recent-run status counts in ``source_level_context`` are SOURCE-level\nonly and are NOT company-attributable. Pure SELECT; no writes.\n\n  * ``q1_companies`` \u2014 every curated company with zero job_posting rows:\n    name, ats, ats_handle, tier, source, last_swept_at, and a derived\n    ``bucket`` (see below).\n  * ``q2_buckets`` \u2014 mutually exclusive, priority-ordered:\n      - ``excluded_from_plan``  : ats_handle IS NULL OR tier IS NULL \u2014 the\n        daily ingest plan gates on a non-null handle + tier, so these never\n        enter it (checked FIRST, regardless of last_swept_at).\n      - ``never_swept``         : in-plan but last_swept_at IS NULL \u2014 eligible\n        yet never successfully visited (never crawled, or only ever failed \u2014\n        failure does not stamp last_swept_at).\n      - ``swept_zero_postings`` : last_swept_at IS NOT NULL but still zero\n        postings \u2014 visited but nothing persisted. Per-company we CANNOT\n        tell apart \"no open roles right now\" vs a stale-handle 404\n        (handle_not_found also stamps last_swept_at) vs the Bestiary 5.9\n        silent-404. See source_level_context for whether 404s are happening.\n  * ``q3_plan_exclusion_crosscheck`` \u2014 within the zero-posting curated set,\n    how many have ats_handle NULL, tier NULL, or either (the plan gate).\n  * ``source_level_context`` \u2014 recent (<=30d) ingest_run counts by\n    (source, status). SOURCE-level, NOT company-attributable; included only\n    so the operator can see whether handle_not_found/failed are occurring\n    at all when reading the swept_zero_postings bucket.",
+        "operationId": "curated_zero_postings_admin_diagnostics_curated_zero_postings_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Curated Zero Postings Admin Diagnostics Curated Zero Postings Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/diagnostics/no-candidate-breakdown": {
       "get": {
         "tags": [

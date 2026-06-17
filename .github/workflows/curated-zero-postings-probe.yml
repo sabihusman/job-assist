@@ -1,0 +1,56 @@
+name: Curated zero-postings probe
+
+# Read-only: GETs /admin/diagnostics/curated-zero-postings and prints why each
+# curated target_company with zero job_posting rows has none — per-company
+# bucket (excluded_from_plan / never_swept / swept_zero_postings) derived from
+# last_swept_at, the plan-exclusion cross-check, and SOURCE-level recent
+# ingest_run status counts (NOT company-attributable). Pure GET; no writes.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Curated zero-postings
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Fetch + print
+        run: |
+          echo "-- GET /admin/diagnostics/curated-zero-postings --"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/diagnostics/curated-zero-postings" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::diagnostic returned HTTP ${CODE}"
+            echo "$BODY"
+            exit 1
+          fi
+          echo
+          echo "=== schema_note ==="
+          echo "$BODY" | jq -r '.schema_note'
+          echo
+          echo "=== q1: curated companies with zero postings ==="
+          echo "$BODY" | jq -r '.q1_companies[] | "- [\(.bucket)] \(.name)  ats=\(.ats)/\(.ats_handle // "NULL")  tier=\(.tier // "NULL")  last_swept=\(.last_swept_at // "never")"'
+          echo
+          echo "=== q2: buckets ==="
+          echo "$BODY" | jq -r '.q2_buckets[] | "- \(.bucket): \(.companies)"'
+          echo
+          echo "=== q3: plan-exclusion cross-check ==="
+          echo "$BODY" | jq '.q3_plan_exclusion_crosscheck'
+          echo
+          echo "=== source-level context (NOT company-attributable) ==="
+          echo "$BODY" | jq -r '.source_level_context[] | "- \(.source)/\(.status): \(.runs) runs  latest=\(.latest // "n/a")"'
