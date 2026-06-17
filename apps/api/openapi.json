@@ -3345,6 +3345,114 @@
         }
       }
     },
+    "/admin/resumes/extract-text": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Extract Resume Text",
+        "description": "Backfill ``resume_text`` from ``.docx`` ``file_blob``s (Phase 2). Read-mostly.\n\nScans ``application_resume`` WHERE ``file_blob IS NOT NULL`` AND\n(``resume_text IS NULL`` OR ``resume_text = ''``) \u2014 IDEMPOTENT (rows that\nalready have text are excluded, so re-runs skip them). For each ``.docx``\nblob it extracts text (stdlib ``zipfile`` + ElementTree; body paragraphs +\ntable cells) and, when ``dry_run=false``, writes it to ``resume_text`` and\nONLY that column (``updated_at`` auto-bumps by design; ``file_blob`` /\n``file_name`` / ``content_type`` / ``angle`` / ``label`` are untouched).\n\n``dry_run=true`` (DEFAULT) extracts + returns a per-row preview but WRITES\nNOTHING. Non-``.docx`` / corrupt blobs are skipped and reported \u2014 they never\ncrash the batch. Manual one-shot; NOT wired to any cron or hot path.",
+        "operationId": "extract_resume_text_admin_resumes_extract_text_post",
+        "parameters": [
+          {
+            "name": "dry_run",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Dry Run"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Extract Resume Text Admin Resumes Extract Text Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/resumes/{application_resume_id}/text": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read Resume Text",
+        "description": "Read back the stored ``resume_text`` for one ``application_resume`` row.\n\nRead-only \u2014 returns the extracted text + metadata so the operator can verify\nextraction quality. Never returns the file blob. 404 if the id is unknown.",
+        "operationId": "read_resume_text_admin_resumes__application_resume_id__text_get",
+        "parameters": [
+          {
+            "name": "application_resume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Application Resume Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Read Resume Text Admin Resumes  Application Resume Id  Text Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/enrichment/companies/sweep": {
       "post": {
         "tags": [

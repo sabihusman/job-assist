@@ -5254,6 +5254,124 @@ async def rag_corpus_diagnostic(db: DbSession) -> dict[str, Any]:
     }
 
 
+@app.post("/admin/resumes/extract-text", tags=["admin"])
+async def extract_resume_text(
+    db: DbSession,
+    dry_run: bool = True,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Backfill ``resume_text`` from ``.docx`` ``file_blob``s (Phase 2). Read-mostly.
+
+    Scans ``application_resume`` WHERE ``file_blob IS NOT NULL`` AND
+    (``resume_text IS NULL`` OR ``resume_text = ''``) — IDEMPOTENT (rows that
+    already have text are excluded, so re-runs skip them). For each ``.docx``
+    blob it extracts text (stdlib ``zipfile`` + ElementTree; body paragraphs +
+    table cells) and, when ``dry_run=false``, writes it to ``resume_text`` and
+    ONLY that column (``updated_at`` auto-bumps by design; ``file_blob`` /
+    ``file_name`` / ``content_type`` / ``angle`` / ``label`` are untouched).
+
+    ``dry_run=true`` (DEFAULT) extracts + returns a per-row preview but WRITES
+    NOTHING. Non-``.docx`` / corrupt blobs are skipped and reported — they never
+    crash the batch. Manual one-shot; NOT wired to any cron or hot path.
+    """
+    from sqlalchemy import or_, select
+
+    from job_assist.db.models import ApplicationResume
+    from job_assist.services.resume_extract import (
+        ResumeExtractError,
+        extract_docx_text,
+        looks_like_docx,
+    )
+
+    query = (
+        select(ApplicationResume)
+        .where(ApplicationResume.file_blob.is_not(None))
+        .where(or_(ApplicationResume.resume_text.is_(None), ApplicationResume.resume_text == ""))
+        .order_by(ApplicationResume.created_at.asc())
+    )
+    if limit is not None:
+        query = query.limit(limit)
+    rows = (await db.execute(query)).scalars().all()
+
+    per_row: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    skipped_non_docx = 0
+    written = 0
+    for r in rows:
+        if not looks_like_docx(r.content_type, r.file_name):
+            skipped_non_docx += 1
+            failed.append(
+                {"id": str(r.id), "file_name": r.file_name, "error": "not a .docx (skipped)"}
+            )
+            continue
+        try:
+            text = extract_docx_text(r.file_blob or b"")
+        except ResumeExtractError as exc:
+            failed.append({"id": str(r.id), "file_name": r.file_name, "error": str(exc)})
+            continue
+        per_row.append(
+            {
+                "id": str(r.id),
+                "file_name": r.file_name,
+                "chars_extracted": len(text),
+                "preview": text[:500],
+            }
+        )
+        if not dry_run:
+            r.resume_text = text
+            written += 1
+
+    if not dry_run:
+        await db.commit()
+
+    result: dict[str, Any] = {
+        "dry_run": dry_run,
+        "scanned": len(rows),
+        "extracted": len(per_row),
+        "skipped_non_docx": skipped_non_docx,
+        "failed": failed,
+        "per_row": per_row,
+    }
+    if dry_run:
+        result["message"] = (
+            "DRY RUN — no resume_text was written. Re-run with dry_run=false to persist."
+        )
+    else:
+        result["written"] = written
+    return result
+
+
+@app.get("/admin/resumes/{application_resume_id}/text", tags=["admin"])
+async def read_resume_text(application_resume_id: uuid.UUID, db: DbSession) -> dict[str, Any]:
+    """Read back the stored ``resume_text`` for one ``application_resume`` row.
+
+    Read-only — returns the extracted text + metadata so the operator can verify
+    extraction quality. Never returns the file blob. 404 if the id is unknown.
+    """
+    from sqlalchemy import select
+
+    from job_assist.db.models import ApplicationResume
+
+    row = (
+        await db.execute(
+            select(ApplicationResume).where(ApplicationResume.id == application_resume_id)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=404, detail=f"application_resume {application_resume_id} not found"
+        )
+    return {
+        "id": str(row.id),
+        "job_posting_id": str(row.job_posting_id),
+        "file_name": row.file_name,
+        "content_type": row.content_type,
+        "has_file_blob": row.file_blob is not None,
+        "char_count": len(row.resume_text or ""),
+        "resume_text": row.resume_text,
+    }
+
+
 # ── Company enrichment (PR #27) ───────────────────────────────────────────────
 
 
