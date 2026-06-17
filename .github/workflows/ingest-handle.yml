@@ -1,0 +1,50 @@
+name: Ingest one handle
+
+# Ops tool: trigger a synchronous ingest of a single (ats, handle) via
+# POST /admin/ingest/{ats}/{handle}. Used to crawl a company on demand (e.g.
+# right after a crawl-config change) instead of waiting for the daily cron.
+# Prints the resulting IngestRun (status + posting counters). Writes postings,
+# so there is no dry-run — only dispatch when you intend to crawl.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ats:
+        description: 'ATS (greenhouse, lever, ashby, workday, icims)'
+        required: true
+      handle:
+        description: 'ats_handle to ingest'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  ingest:
+    name: Ingest ${{ github.event.inputs.ats }}/${{ github.event.inputs.handle }}
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+      ATS: ${{ github.event.inputs.ats }}
+      HANDLE: ${{ github.event.inputs.handle }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Trigger ingest
+        run: |
+          echo "POST /admin/ingest/${ATS}/${HANDLE}"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 120 -X POST \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/ingest/${ATS}/${HANDLE}" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          OUT=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          echo "$OUT" | jq .
+          if [ "$CODE" != "200" ]; then
+            echo "::error::ingest returned HTTP ${CODE}"
+            exit 1
+          fi
