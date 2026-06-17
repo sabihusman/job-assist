@@ -3249,6 +3249,30 @@
         }
       }
     },
+    "/admin/diagnostics/outcome-linking": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Outcome Linking Diagnostic",
+        "description": "Read-only feedback-loop coverage diagnostic.\n\nRuns four FIXED aggregate SELECTs (no parameters, no user input \u2014 this is a\nnamed diagnostic, NOT a SQL runner) over ``outcome_event`` /\n``application_resume`` / ``application_state`` and returns the raw result\nsets so an operator can judge whether the outcome\u2192posting feedback loop has\nenough linked signal. Pure SELECT; no writes.\n\n  * ``q1_overall`` \u2014 total outcome_events vs how many link to a job_posting.\n  * ``q2_by_outcome_type`` \u2014 the same fill rate split by outcome_type.\n  * ``q3_complete_triples`` \u2014 distinct postings that have BOTH an outcome and\n    an attached resume (the rows usable as training signal).\n  * ``q4_resume_coverage`` \u2014 application_state rows vs how many have a resume.",
+        "operationId": "outcome_linking_diagnostic_admin_diagnostics_outcome_linking_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Outcome Linking Diagnostic Admin Diagnostics Outcome Linking Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/enrichment/companies/sweep": {
       "post": {
         "tags": [

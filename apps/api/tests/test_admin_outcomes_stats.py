@@ -115,6 +115,46 @@ async def test_overall_stats_reports_company_fill_per_outcome_type(
 
 @_NEEDS_DB
 @pytest.mark.asyncio
+async def test_outcome_linking_diagnostic_runs_all_four_queries(db_session: Any) -> None:
+    """The feedback-loop coverage diagnostic executes its four fixed SELECTs and
+    returns each result set. Verifies the SQL is valid (right tables/columns) and
+    the posting-link counts/pct compute correctly."""
+    from job_assist.main import app
+
+    # 3 outcomes, none linked to a posting (job_posting_id NULL) — the dominant
+    # production shape today (Gmail backfill defers posting-linking).
+    db_session.add_all(
+        [
+            _outcome(outcome_type="application_confirmation"),
+            _outcome(outcome_type="rejection_post_screen"),
+            _outcome(outcome_type="rejection_post_screen"),
+        ]
+    )
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/admin/diagnostics/outcome-linking")
+
+    assert resp.status_code == 200, resp.text
+    d = resp.json()
+
+    # q1: 3 total, 0 linked to a posting, 0.0% — the ratio survives JSON as float.
+    assert d["q1_overall"]["total_outcomes"] == 3
+    assert d["q1_overall"]["linked_to_posting"] == 0
+    assert d["q1_overall"]["pct_linked"] == 0.0
+
+    # q2: per-type split, ordered by total DESC.
+    by_type = {r["outcome_type"]: r for r in d["q2_by_outcome_type"]}
+    assert by_type["rejection_post_screen"]["total"] == 2
+    assert by_type["rejection_post_screen"]["linked"] == 0
+
+    # q3 / q4: run without fixtures → 0 / shape only (no resume or application rows).
+    assert d["q3_complete_triples"] == 0
+    assert set(d["q4_resume_coverage"].keys()) == {"total_applications", "with_resume"}
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
 async def test_company_filtered_stats_returns_per_outcome_counts(
     db_session: Any,
 ) -> None:

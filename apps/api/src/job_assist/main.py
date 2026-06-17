@@ -4884,6 +4884,92 @@ async def outcomes_stats(
     ).model_dump(mode="json")
 
 
+@app.get("/admin/diagnostics/outcome-linking", tags=["admin"])
+async def outcome_linking_diagnostic(db: DbSession) -> dict[str, Any]:
+    """Read-only feedback-loop coverage diagnostic.
+
+    Runs four FIXED aggregate SELECTs (no parameters, no user input — this is a
+    named diagnostic, NOT a SQL runner) over ``outcome_event`` /
+    ``application_resume`` / ``application_state`` and returns the raw result
+    sets so an operator can judge whether the outcome→posting feedback loop has
+    enough linked signal. Pure SELECT; no writes.
+
+      * ``q1_overall`` — total outcome_events vs how many link to a job_posting.
+      * ``q2_by_outcome_type`` — the same fill rate split by outcome_type.
+      * ``q3_complete_triples`` — distinct postings that have BOTH an outcome and
+        an attached resume (the rows usable as training signal).
+      * ``q4_resume_coverage`` — application_state rows vs how many have a resume.
+    """
+    from decimal import Decimal
+
+    from sqlalchemy import text
+
+    def _ser(m: Any) -> dict[str, Any]:
+        return {k: (float(v) if isinstance(v, Decimal) else v) for k, v in dict(m).items()}
+
+    q1 = (
+        (
+            await db.execute(
+                text(
+                    "SELECT COUNT(*) AS total_outcomes, "
+                    "COUNT(job_posting_id) AS linked_to_posting, "
+                    "ROUND(100.0 * COUNT(job_posting_id) / NULLIF(COUNT(*), 0), 1) AS pct_linked "
+                    "FROM outcome_event"
+                )
+            )
+        )
+        .mappings()
+        .one()
+    )
+
+    q2 = (
+        (
+            await db.execute(
+                text(
+                    "SELECT outcome_type, COUNT(*) AS total, "
+                    "COUNT(job_posting_id) AS linked, "
+                    "ROUND(100.0 * COUNT(job_posting_id) / NULLIF(COUNT(*), 0), 1) AS pct_linked "
+                    "FROM outcome_event GROUP BY outcome_type ORDER BY total DESC"
+                )
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+    q3 = (
+        await db.execute(
+            text(
+                "SELECT COUNT(DISTINCT oe.job_posting_id) AS complete_triples "
+                "FROM outcome_event oe "
+                "JOIN application_resume ar ON ar.job_posting_id = oe.job_posting_id "
+                "WHERE oe.job_posting_id IS NOT NULL"
+            )
+        )
+    ).scalar_one()
+
+    q4 = (
+        (
+            await db.execute(
+                text(
+                    "SELECT COUNT(*) AS total_applications, COUNT(ar.id) AS with_resume "
+                    "FROM application_state a "
+                    "LEFT JOIN application_resume ar ON ar.job_posting_id = a.job_posting_id"
+                )
+            )
+        )
+        .mappings()
+        .one()
+    )
+
+    return {
+        "q1_overall": _ser(q1),
+        "q2_by_outcome_type": [_ser(r) for r in q2],
+        "q3_complete_triples": int(q3),
+        "q4_resume_coverage": _ser(q4),
+    }
+
+
 # ── Company enrichment (PR #27) ───────────────────────────────────────────────
 
 
