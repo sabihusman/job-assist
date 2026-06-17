@@ -1,0 +1,50 @@
+name: Link outcomes to postings
+
+# Manual one-shot: runs the outcome→posting matcher over the full backlog by
+# calling POST /admin/outcomes/link-postings, and prints the LinkReport
+# (scanned / linked / no_candidate / ambiguous). Idempotent + deterministic;
+# only sets job_posting_id on unlinked rows (never rewrites existing links).
+# No Apify cost, no LLM. Used to backfill links after a matcher change.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Optional cap on rows scanned (blank = full backlog)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    name: Run outcome→posting matcher
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+      LIMIT: ${{ github.event.inputs.limit }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Run link-postings
+        run: |
+          URL="${API_URL}/admin/outcomes/link-postings"
+          if [ -n "${LIMIT}" ]; then URL="${URL}?limit=${LIMIT}"; fi
+          echo "-- POST ${URL} --"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 120 -X POST \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${URL}" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::link-postings returned HTTP ${CODE}"
+            echo "$BODY"
+            exit 1
+          fi
+          echo "$BODY" | jq .
