@@ -7,10 +7,14 @@ unlinked-WHERE-clause idempotency guarantee.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import select
@@ -287,3 +291,87 @@ async def test_relink_use_classifier_requires_classifier_argument() -> None:
     classifier raises rather than silently no-op'ing."""
     with pytest.raises(ValueError, match="classifier is required"):
         await relink_unmatched(None, None, use_classifier=True)  # type: ignore[arg-type]
+
+
+# ── Non-object JSON through the FULL classifier→relink path ───────────────────
+# Regression coverage: a REAL EmailClassifier whose model returns syntactically
+# valid but non-object JSON (a top-level array, or a bare string) must not raise
+# through relink — the row is left UNLINKED and the sweep continues. classify()
+# degrades non-object JSON to unclassified/no-company (gmail/classifier.py, PR
+# #198 fix(audit)), so relink sees extracted_company=None → unmatched (NOT a
+# classifier_error, which is reserved for an actual raised exception). This
+# exercises the end-to-end path the isolated classifier tests + the
+# raising-stub relink test don't cover together.
+
+
+@contextmanager
+def _real_classify_returning(raw_json: str) -> Iterator[Any]:
+    """Yield a real EmailClassifier whose model output is ``raw_json``.
+
+    We bypass ``__init__`` (which imports the google-genai SDK) and patch the
+    network call ``_call_model`` to replay ``raw_json`` verbatim, so the GENUINE
+    ``classify()`` JSON-parsing / non-object-handling path runs — no SDK, no
+    fragile sys.modules shim that the full-suite import order can defeat.
+    """
+    from job_assist.gmail.classifier import EmailClassifier
+
+    clf = object.__new__(EmailClassifier)
+    clf._model = "test-model"  # type: ignore[attr-defined]
+    clf._last_request_ts = 0.0  # type: ignore[attr-defined]
+    clf._lock = asyncio.Lock()  # type: ignore[attr-defined]
+
+    async def _fake_call_model(prompt: str) -> str:
+        return raw_json
+
+    clf._call_model = _fake_call_model  # type: ignore[attr-defined,method-assign]
+    with patch("job_assist.gmail.classifier._MIN_REQUEST_GAP_S", 0.0):
+        yield clf
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_json",
+    [
+        '["MeridianLink", "another"]',  # top-level array of non-objects
+        '"just a bare string"',  # bare JSON string
+    ],
+)
+async def test_relink_non_object_json_leaves_row_unlinked(db_session: Any, raw_json: str) -> None:
+    """Gemini returning non-object JSON must NOT crash relink: the real
+    classify() degrades it to unclassified/no-company, so the row stays
+    unlinked, the run completes, and it counts as unmatched (NOT a
+    classifier_error — no exception was raised)."""
+    tc = _company("MeridianLink", domain=None)  # domain path misses
+    db_session.add(tc)
+    await db_session.flush()
+    db_session.add(
+        _outcome(
+            outcome_type="application_confirmation",
+            from_domain="ashbyhq.com",  # ATS sender — not the company domain
+            raw_snippet="Thanks for applying to MeridianLink",
+        )
+    )
+    await db_session.commit()
+
+    with _real_classify_returning(raw_json) as classifier:
+        # Must not raise.
+        report = await relink_unmatched(db_session, classifier, use_classifier=True)
+
+    assert report.scanned == 1
+    assert report.classifier_errors == 0  # graceful degrade, not an exception
+    assert report.domain_matched == 0
+    assert report.fuzzy_matched == 0
+    assert report.unmatched == 1
+
+    # The row is left UNLINKED, never crashed.
+    still_unlinked = (
+        (
+            await db_session.execute(
+                select(OutcomeEvent).where(OutcomeEvent.target_company_id.is_(None))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(still_unlinked) == 1
