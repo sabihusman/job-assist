@@ -5154,6 +5154,106 @@ async def resume_storage_diagnostic(db: DbSession) -> dict[str, Any]:
     }
 
 
+@app.get("/admin/diagnostics/rag-corpus", tags=["admin"])
+async def rag_corpus_diagnostic(db: DbSession) -> dict[str, Any]:
+    """Read-only: quantify the (posting + resume + outcome) RAG-corpus viability.
+
+    Fixed diagnostic SELECTs (no params, no user input); pure SELECT, no writes.
+
+      * ``q1_table_baselines`` — row counts of the four tables.
+      * ``q2_apply_plus_resume`` — distinct job_posting_id with BOTH an 'applied'
+        posting_action AND an application_resume row.
+      * ``q3_complete_triples`` — of q2's postings, how many also have ≥1
+        outcome_event linked (job_posting_id set), with a per-outcome_type
+        breakdown (distinct triple postings carrying each type).
+      * ``q4_resume_text_availability`` — application_resume rows with non-empty
+        resume_text vs file_blob-only (can we embed directly or need extraction).
+    """
+    from sqlalchemy import text
+
+    q1 = (
+        (
+            await db.execute(
+                text(
+                    "SELECT (SELECT COUNT(*) FROM resume_version) AS resume_version,"
+                    " (SELECT COUNT(*) FROM application_resume) AS application_resume,"
+                    " (SELECT COUNT(*) FROM application_state) AS application_state,"
+                    " (SELECT COUNT(*) FROM posting_action WHERE action_type = 'applied')"
+                    " AS posting_action_applied"
+                )
+            )
+        )
+        .mappings()
+        .one()
+    )
+
+    q2 = (
+        await db.execute(
+            text(
+                "SELECT COUNT(DISTINCT ar.job_posting_id) AS apply_plus_resume"
+                " FROM application_resume ar"
+                " WHERE EXISTS (SELECT 1 FROM posting_action pa"
+                " WHERE pa.job_posting_id = ar.job_posting_id AND pa.action_type = 'applied')"
+            )
+        )
+    ).scalar_one()
+
+    # The triple set: apply + resume + ≥1 linked outcome.
+    triples_cte = (
+        "WITH triples AS ("
+        " SELECT ar.job_posting_id FROM application_resume ar"
+        " WHERE EXISTS (SELECT 1 FROM posting_action pa"
+        " WHERE pa.job_posting_id = ar.job_posting_id AND pa.action_type = 'applied')"
+        " AND EXISTS (SELECT 1 FROM outcome_event oe"
+        " WHERE oe.job_posting_id = ar.job_posting_id)) "
+    )
+    triple_total = (
+        await db.execute(text(triples_cte + "SELECT COUNT(*) AS n FROM triples"))
+    ).scalar_one()
+    triple_by_type = (
+        (
+            await db.execute(
+                text(
+                    triples_cte + "SELECT oe.outcome_type,"
+                    " COUNT(DISTINCT oe.job_posting_id) AS triples"
+                    " FROM outcome_event oe JOIN triples t ON t.job_posting_id = oe.job_posting_id"
+                    " GROUP BY oe.outcome_type ORDER BY triples DESC"
+                )
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+    q4 = (
+        (
+            await db.execute(
+                text(
+                    "SELECT COUNT(*) AS application_resume_total,"
+                    " COUNT(*) FILTER (WHERE resume_text IS NOT NULL"
+                    " AND length(btrim(resume_text)) > 0) AS with_resume_text,"
+                    " COUNT(*) FILTER (WHERE file_blob IS NOT NULL) AS with_file_blob,"
+                    " COUNT(*) FILTER (WHERE (resume_text IS NULL OR length(btrim(resume_text)) = 0)"
+                    " AND file_blob IS NOT NULL) AS blob_only_no_text"
+                    " FROM application_resume"
+                )
+            )
+        )
+        .mappings()
+        .one()
+    )
+
+    return {
+        "q1_table_baselines": dict(q1),
+        "q2_apply_plus_resume": int(q2),
+        "q3_complete_triples": {
+            "total": int(triple_total),
+            "by_outcome_type": [dict(r) for r in triple_by_type],
+        },
+        "q4_resume_text_availability": dict(q4),
+    }
+
+
 # ── Company enrichment (PR #27) ───────────────────────────────────────────────
 
 

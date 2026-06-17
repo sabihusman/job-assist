@@ -3321,6 +3321,30 @@
         }
       }
     },
+    "/admin/diagnostics/rag-corpus": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Rag Corpus Diagnostic",
+        "description": "Read-only: quantify the (posting + resume + outcome) RAG-corpus viability.\n\nFixed diagnostic SELECTs (no params, no user input); pure SELECT, no writes.\n\n  * ``q1_table_baselines`` \u2014 row counts of the four tables.\n  * ``q2_apply_plus_resume`` \u2014 distinct job_posting_id with BOTH an 'applied'\n    posting_action AND an application_resume row.\n  * ``q3_complete_triples`` \u2014 of q2's postings, how many also have \u22651\n    outcome_event linked (job_posting_id set), with a per-outcome_type\n    breakdown (distinct triple postings carrying each type).\n  * ``q4_resume_text_availability`` \u2014 application_resume rows with non-empty\n    resume_text vs file_blob-only (can we embed directly or need extraction).",
+        "operationId": "rag_corpus_diagnostic_admin_diagnostics_rag_corpus_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Rag Corpus Diagnostic Admin Diagnostics Rag Corpus Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/enrichment/companies/sweep": {
       "post": {
         "tags": [

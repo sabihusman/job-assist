@@ -278,3 +278,32 @@ async def test_resume_storage_diagnostic_runs_all_queries(db_session: Any) -> No
     assert all(isinstance(v, int) for v in d["counts"].values())
     assert isinstance(d["resume_version_rows"], list)
     assert isinstance(d["application_resume_rows"], list)
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_rag_corpus_diagnostic_runs_all_queries(db_session: Any) -> None:
+    """The RAG-corpus diagnostic executes its four queries and returns the right
+    shape (proves the SQL/table/column names are valid)."""
+    from job_assist.main import app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/admin/diagnostics/rag-corpus")
+
+    assert resp.status_code == 200, resp.text
+    d = resp.json()
+    assert set(d["q1_table_baselines"].keys()) == {
+        "resume_version",
+        "application_resume",
+        "application_state",
+        "posting_action_applied",
+    }
+    assert isinstance(d["q2_apply_plus_resume"], int)
+    assert set(d["q3_complete_triples"].keys()) == {"total", "by_outcome_type"}
+    assert isinstance(d["q3_complete_triples"]["by_outcome_type"], list)
+    assert set(d["q4_resume_text_availability"].keys()) == {
+        "application_resume_total",
+        "with_resume_text",
+        "with_file_blob",
+        "blob_only_no_text",
+    }

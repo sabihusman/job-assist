@@ -1,0 +1,54 @@
+name: RAG corpus probe
+
+# Read-only: GETs /admin/diagnostics/rag-corpus and prints the (posting + resume
+# + outcome) corpus viability — table baselines, apply+resume pairs, complete
+# triples (with outcome_type mix), and resume-text availability. Pure GET; no
+# writes. Manual only.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: RAG corpus viability
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Fetch + print corpus stats
+        run: |
+          echo "-- GET /admin/diagnostics/rag-corpus --"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/diagnostics/rag-corpus" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::diagnostic returned HTTP ${CODE}"
+            echo "$BODY"
+            exit 1
+          fi
+          echo
+          echo "=== 1. Table baselines ==="
+          echo "$BODY" | jq '.q1_table_baselines'
+          echo
+          echo "=== 2. Applies WITH a resume (distinct postings) ==="
+          echo "$BODY" | jq '.q2_apply_plus_resume'
+          echo
+          echo "=== 3. Complete triples (apply + resume + linked outcome) ==="
+          echo "$BODY" | jq '.q3_complete_triples.total'
+          echo "   by outcome_type:"
+          echo "$BODY" | jq -r '.q3_complete_triples.by_outcome_type[] | "   - \(.outcome_type): \(.triples)"'
+          echo
+          echo "=== 4. Resume-text availability ==="
+          echo "$BODY" | jq '.q4_resume_text_availability'
