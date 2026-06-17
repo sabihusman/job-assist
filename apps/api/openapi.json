@@ -3321,6 +3321,51 @@
         }
       }
     },
+    "/admin/diagnostics/company-references": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Company References",
+        "description": "Read-only: for each target_company in ``names`` (comma-separated, matched\nEXACTLY on name), return its full row + counts of every row that references\nit, so a dedup/merge can be planned WITHOUT orphaning anything. Pure SELECT;\nno writes.\n\nReports per company: id, name, domain, ats, ats_handle, tier, source,\nlast_swept_at, and reference counts across the five FKs to target_company \u2014\n``job_posting`` (SET NULL), ``outcome_event`` (SET NULL, also broken out by\noutcome_type), ``contact`` (SET NULL), ``closed_channel`` (SET NULL), and\n``division`` (CASCADE \u2014 the one that would hard-delete on a company DELETE,\nwhich is why the dedup retires via deactivate, not delete). Use this to\nconfirm two rows are the same company (matching ``domain``) before merging.",
+        "operationId": "company_references_admin_diagnostics_company_references_get",
+        "parameters": [
+          {
+            "name": "names",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Names"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Company References Admin Diagnostics Company References Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/diagnostics/no-candidate-breakdown": {
       "get": {
         "tags": [
