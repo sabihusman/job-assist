@@ -5113,18 +5113,22 @@ async def curated_zero_postings(db: DbSession) -> dict[str, Any]:
       * ``q1_companies`` — every curated company with zero job_posting rows:
         name, ats, ats_handle, tier, source, last_swept_at, and a derived
         ``bucket`` (see below).
-      * ``q2_buckets`` — mutually exclusive, priority-ordered:
-          - ``excluded_from_plan``  : ats_handle IS NULL OR tier IS NULL — the
-            daily ingest plan gates on a non-null handle + tier, so these never
-            enter it (checked FIRST, regardless of last_swept_at).
-          - ``never_swept``         : in-plan but last_swept_at IS NULL — eligible
-            yet never successfully visited (never crawled, or only ever failed —
-            failure does not stamp last_swept_at).
-          - ``swept_zero_postings`` : last_swept_at IS NOT NULL but still zero
-            postings — visited but nothing persisted. Per-company we CANNOT
-            tell apart "no open roles right now" vs a stale-handle 404
+      * ``q2_buckets`` — mutually exclusive, priority-ordered. A RECENT
+        last_swept_at (within ``_RECENT_SWEEP_DAYS``) is checked FIRST, because
+        it proves the company is actually being crawled — even with a NULL
+        handle (the workday/icims adapters target by DOMAIN and run with a NULL
+        ats_handle, so handle-NULL does NOT imply un-crawled):
+          - ``swept_zero_postings`` : last_swept_at is recent but still zero
+            postings — actively crawled, nothing persisted. Per-company we
+            CANNOT tell apart "no open roles right now" vs a stale-handle 404
             (handle_not_found also stamps last_swept_at) vs the Bestiary 5.9
             silent-404. See source_level_context for whether 404s are happening.
+          - ``excluded_from_plan``  : NOT recently swept AND (ats_handle IS NULL
+            OR tier IS NULL) — the daily ingest plan gates on a non-null handle
+            + tier, so these never enter it and aren't crawled by any path.
+          - ``never_swept``         : NOT recently swept but handle + tier are
+            present — eligible yet no recent successful visit (never crawled, or
+            the sweep went stale; failure does not stamp last_swept_at).
       * ``q3_plan_exclusion_crosscheck`` — within the zero-posting curated set,
         how many have ats_handle NULL, tier NULL, or either (the plan gate).
       * ``source_level_context`` — recent (<=30d) ingest_run counts by
@@ -5141,11 +5145,15 @@ async def curated_zero_postings(db: DbSession) -> dict[str, Any]:
         return d
 
     # q1 + the per-row bucket, computed in SQL with the documented priority.
+    # "recent" = swept within this window: the curated cron sweeps eligible
+    # companies daily, so a company crawled in the last 14 days is actively
+    # being ingested (covers weekend/holiday gaps without flagging them stale).
+    _recent_sweep = "tc.last_swept_at >= now() - interval '14 days'"
     bucket_case = (
         "CASE "
+        f"  WHEN {_recent_sweep} THEN 'swept_zero_postings' "
         "  WHEN tc.ats_handle IS NULL OR tc.tier IS NULL THEN 'excluded_from_plan' "
-        "  WHEN tc.last_swept_at IS NULL THEN 'never_swept' "
-        "  ELSE 'swept_zero_postings' END"
+        "  ELSE 'never_swept' END"
     )
     q1 = (
         (
