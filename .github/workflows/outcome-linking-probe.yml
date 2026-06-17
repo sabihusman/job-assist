@@ -1,0 +1,52 @@
+name: Outcome-linking probe
+
+# Read-only feedback-loop coverage diagnostic. GETs
+# /admin/diagnostics/outcome-linking and prints the four result sets (outcome→
+# posting link rate overall + by type, complete posting+resume+outcome triples,
+# resume-attach coverage). Pure GET; no writes. Manual only.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Outcome-linking coverage
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Fetch + print coverage
+        run: |
+          echo "-- GET /admin/diagnostics/outcome-linking --"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/diagnostics/outcome-linking" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::diagnostic returned HTTP ${CODE}"
+            echo "$BODY"
+            exit 1
+          fi
+          echo
+          echo "=== 1. Overall (outcome_event → job_posting link rate) ==="
+          echo "$BODY" | jq '.q1_overall'
+          echo
+          echo "=== 2. By outcome_type ==="
+          echo "$BODY" | jq -r '.q2_by_outcome_type[] | "\(.outcome_type): total=\(.total) linked=\(.linked) pct=\(.pct_linked)"'
+          echo
+          echo "=== 3. Complete triples (posting + resume + outcome) ==="
+          echo "$BODY" | jq '.q3_complete_triples'
+          echo
+          echo "=== 4. Resume coverage (applications with a resume) ==="
+          echo "$BODY" | jq '.q4_resume_coverage'
