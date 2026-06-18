@@ -3510,6 +3510,30 @@
         }
       }
     },
+    "/admin/diagnostics/applied-corpus-embeddings": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Applied Corpus Embeddings Diagnostic",
+        "description": "Phase A2 STEP 1 (read-only inspection): characterize the applied-posting\nembeddings before choosing a comparison basis (centroid vs k-NN).\n\nApplied membership = ``resolved_status='applied'`` (same as the triple view):\n``COALESCE(manual application_state.status, CASE latest posting_action =\n'applied')``. Includes closed applied postings \u2014 revealed preference doesn't\nexpire when the board closes. Pure SELECT; no writes, no scoring.\n\n  * ``n_applied`` / ``n_with_embedding`` \u2014 total applied vs the usable basis\n    (non-NULL jd_embedding). The basis size is the signal's CONFIDENCE (n).\n  * ``applied`` \u2014 each applied posting (company, title, fit_score,\n    has_embedding) to eyeball topical coherence.\n  * ``pairwise`` \u2014 cosine sim among the basis embeddings (1 - (a <=> b)):\n    n_pairs, avg/min/max + a coarse histogram. Tight (high avg, narrow\n    spread) \u2192 one cluster \u2192 centroid; spread/bimodal \u2192 k-NN.\n  * ``per_posting_avg_sim`` \u2014 each basis posting's mean cosine to the others\n    (ascending), to spot outliers / separate clusters.",
+        "operationId": "applied_corpus_embeddings_diagnostic_admin_diagnostics_applied_corpus_embeddings_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Applied Corpus Embeddings Diagnostic Admin Diagnostics Applied Corpus Embeddings Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/diagnostics/no-candidate-breakdown": {
       "get": {
         "tags": [
