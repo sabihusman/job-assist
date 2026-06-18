@@ -58,6 +58,7 @@ optional decoration, not load-bearing.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from job_assist.db.enums import RoleFamily, SeniorityLevel
@@ -65,6 +66,10 @@ from job_assist.db.models.job_posting import JobPosting
 from job_assist.db.models.operator_profile import OperatorProfile
 
 logger = logging.getLogger(__name__)
+
+# Role-family hard gate cap (Bestiary 5.21). Named for the decomposition; the
+# value is unchanged from the historical inline literal.
+ROLE_GATE_CAP = 40
 
 
 # ── Version constant ─────────────────────────────────────────────────────────
@@ -480,18 +485,55 @@ def score_breakdown(
     }
 
 
-def score_posting(
+@dataclass(frozen=True, slots=True)
+class ScoreDecomposition:
+    """Full, self-explaining breakdown of one posting's fit_score.
+
+    Phase A1: makes the EXISTING computation legible. ``final`` is the
+    authoritative fit_score — ``score_posting`` returns exactly this — so the
+    decomposition reconciles to fit_score by construction (no separate math).
+    """
+
+    scorer_version: str
+    weights: dict[str, int]
+    sub_scores: dict[str, int | None]
+    present: list[str]
+    dropped: list[str]
+    total_weight: int
+    contributions: dict[str, int]
+    weighted_mean: float
+    score_pre_caps: int
+    caps: dict[str, dict[str, Any]]
+    final: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "scorer_version": self.scorer_version,
+            "weights": self.weights,
+            "sub_scores": self.sub_scores,
+            "present": self.present,
+            "dropped": self.dropped,
+            "total_weight": self.total_weight,
+            "contributions": self.contributions,
+            "weighted_mean": self.weighted_mean,
+            "score_pre_caps": self.score_pre_caps,
+            "caps": self.caps,
+            "final": self.final,
+        }
+
+
+def score_posting_decomposed(
     posting: JobPosting,
     profile: OperatorProfile,
     *,
     tier: int | None,
-) -> int:
-    """Compute the composite 0-100 fit score for a posting.
+) -> ScoreDecomposition:
+    """Compute the composite score AND its full decomposition (single source
+    of truth). Pure function of (posting, profile, tier). Deterministic, no I/O.
 
-    Pure function of (posting, profile, tier). Deterministic. No I/O.
-
-    See module docstring for the mock seam contract — tests monkey-patch
-    ``job_assist.services.scoring.score_posting`` to inject stubs.
+    Phase A1 refactor: this holds the math that ``score_posting`` used to inline.
+    ``score_posting`` now returns ``.final`` — byte-for-byte identical output,
+    locked by the unchanged-output test matrix.
     """
     parts = score_breakdown(posting, profile, tier=tier)
     # Weighted MEAN over the AVAILABLE weighted features (iterating ``_WEIGHTS``
@@ -501,36 +543,78 @@ def score_posting(
     # scores on the structured features alone — no fake signal — and gains the
     # semantic blend once ``similarity_score`` lands (re-scored on the
     # embedding-sweep tail / profile-save hook).
+    sub_scores: dict[str, int | None] = {}
+    contributions: dict[str, int] = {}
+    present: list[str] = []
+    dropped: list[str] = []
     acc = 0.0
     total_weight = 0
     for key, weight in _WEIGHTS.items():
         value = parts[key]
+        sub_scores[key] = None if value is None else int(value)
         if value is None:
+            dropped.append(key)
             continue
-        acc += int(value) * weight
+        contributions[key] = int(value) * weight
+        acc += contributions[key]
         total_weight += weight
+        present.append(key)
     weighted = acc / total_weight if total_weight else 0.0
-    score = max(0, min(100, round(weighted)))
+    score_pre_caps = max(0, min(100, round(weighted)))
+    score = score_pre_caps
 
     # Hard gate (Bestiary 5.21): role_family is a DISQUALIFYING attribute, not
     # a weighted factor. A wrong-role posting (program_management, product_
     # marketing, other) at a Tier-1 company in-geo would otherwise ride the
     # other 75% of weight to a high composite and dominate Best Fit. Cap it at
-    # 40 so every genuine PM role outranks it. role_family is NOT NULL on the
-    # model (defaults to ``other``), so this is a clean membership test — no
-    # NULL case. ``other`` rows mis-bucketed by the ingest regex self-heal:
-    # the classifier cron upgrades them to a PM family and re-scores.
-    if str(posting.role_family) not in PREFERRED_FAMILIES:
-        score = min(score, 40)
+    # ROLE_GATE_CAP so every genuine PM role outranks it. role_family is NOT
+    # NULL on the model (defaults to ``other``), so this is a clean membership
+    # test — no NULL case. ``other`` rows mis-bucketed by the ingest regex
+    # self-heal: the classifier cron upgrades them to a PM family and re-scores.
+    role_gate_fired = str(posting.role_family) not in PREFERRED_FAMILIES
+    if role_gate_fired:
+        score = min(score, ROLE_GATE_CAP)
 
-    # Disguised-senior altitude cap (career-changer correction): a PM
-    # role under-leveled to pm/unknown but posting a senior USD comp
-    # floor is capped at 55 so it can't surface as a top pick. Soft (not
-    # excluded) — composes via min() with the gate above. Mirrors the
-    # gate pattern. See ``is_disguised_senior`` for the precision logic.
-    if is_disguised_senior(posting):
+    # Disguised-senior altitude cap (career-changer correction): a PM role
+    # under-leveled to pm/unknown but posting a senior USD comp floor is capped
+    # at 55 so it can't surface as a top pick. Soft (not excluded) — composes
+    # via min() with the gate above. See ``is_disguised_senior``.
+    disguised = is_disguised_senior(posting)
+    if disguised:
         score = min(score, _DISGUISED_SENIOR_CAP)
-    return score
+
+    return ScoreDecomposition(
+        scorer_version=SCORER_VERSION,
+        weights=dict(_WEIGHTS),
+        sub_scores=sub_scores,
+        present=present,
+        dropped=dropped,
+        total_weight=total_weight,
+        contributions=contributions,
+        weighted_mean=weighted,
+        score_pre_caps=score_pre_caps,
+        caps={
+            "role_family_gate": {"fired": role_gate_fired, "cap": ROLE_GATE_CAP},
+            "disguised_senior": {"fired": disguised, "cap": _DISGUISED_SENIOR_CAP},
+        },
+        final=score,
+    )
+
+
+def score_posting(
+    posting: JobPosting,
+    profile: OperatorProfile,
+    *,
+    tier: int | None,
+) -> int:
+    """Compute the composite 0-100 fit score for a posting.
+
+    Pure function of (posting, profile, tier). Deterministic. No I/O. Returns
+    ``score_posting_decomposed(...).final`` — the decomposition is the single
+    source of truth; this wrapper preserves the historical int-returning API
+    and the mock seam.
+    """
+    return score_posting_decomposed(posting, profile, tier=tier).final
 
 
 def bucket_for_score(score: int | None) -> str:

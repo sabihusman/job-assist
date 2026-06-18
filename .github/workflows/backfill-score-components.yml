@@ -1,0 +1,49 @@
+name: Backfill score components
+
+# Ops tool (Phase A1): POST /admin/postings/backfill-score-components — writes
+# score_components on open postings whose recomputed decomposition reconciles to
+# the stored fit_score; leaves+counts "drifted" rows. NEVER changes fit_score.
+# Pure recompute, no LLM. apply=false is a no-op notice (the endpoint itself is
+# the action); set apply=true to run.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'false = notice only; true = run the backfill (writes components, never fit_score)'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    name: Backfill score_components (apply=${{ github.event.inputs.apply }})
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+      APPLY: ${{ github.event.inputs.apply }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Notice
+        if: ${{ github.event.inputs.apply != 'true' }}
+        run: echo "Set apply=true to run the backfill. It writes score_components only on reconcile and never changes fit_score."
+
+      - name: Run backfill
+        if: ${{ github.event.inputs.apply == 'true' }}
+        run: |
+          echo "POST /admin/postings/backfill-score-components"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 300 -X POST \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/postings/backfill-score-components" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          OUT=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          echo "$OUT" | jq .
+          if [ "$CODE" != "200" ]; then echo "::error::backfill returned HTTP ${CODE}"; exit 1; fi

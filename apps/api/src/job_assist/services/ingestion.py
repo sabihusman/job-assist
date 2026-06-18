@@ -396,14 +396,15 @@ class IngestionService:
         if operator_profile is None:
             return
         try:
-            from job_assist.services.scoring import SCORER_VERSION, score_posting
+            from job_assist.services.scoring import SCORER_VERSION, score_posting_decomposed
 
-            new_score = score_posting(
+            _decomp = score_posting_decomposed(
                 job_posting,
                 operator_profile,
                 tier=(target_company.tier if target_company else None),
             )
-            job_posting.fit_score = new_score
+            job_posting.fit_score = _decomp.final
+            job_posting.score_components = _decomp.to_dict()
             job_posting.scored_at = datetime.now(tz=UTC)
             job_posting.scorer_version = SCORER_VERSION
         except Exception as exc:

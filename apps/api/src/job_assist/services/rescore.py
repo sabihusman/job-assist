@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
 from job_assist.db.models import JobPosting, OperatorProfile, TargetCompany
-from job_assist.services.scoring import SCORER_VERSION, score_posting
+from job_assist.services.scoring import SCORER_VERSION, score_posting_decomposed
 
 # Rows loaded into memory per pass. Small enough that peak memory stays flat on
 # a tiny instance; large enough that the pass count (and commit count) stays
@@ -93,13 +93,15 @@ async def rescore_open_postings(
         now = datetime.now(tz=UTC)
         for posting, tier in rows:
             try:
-                new_score = score_posting(posting, profile, tier=tier)
+                _decomp = score_posting_decomposed(posting, profile, tier=tier)
+                new_score = _decomp.final
             except Exception:
                 # A per-row scoring failure must not abort the batch.
                 continue
             if new_score != posting.fit_score:
                 changed += 1
             posting.fit_score = new_score
+            posting.score_components = _decomp.to_dict()
             posting.scorer_version = SCORER_VERSION
             posting.scored_at = now
             rescored += 1

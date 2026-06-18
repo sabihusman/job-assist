@@ -761,6 +761,66 @@ async def reeval_hard_rules_endpoint(db: DbSession) -> dict[str, Any]:
     }
 
 
+@app.post("/admin/postings/backfill-score-components", tags=["admin"])
+async def backfill_score_components_endpoint(db: DbSession) -> dict[str, Any]:
+    """Phase A1 backfill (option a — components-only + drift flag).
+
+    For each OPEN posting with a non-NULL ``fit_score``, recompute the score
+    decomposition with the CURRENT profile and write ``score_components`` ONLY
+    when ``decomposition.final == stored fit_score`` (reconciled). Rows whose
+    recompute disagrees ("drifted" — the profile changed since the row was last
+    scored) are LEFT UNTOUCHED and counted, never rewritten — this endpoint
+    NEVER changes ``fit_score`` (hard constraint). Pure recompute, no LLM.
+
+    Returns ``reconciled`` (written), ``drifted`` (left), ``skipped`` (no
+    fit_score / no profile-tier), and ``total``.
+    """
+    from sqlalchemy import select
+
+    from job_assist.db.models import JobPosting, OperatorProfile, TargetCompany
+    from job_assist.services.scoring import score_posting_decomposed
+
+    operator_profile = (
+        await db.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
+    ).scalar_one_or_none()
+    if operator_profile is None:
+        raise HTTPException(status_code=400, detail="operator_profile is unseeded")
+
+    rows = (
+        await db.execute(
+            select(JobPosting, TargetCompany.tier)
+            .outerjoin(TargetCompany, JobPosting.target_company_id == TargetCompany.id)
+            .where(JobPosting.closed_at.is_(None))
+        )
+    ).all()
+
+    reconciled = 0
+    drifted = 0
+    skipped = 0
+    for posting, tier in rows:
+        if posting.fit_score is None:
+            skipped += 1
+            continue
+        try:
+            decomp = score_posting_decomposed(posting, operator_profile, tier=tier)
+        except Exception:
+            skipped += 1
+            continue
+        if decomp.final == posting.fit_score:
+            posting.score_components = decomp.to_dict()  # write only on reconcile
+            reconciled += 1
+        else:
+            drifted += 1  # profile drifted since last score — leave fit_score + components
+
+    await db.commit()
+    return {
+        "total": len(rows),
+        "reconciled": reconciled,
+        "drifted": drifted,
+        "skipped": skipped,
+    }
+
+
 @app.post("/admin/postings/reparse-salary", tags=["admin"])
 async def reparse_salary_endpoint(db: DbSession) -> dict[str, Any]:
     """Re-run ``parse_compensation`` on ``jd_text`` for open Greenhouse-sourced
@@ -2353,7 +2413,7 @@ async def reclassify_sweep_endpoint(
         build_profile_context,
         classify_posting,
     )
-    from job_assist.services.scoring import SCORER_VERSION, score_posting
+    from job_assist.services.scoring import SCORER_VERSION, score_posting_decomposed
 
     # ── 1. Select candidates ──────────────────────────────────────────────
     # Skip stale/closed postings (Bestiary 5.18) — don't burn LLM calls
@@ -2463,11 +2523,13 @@ async def reclassify_sweep_endpoint(
                         )
                     )
                     tier_value = tier_row.scalar_one_or_none()
-                posting.fit_score = score_posting(
+                _decomp = score_posting_decomposed(
                     posting,
                     operator_profile,
                     tier=tier_value,
                 )
+                posting.fit_score = _decomp.final
+                posting.score_components = _decomp.to_dict()
                 posting.scored_at = datetime.now(tz=UTC)
                 posting.scorer_version = SCORER_VERSION
             except Exception as exc:
@@ -2558,7 +2620,11 @@ async def score_sweep_endpoint(
     from job_assist.db.models.operator_profile import OperatorProfile
     from job_assist.db.models.target_company import TargetCompany
     from job_assist.schemas.score import ScoreDistribution
-    from job_assist.services.scoring import SCORER_VERSION, bucket_for_score, score_posting
+    from job_assist.services.scoring import (
+        SCORER_VERSION,
+        bucket_for_score,
+        score_posting_decomposed,
+    )
 
     # ── 0. Load operator profile (one read per sweep) ────────────────────
     op_row = await db.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
@@ -2621,7 +2687,8 @@ async def score_sweep_endpoint(
         old_score = posting.fit_score
 
         try:
-            new_score = score_posting(posting, operator_profile, tier=tier)
+            _decomp = score_posting_decomposed(posting, operator_profile, tier=tier)
+            new_score = _decomp.final
         except Exception as exc:
             logger.warning(
                 "score_sweep.row_failed",
@@ -2634,6 +2701,7 @@ async def score_sweep_endpoint(
             continue
 
         posting.fit_score = new_score
+        posting.score_components = _decomp.to_dict()
         posting.scorer_version = SCORER_VERSION
         posting.scored_at = datetime.now(tz=UTC)
 
@@ -5639,6 +5707,69 @@ async def semantic_readiness_diagnostic(db: DbSession) -> dict[str, Any]:
             ),
         },
         "open_similarity_score": {k: int(v) for k, v in dict(sim).items()},
+    }
+
+
+@app.get("/admin/diagnostics/score-decomposition", tags=["admin"])
+async def score_decomposition_diagnostic(db: DbSession) -> dict[str, Any]:
+    """Read-only Phase A1 reconciliation check for ``score_components``.
+
+    Over OPEN postings: how many have score_components, and of those, how many
+    reconcile (``(score_components->>'final')::int == fit_score``) vs mismatch
+    (should be 0 — components are written only on reconcile + always alongside
+    fit_score). Also counts open rows still missing components (NULL — not yet
+    backfilled / drifted) and returns a few sample decompositions verbatim.
+    Pure SELECT; no writes.
+    """
+    from sqlalchemy import text
+
+    counts = (
+        (
+            await db.execute(
+                text(
+                    "SELECT "
+                    "  COUNT(*) AS open_total, "
+                    "  COUNT(*) FILTER (WHERE fit_score IS NOT NULL) AS open_scored, "
+                    "  COUNT(score_components) AS with_components, "
+                    "  COUNT(*) FILTER (WHERE score_components IS NULL "
+                    "    AND fit_score IS NOT NULL) AS scored_without_components, "
+                    "  COUNT(*) FILTER (WHERE score_components IS NOT NULL "
+                    "    AND (score_components->>'final')::int = fit_score) AS reconciled, "
+                    "  COUNT(*) FILTER (WHERE score_components IS NOT NULL "
+                    "    AND (score_components->>'final')::int <> fit_score) AS mismatched "
+                    "FROM job_posting WHERE closed_at IS NULL"
+                )
+            )
+        )
+        .mappings()
+        .one()
+    )
+
+    samples = (
+        (
+            await db.execute(
+                text(
+                    "SELECT id, fit_score, score_components "
+                    "FROM job_posting "
+                    "WHERE closed_at IS NULL AND score_components IS NOT NULL "
+                    "ORDER BY fit_score DESC NULLS LAST LIMIT 3"
+                )
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+    return {
+        "counts": {k: int(v) for k, v in dict(counts).items()},
+        "samples": [
+            {
+                "id": str(s["id"]),
+                "fit_score": s["fit_score"],
+                "score_components": s["score_components"],
+            }
+            for s in samples
+        ],
     }
 
 

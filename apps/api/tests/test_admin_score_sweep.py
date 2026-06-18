@@ -31,6 +31,18 @@ from sqlalchemy import select
 
 from job_assist.db.models import JobPosting, OperatorProfile, TargetCompany
 
+
+class _StubDecomp:
+    """Minimal stand-in for ScoreDecomposition — the score sweep reads .final
+    and .to_dict() off the value returned by score_posting_decomposed."""
+
+    def __init__(self, final: int) -> None:
+        self.final = final
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"final": self.final}
+
+
 _NEEDS_DB = pytest.mark.skipif(
     not os.getenv("TEST_DATABASE_URL"),
     reason="TEST_DATABASE_URL not set",
@@ -99,14 +111,14 @@ def _patch_score(
     """
     calls: list[int] = call_counter if call_counter is not None else []
 
-    def _stub(posting: Any, profile: Any, *, tier: int | None) -> int:
+    def _stub(posting: Any, profile: Any, *, tier: int | None) -> _StubDecomp:
         calls.append(1)
         n = len(calls)
         if fail_on_call is not None and n == fail_on_call:
             raise RuntimeError("simulated scoring failure")
-        return score_value
+        return _StubDecomp(score_value)
 
-    monkeypatch.setattr("job_assist.services.scoring.score_posting", _stub)
+    monkeypatch.setattr("job_assist.services.scoring.score_posting_decomposed", _stub)
     # main.py imports score_posting via a lazy import inside the endpoint
     # body, so patching the source module is enough — lazy imports re-bind
     # the name each call.
@@ -397,10 +409,10 @@ async def test_sweep_failed_row_preserves_previous_score(
     """A row whose scoring call fails keeps its previous fit_score."""
     from job_assist.main import app
 
-    def _always_raise(posting: Any, profile: Any, *, tier: int | None) -> int:
+    def _always_raise(posting: Any, profile: Any, *, tier: int | None) -> _StubDecomp:
         raise RuntimeError("always fails")
 
-    monkeypatch.setattr("job_assist.services.scoring.score_posting", _always_raise)
+    monkeypatch.setattr("job_assist.services.scoring.score_posting_decomposed", _always_raise)
     await _seed_operator_profile(db_session)
 
     tc = _company()
@@ -490,11 +502,11 @@ async def test_sweep_stable_tiebreaker_on_same_second_first_seen_at(
     # id-ascending order despite identical first_seen_at.
     visited_ids: list[str] = []
 
-    def _stub(posting: Any, profile: Any, *, tier: int | None) -> int:
+    def _stub(posting: Any, profile: Any, *, tier: int | None) -> _StubDecomp:
         visited_ids.append(str(posting.id))
-        return 50
+        return _StubDecomp(50)
 
-    monkeypatch.setattr("job_assist.services.scoring.score_posting", _stub)
+    monkeypatch.setattr("job_assist.services.scoring.score_posting_decomposed", _stub)
     await _seed_operator_profile(db_session)
 
     tc = _company()

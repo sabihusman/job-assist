@@ -467,6 +467,30 @@
         }
       }
     },
+    "/admin/postings/backfill-score-components": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Backfill Score Components Endpoint",
+        "description": "Phase A1 backfill (option a \u2014 components-only + drift flag).\n\nFor each OPEN posting with a non-NULL ``fit_score``, recompute the score\ndecomposition with the CURRENT profile and write ``score_components`` ONLY\nwhen ``decomposition.final == stored fit_score`` (reconciled). Rows whose\nrecompute disagrees (\"drifted\" \u2014 the profile changed since the row was last\nscored) are LEFT UNTOUCHED and counted, never rewritten \u2014 this endpoint\nNEVER changes ``fit_score`` (hard constraint). Pure recompute, no LLM.\n\nReturns ``reconciled`` (written), ``drifted`` (left), ``skipped`` (no\nfit_score / no profile-tier), and ``total``.",
+        "operationId": "backfill_score_components_endpoint_admin_postings_backfill_score_components_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Backfill Score Components Endpoint Admin Postings Backfill Score Components Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/postings/reparse-salary": {
       "post": {
         "tags": [
@@ -3431,6 +3455,30 @@
                   "additionalProperties": true,
                   "type": "object",
                   "title": "Response Semantic Readiness Diagnostic Admin Diagnostics Semantic Readiness Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/diagnostics/score-decomposition": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Score Decomposition Diagnostic",
+        "description": "Read-only Phase A1 reconciliation check for ``score_components``.\n\nOver OPEN postings: how many have score_components, and of those, how many\nreconcile (``(score_components->>'final')::int == fit_score``) vs mismatch\n(should be 0 \u2014 components are written only on reconcile + always alongside\nfit_score). Also counts open rows still missing components (NULL \u2014 not yet\nbackfilled / drifted) and returns a few sample decompositions verbatim.\nPure SELECT; no writes.",
+        "operationId": "score_decomposition_diagnostic_admin_diagnostics_score_decomposition_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Score Decomposition Diagnostic Admin Diagnostics Score Decomposition Get"
                 }
               }
             }
