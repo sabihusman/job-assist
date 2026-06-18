@@ -22,7 +22,7 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from job_assist.db.models import OutcomeEvent, TargetCompany
+from job_assist.db.models import ApplicationResume, JobPosting, OutcomeEvent, TargetCompany
 
 _NEEDS_DB = pytest.mark.skipif(
     not os.getenv("TEST_DATABASE_URL"),
@@ -150,7 +150,7 @@ async def test_outcome_linking_diagnostic_runs_all_four_queries(db_session: Any)
 
     # q3 / q4: run without fixtures → 0 / shape only (no resume or application rows).
     assert d["q3_complete_triples"] == 0
-    assert set(d["q4_resume_coverage"].keys()) == {"total_applications", "with_resume"}
+    assert set(d["q4_resume_coverage"].keys()) == {"total_resumes", "with_resume_text"}
 
 
 @_NEEDS_DB
@@ -307,3 +307,55 @@ async def test_rag_corpus_diagnostic_runs_all_queries(db_session: Any) -> None:
         "with_file_blob",
         "blob_only_no_text",
     }
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_q4_counts_application_resume_directly_not_application_state(
+    db_session: Any,
+) -> None:
+    """q4 anchor fix: resume coverage counts application_resume DIRECTLY, so it
+    reflects the true resume count even with ZERO application_state rows (the
+    apply button writes posting_action, not application_state)."""
+    from datetime import UTC, datetime
+
+    from job_assist.main import app
+
+    now = datetime.now(tz=UTC)
+
+    def _posting(suffix: str) -> JobPosting:
+        return JobPosting(
+            canonical_company_name="Co",
+            normalized_title="pm",
+            raw_title="PM",
+            remote_type="remote",
+            role_family="product_management",
+            seniority_level="pm",
+            jd_text="x",
+            jd_text_hash="0" * 64,
+            content_hash=f"h-{suffix}",
+            first_seen_at=now,
+            last_seen_at=now,
+        )
+
+    postings = [_posting("a"), _posting("b"), _posting("c")]
+    db_session.add_all(postings)
+    await db_session.flush()
+    # 3 resumes; only 1 carries non-empty resume_text. NO application_state rows.
+    db_session.add_all(
+        [
+            ApplicationResume(
+                job_posting_id=postings[0].id, file_name="a.docx", resume_text="full"
+            ),
+            ApplicationResume(job_posting_id=postings[1].id, file_name="b.docx", resume_text=""),
+            ApplicationResume(job_posting_id=postings[2].id, file_name="c.docx"),
+        ]
+    )
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/admin/diagnostics/outcome-linking")
+    assert resp.status_code == 200, resp.text
+    q4 = resp.json()["q4_resume_coverage"]
+    assert q4["total_resumes"] == 3  # counts application_resume, not application_state (0)
+    assert q4["with_resume_text"] == 1
