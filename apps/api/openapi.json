@@ -3366,6 +3366,30 @@
         }
       }
     },
+    "/admin/diagnostics/ingest-scoring": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Ingest Scoring Diagnostic",
+        "description": "Read-only: recent ingest volume + high-fit open-posting readiness.\n\nPure SELECT; no writes.\n\n  * ``q1_ingested_last_7d`` \u2014 job_posting rows first seen in the last 7 days.\n    Ingest time is ``first_seen_at`` (server-default now() at ingest; there\n    is no ``created_at`` column).\n  * ``q2_open_high_fit`` \u2014 currently-OPEN postings (``closed_at IS NULL``)\n    with ``fit_score >= 80``, broken down by enrichment status. fit_score is\n    heuristics-only until the sweeps run, so this shows how many high-fit\n    rows are still un-classified / un-embedded: ``classified`` =\n    ``classified_at IS NOT NULL`` (the LLM reclassify sweep ran);\n    ``embedded`` = ``embedded_at IS NOT NULL`` (the embeddings sweep ran).\n    Includes a 2x2 cross-tab so the \"neither\" backlog is visible.",
+        "operationId": "ingest_scoring_diagnostic_admin_diagnostics_ingest_scoring_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Ingest Scoring Diagnostic Admin Diagnostics Ingest Scoring Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/diagnostics/no-candidate-breakdown": {
       "get": {
         "tags": [

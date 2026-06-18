@@ -1,0 +1,46 @@
+name: Ingest scoring probe
+
+# Read-only: GETs /admin/diagnostics/ingest-scoring and prints (1) job_posting
+# rows first_seen in the last 7 days and (2) open postings (closed_at IS NULL)
+# with fit_score >= 80, broken down by classified/embedded status. Pure GET; no
+# writes.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Ingest + scoring readiness
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Fetch + print
+        run: |
+          echo "-- GET /admin/diagnostics/ingest-scoring --"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/diagnostics/ingest-scoring" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::diagnostic returned HTTP ${CODE}"
+            echo "$BODY"
+            exit 1
+          fi
+          echo
+          echo "=== 1. job_posting ingested in last 7 days (first_seen_at) ==="
+          echo "$BODY" | jq '.q1_ingested_last_7d'
+          echo
+          echo "=== 2. open postings (closed_at IS NULL) with fit_score >= 80 ==="
+          echo "$BODY" | jq '.q2_open_high_fit'
