@@ -5988,6 +5988,107 @@ async def applied_corpus_embeddings_diagnostic(db: DbSession) -> dict[str, Any]:
     }
 
 
+@app.get("/admin/diagnostics/applied-similarity", tags=["admin"])
+async def applied_similarity_diagnostic(db: DbSession) -> dict[str, Any]:
+    """Phase A2 (read-only exposure): applied-corpus similarity for open postings.
+
+    Revealed-preference signal — how close a posting is to the set the operator
+    actually applied to. Basis = CENTROID (mean) of the applied jd_embeddings,
+    over applied (resolved_status='applied') AND NOT role-gated (fit_score > 40,
+    so a gated CSM can't define "what good looks like"). Step 1 showed one tight
+    cluster (avg pairwise 0.76), so centroid (not k-NN) is the right basis.
+
+    For each open posting: ``applied_corpus_sim = 1 - (jd_embedding <=> centroid)``
+    (cosine; `<=>` is magnitude-invariant so the centroid needn't be
+    renormalized). Centroid is computed on read — no stored column — so it tracks
+    the growing corpus. ``n`` (basis size) is returned for CONFIDENCE; with n~16
+    this is thin/low-confidence and strengthens as the corpus grows. Same blind
+    spot as semantic_fit: TOPICAL similarity only, no negative/exclude prefs.
+
+    HARD CONSTRAINT: pure SELECT. Does NOT write score_components, does NOT touch
+    fit_score, does NOT blend — A3 owns blending.
+    """
+    from sqlalchemy import func, select, text
+
+    from job_assist.db.models import JobPosting, TargetCompany
+
+    # 1. Filtered applied basis ids: applied membership AND not role-gated.
+    applied_ids = (
+        (
+            await db.execute(
+                text(
+                    "SELECT jp.id FROM job_posting jp "
+                    "WHERE jp.jd_embedding IS NOT NULL AND jp.fit_score > 40 "
+                    "  AND COALESCE("
+                    "    (SELECT status FROM application_state WHERE job_posting_id = jp.id LIMIT 1), "
+                    "    CASE WHEN (SELECT action_type FROM posting_action "
+                    "               WHERE job_posting_id = jp.id ORDER BY created_at DESC LIMIT 1) "
+                    "             = 'applied' THEN 'applied' END) = 'applied'"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    n = len(applied_ids)
+    if n == 0:
+        return {"n": 0, "reference_band": None, "top": [], "bottom": [], "note": "empty basis"}
+
+    # 2. Centroid = elementwise mean of the basis embeddings (Python — robust,
+    #    no dependency on pgvector avg(vector)).
+    emb_rows = (
+        (await db.execute(select(JobPosting.jd_embedding).where(JobPosting.id.in_(applied_ids))))
+        .scalars()
+        .all()
+    )
+    vecs = [[float(x) for x in v] for v in emb_rows if v is not None]
+    m = len(vecs)  # == n (basis was filtered to jd_embedding NOT NULL), guard anyway
+    dim = len(vecs[0])
+    centroid = [sum(v[i] for v in vecs) / m for i in range(dim)]
+
+    dist = JobPosting.jd_embedding.cosine_distance(centroid)
+
+    # 3. Reference band: avg cosine of the basis to its own centroid (how tight
+    #    the basis is around its center — the interpretive band for scores).
+    ref_dist = (
+        await db.execute(select(func.avg(dist)).where(JobPosting.id.in_(applied_ids)))
+    ).scalar()
+    reference_band = round(1.0 - float(ref_dist), 4) if ref_dist is not None else None
+
+    # 4. Open postings ranked by applied_corpus_sim (top 50 + bottom 10).
+    sim_col = (1.0 - dist).label("applied_corpus_sim")
+    base = (
+        select(
+            func.coalesce(TargetCompany.name, JobPosting.canonical_company_name).label("company"),
+            JobPosting.normalized_title.label("title"),
+            JobPosting.fit_score,
+            sim_col,
+        )
+        .outerjoin(TargetCompany, JobPosting.target_company_id == TargetCompany.id)
+        .where(JobPosting.closed_at.is_(None))
+        .where(JobPosting.jd_embedding.is_not(None))
+    )
+
+    def _ser(r: Any) -> dict[str, Any]:
+        return {
+            "company": r.company,
+            "title": r.title,
+            "fit_score": r.fit_score,
+            "applied_corpus_sim": round(float(r.applied_corpus_sim), 4),
+        }
+
+    top = (await db.execute(base.order_by(dist.asc()).limit(50))).all()
+    bottom = (await db.execute(base.order_by(dist.desc()).limit(10))).all()
+
+    return {
+        "basis": "centroid of applied (resolved_status='applied') AND fit_score > 40",
+        "n": n,
+        "reference_band": reference_band,
+        "top": [_ser(r) for r in top],
+        "bottom": [_ser(r) for r in bottom],
+    }
+
+
 @app.get("/admin/diagnostics/no-candidate-breakdown", tags=["admin"])
 async def no_candidate_breakdown(db: DbSession) -> dict[str, Any]:
     """Read-only: why the outcome→posting matcher's ``no_candidate`` bucket is

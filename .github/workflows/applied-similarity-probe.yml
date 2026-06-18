@@ -1,0 +1,49 @@
+name: Applied similarity probe
+
+# Read-only (Phase A2): GETs /admin/diagnostics/applied-similarity — open
+# postings ranked by applied_corpus_sim (cosine to the centroid of the filtered
+# applied basis), with fit_score alongside. Prints n (basis size), the
+# reference band, top ~50 and bottom ~10. Pure GET; no writes, no scoring.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Applied similarity
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Fetch + print
+        run: |
+          echo "-- GET /admin/diagnostics/applied-similarity --"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/diagnostics/applied-similarity" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::diagnostic returned HTTP ${CODE}"
+            echo "$BODY"
+            exit 1
+          fi
+          echo
+          echo "=== basis ==="
+          echo "$BODY" | jq '{basis, n, reference_band}'
+          echo
+          echo "=== TOP ~50 by applied_corpus_sim (sim | fit_score | company — title) ==="
+          echo "$BODY" | jq -r '.top[] | "\(.applied_corpus_sim)  fit=\(.fit_score)  \(.company) — \(.title)"'
+          echo
+          echo "=== BOTTOM ~10 ==="
+          echo "$BODY" | jq -r '.bottom[] | "\(.applied_corpus_sim)  fit=\(.fit_score)  \(.company) — \(.title)"'
