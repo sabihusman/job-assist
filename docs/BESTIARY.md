@@ -184,6 +184,20 @@ PR #58's per-company cap defaulted to 3. Every UI call hit the broken code path.
 
 (Cross-reference 1.2 — same lesson stated from the schema side.) Tables with exactly-one seeded row are shared session state. Tests that need to assert "unseeded behavior" either roll the seed back at end (brittle if the test fails mid-flight) or accept they can't be expressed safely.
 
+### 2.11 A `defer()`'d column read inside a pure async scorer triggers a lazy load
+
+The score sweep and rescore queries `defer(JobPosting.jd_embedding)` to keep the sweep light. When the A3 applied-corpus boost turned on, `score_posting_decomposed` started reading `posting.jd_embedding` — a deferred attribute, which in async SQLAlchemy lazy-loads and raises `MissingGreenlet`. Fix: undefer conditionally — `defer(jd_embedding)` only when the boost is OFF (`applied_basis is None`); load it when the feature actually reads it. Corollary: keep the scorer pure by injecting the corpus-level basis (computed once per sweep), not by querying inside it.
+
+**Discovered in:** Phase A3 (#248).
+
+**Rule:** a column a feature reads must not be `defer()`'d on that feature's path; gate the defer on whether the feature is active.
+
+### 2.12 A corpus-level artifact computed per-row is an N-query trap
+
+The applied-corpus centroid (mean of ~16 embeddings) is a property of the whole corpus, not a posting. Computing it inside the per-posting scorer would be one query per row. Load it ONCE before the loop and inject it (`AppliedBasis`); the pure scorer stays I/O-free and the cost is one query per sweep, not per posting.
+
+**Discovered in:** Phase A3 (#248).
+
 ---
 
 ## 3. Frontend / Mutation Bestiary
@@ -607,6 +621,18 @@ Discovered in: PR B enrichment-reliability work, after the manual 1,730-row JD-s
 The scorer gave role_family mismatch partial credit (ADJACENT=60, other=10 of 100) inside a weighted composite. A wrong-role posting (program_management) at a Tier-1 company in-geo still scored ~75 — high enough to dominate Best Fit — because the other 75% of weight (tier, geo, seniority) carried it despite the role being disqualifying. Fixing the classifier alone made it WORSE: correctly relabeling other(10)→program_management(60) raised the mismatched score. Lesson: a disqualifying attribute needs a hard gate (cap the composite), not partial credit inside a weighted sum. Weighted sums are for trading off comparable factors; a wrong-role posting isn't a weaker-PM posting, it's a non-candidate. Gate it, don't weight it.
 
 Discovered in: PR C triage-quality work — capping the composite at 40 for any role_family not in PREFERRED_FAMILIES (product_management, product_owner).
+
+### 5.22 Ruff flags ambiguous Unicode in comments/docstrings (RUF002/003)
+
+Writing math symbols in new comments/docstrings — `×`, `≥`, `⇒`, `‖` — fails ruff (`RUF003` for comments, `RUF002` for docstrings) because they're confusable with ASCII. Use ASCII: `x`/`*`, `>=`, `=>`, `|`. (Sibling to 5.6 — same family, different trigger.) The `→` already used elsewhere is allowed by the project config; the multiplication sign is not.
+
+**Discovered in:** Phase A3 (#248 — `×` in the boost-formula comments).
+
+### 5.23 A local variable reusing a loop variable's name inherits its inferred type
+
+`score_posting_decomposed` had `for key, weight in _WEIGHTS.items()` (weight: int), then later `weight = float(profile.applied_corpus_weight)` — mypy errored "float assigned to int" because the name was already bound to int from the loop. Rename the later local (`ac_weight`). Loop variables leak their type into the enclosing function scope for mypy.
+
+**Discovered in:** Phase A3 (#248).
 
 ---
 

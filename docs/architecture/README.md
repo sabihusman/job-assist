@@ -35,6 +35,11 @@ to show the same nodes, edges, and flows — they can't drift from each other.
   rescores; every LLM call is one-way).
 - **Last verified:** 2026-06-08, against `main`. Every Mermaid diagram was parsed and
   rendered through Mermaid itself during verification (all render, zero errors).
+- **Source updated 2026-06-18:** the Scoring & Embeddings subsystem (§2) now reflects
+  Version A — `score_posting_decomposed` + `score_components` (A1) and the applied-corpus
+  surgical boost behind `applied_corpus_weight` (A3, default 0). **`job-assist-architecture.html`
+  and `.pdf` are generated from the `.md` and have NOT been rebuilt for this edit** — run the
+  regen steps below before relying on the rendered artifacts.
 
 > If you change a wire in code, update `job-assist-architecture.md` and regenerate. The map
 > is only as honest as its last trace.
