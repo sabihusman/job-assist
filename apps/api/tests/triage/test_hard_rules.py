@@ -23,7 +23,7 @@ from job_assist.db.enums import (
 )
 from job_assist.db.models import ClosedChannel, JobPosting, TargetCompany
 from job_assist.triage.config import HardRuleConfig
-from job_assist.triage.hard_rules import FilterResult, apply_hard_rules
+from job_assist.triage.hard_rules import FilterResult, _remote_kind, apply_hard_rules
 
 # ── Builders ──────────────────────────────────────────────────────────────────
 
@@ -210,6 +210,107 @@ class TestGeo:
         """No location string at all — skip the geo rule rather than failing."""
         result = apply_hard_rules(_posting(location_raw=None), _target())
         assert result.passed is True
+
+
+# ── US-vs-non-US remote discrimination (geo gate) ─────────────────────────────
+# These use a whitelist WITHOUT "Remote" (mirroring the live prod profile,
+# which is states/cities only). So a US/unspecified-remote role can ONLY pass
+# via _remote_kind, and a region-qualified non-US remote has nothing to match
+# and must FAIL — proving both directions independently of the whitelist.
+
+_NO_REMOTE_WL = HardRuleConfig(geo_whitelist=("new york", "boston"))
+
+_US_REMOTE_PASS = [
+    "Remote",
+    "Fully Remote",
+    "100% Remote",
+    "Remote Position",
+    "US Remote",
+    "Remote - US",
+    "Remote, US",
+    "Remote (US)",
+    "Remote - United States",
+    "United States Remote",
+    "United States, Remote",
+    "Remote, USA",
+    "Remote (USA)",
+    "Remote (U.S.)",
+]
+
+_NON_US_REMOTE_FAIL = [
+    "Remote - India",
+    "Remote (Canada)",
+    "Canada Remote",
+    "EMEA Remote",
+    "APAC Remote",
+    "Remote - LATAM",
+    "Remote - Europe",
+    "Remote, UK",
+    "Remote - Germany",
+    "Remote (Toronto)",
+    "Remote - North America",  # ambiguous → FAIL by design
+    "Remote - Americas",  # ambiguous → FAIL by design
+]
+
+
+class TestGeoRemoteDiscrimination:
+    @pytest.mark.parametrize("location", _US_REMOTE_PASS)
+    def test_us_or_unspecified_remote_passes(self, location: str) -> None:
+        # Whitelist has no "Remote" — pass can ONLY come from _remote_kind.
+        result = apply_hard_rules(_posting(location_raw=location), _target(), None, _NO_REMOTE_WL)
+        assert result.passed is True, f"{location!r} should pass geo"
+
+    @pytest.mark.parametrize("location", _NON_US_REMOTE_FAIL)
+    def test_region_qualified_non_us_remote_fails(self, location: str) -> None:
+        result = apply_hard_rules(_posting(location_raw=location), _target(), None, _NO_REMOTE_WL)
+        assert result.passed is False, f"{location!r} should fail geo"
+        assert result.failed_rule == "geo_whitelist"
+
+    def test_remote_india_regression_fails(self) -> None:
+        """The current loose-substring bug: 'Remote - India' must NOT pass."""
+        r = apply_hard_rules(
+            _posting(location_raw="Remote - India"), _target(), None, _NO_REMOTE_WL
+        )
+        assert r.passed is False and r.failed_rule == "geo_whitelist"
+
+    def test_emea_remote_regression_fails(self) -> None:
+        r = apply_hard_rules(_posting(location_raw="EMEA Remote"), _target(), None, _NO_REMOTE_WL)
+        assert r.passed is False and r.failed_rule == "geo_whitelist"
+
+    def test_us_remote_surfaces_with_no_remote_whitelist(self) -> None:
+        """The fix: 'US Remote' / 'United States, Remote' surface even though
+        the whitelist has no Remote entry."""
+        for loc in ("US Remote", "United States, Remote"):
+            r = apply_hard_rules(_posting(location_raw=loc), _target(), None, _NO_REMOTE_WL)
+            assert r.passed is True, f"{loc!r} should surface"
+
+    def test_existing_correct_gating_unchanged(self) -> None:
+        """Onsite non-whitelisted (Pune) and Toronto stay gated."""
+        for loc in ("Pune, Maharashtra", "Toronto", "Toronto, Ontario"):
+            r = apply_hard_rules(_posting(location_raw=loc), _target(), None, _NO_REMOTE_WL)
+            assert r.passed is False and r.failed_rule == "geo_whitelist", loc
+
+    def test_state_qualified_us_remote_passes_via_whitelist(self) -> None:
+        """'Remote - New York' is non_us_remote by _remote_kind but still passes
+        because the whitelist carries 'new york' (substring match)."""
+        r = apply_hard_rules(
+            _posting(location_raw="Remote - New York"), _target(), None, _NO_REMOTE_WL
+        )
+        assert r.passed is True
+
+
+class TestRemoteKind:
+    @pytest.mark.parametrize("location", _US_REMOTE_PASS)
+    def test_us_remote_classified(self, location: str) -> None:
+        assert _remote_kind(location) == "us_remote", location
+
+    @pytest.mark.parametrize("location", _NON_US_REMOTE_FAIL)
+    def test_non_us_remote_classified(self, location: str) -> None:
+        assert _remote_kind(location) == "non_us_remote", location
+
+    @pytest.mark.parametrize("location", ["New York, NY", "Pune, Maharashtra", "Toronto", None])
+    def test_not_remote_classified(self, location: str | None) -> None:
+        assert _remote_kind(location) == "not_remote", location
 
 
 class TestSalaryFloor:
