@@ -1,0 +1,52 @@
+name: Applied corpus embeddings probe
+
+# Read-only (Phase A2 Step 1): GETs /admin/diagnostics/applied-corpus-embeddings
+# — basis size (n applied with jd_embedding), the applied postings, pairwise
+# cosine clustering stats (avg/min/max + histogram), and per-posting avg
+# similarity. Decides centroid vs k-NN. Pure GET; no writes, no scoring.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Applied corpus embeddings
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Fetch + print
+        run: |
+          echo "-- GET /admin/diagnostics/applied-corpus-embeddings --"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/diagnostics/applied-corpus-embeddings" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::diagnostic returned HTTP ${CODE}"
+            echo "$BODY"
+            exit 1
+          fi
+          echo
+          echo "=== basis size (confidence n) ==="
+          echo "$BODY" | jq '{n_applied, n_with_embedding}'
+          echo
+          echo "=== pairwise clustering (centroid vs k-NN decider) ==="
+          echo "$BODY" | jq '.pairwise'
+          echo
+          echo "=== applied postings ==="
+          echo "$BODY" | jq -r '.applied[] | "- \(.company) — \(.title)  fit=\(.fit_score)  embedded=\(.has_embedding)"'
+          echo
+          echo "=== per-posting avg cosine to others (asc — outliers first) ==="
+          echo "$BODY" | jq -r '.per_posting_avg_sim[] | "- \(.avg_sim)  \(.company) — \(.title)"'

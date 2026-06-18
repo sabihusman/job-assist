@@ -5864,6 +5864,130 @@ async def paused_companies_diagnostic(db: DbSession) -> dict[str, Any]:
     }
 
 
+@app.get("/admin/diagnostics/applied-corpus-embeddings", tags=["admin"])
+async def applied_corpus_embeddings_diagnostic(db: DbSession) -> dict[str, Any]:
+    """Phase A2 STEP 1 (read-only inspection): characterize the applied-posting
+    embeddings before choosing a comparison basis (centroid vs k-NN).
+
+    Applied membership = ``resolved_status='applied'`` (same as the triple view):
+    ``COALESCE(manual application_state.status, CASE latest posting_action =
+    'applied')``. Includes closed applied postings — revealed preference doesn't
+    expire when the board closes. Pure SELECT; no writes, no scoring.
+
+      * ``n_applied`` / ``n_with_embedding`` — total applied vs the usable basis
+        (non-NULL jd_embedding). The basis size is the signal's CONFIDENCE (n).
+      * ``applied`` — each applied posting (company, title, fit_score,
+        has_embedding) to eyeball topical coherence.
+      * ``pairwise`` — cosine sim among the basis embeddings (1 - (a <=> b)):
+        n_pairs, avg/min/max + a coarse histogram. Tight (high avg, narrow
+        spread) → one cluster → centroid; spread/bimodal → k-NN.
+      * ``per_posting_avg_sim`` — each basis posting's mean cosine to the others
+        (ascending), to spot outliers / separate clusters.
+    """
+    from sqlalchemy import text
+
+    _APPLIED_CTE = (
+        "WITH applied AS ( "
+        "  SELECT jp.id, COALESCE(tc.name, jp.canonical_company_name) AS company, "
+        "    jp.normalized_title AS title, jp.fit_score, jp.jd_embedding, "
+        "    (jp.jd_embedding IS NOT NULL) AS has_embedding "
+        "  FROM job_posting jp "
+        "  LEFT JOIN target_company tc ON tc.id = jp.target_company_id "
+        "  WHERE COALESCE("
+        "    (SELECT status FROM application_state WHERE job_posting_id = jp.id LIMIT 1), "
+        "    CASE WHEN (SELECT action_type FROM posting_action "
+        "               WHERE job_posting_id = jp.id ORDER BY created_at DESC LIMIT 1) = 'applied' "
+        "         THEN 'applied' END) = 'applied' "
+        ") "
+    )
+
+    applied = (
+        (
+            await db.execute(
+                text(
+                    _APPLIED_CTE + "SELECT company, title, fit_score, has_embedding FROM applied "
+                    "ORDER BY has_embedding DESC, company"
+                )
+            )
+        )
+        .mappings()
+        .all()
+    )
+    n_applied = len(applied)
+    n_with_embedding = sum(1 for r in applied if r["has_embedding"])
+
+    # Pairwise cosine among basis embeddings (a.id < b.id → unordered pairs).
+    pairs_summary = (
+        (
+            await db.execute(
+                text(
+                    _APPLIED_CTE + ", pairs AS ( "
+                    "  SELECT 1 - (a.jd_embedding <=> b.jd_embedding) AS sim "
+                    "  FROM applied a JOIN applied b ON a.id < b.id "
+                    "  WHERE a.jd_embedding IS NOT NULL AND b.jd_embedding IS NOT NULL "
+                    ") "
+                    "SELECT COUNT(*) AS n_pairs, "
+                    "  ROUND(AVG(sim)::numeric, 4) AS avg_sim, "
+                    "  ROUND(MIN(sim)::numeric, 4) AS min_sim, "
+                    "  ROUND(MAX(sim)::numeric, 4) AS max_sim, "
+                    "  COUNT(*) FILTER (WHERE sim < 0.3) AS lt_0_3, "
+                    "  COUNT(*) FILTER (WHERE sim >= 0.3 AND sim < 0.5) AS b_3_5, "
+                    "  COUNT(*) FILTER (WHERE sim >= 0.5 AND sim < 0.7) AS b_5_7, "
+                    "  COUNT(*) FILTER (WHERE sim >= 0.7 AND sim < 0.85) AS b_7_85, "
+                    "  COUNT(*) FILTER (WHERE sim >= 0.85) AS gte_0_85 "
+                    "FROM pairs"
+                )
+            )
+        )
+        .mappings()
+        .one()
+    )
+
+    per_posting = (
+        (
+            await db.execute(
+                text(
+                    _APPLIED_CTE + "SELECT a.company, a.title, "
+                    "  ROUND(AVG(1 - (a.jd_embedding <=> b.jd_embedding))::numeric, 4) AS avg_sim "
+                    "FROM applied a JOIN applied b ON a.id <> b.id "
+                    "WHERE a.jd_embedding IS NOT NULL AND b.jd_embedding IS NOT NULL "
+                    "GROUP BY a.id, a.company, a.title "
+                    "ORDER BY avg_sim ASC"
+                )
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+    def _f(v: Any) -> float | None:
+        return float(v) if v is not None else None
+
+    ps = dict(pairs_summary)
+    return {
+        "n_applied": n_applied,
+        "n_with_embedding": n_with_embedding,
+        "applied": [dict(r) for r in applied],
+        "pairwise": {
+            "n_pairs": int(ps["n_pairs"]),
+            "avg_sim": _f(ps["avg_sim"]),
+            "min_sim": _f(ps["min_sim"]),
+            "max_sim": _f(ps["max_sim"]),
+            "histogram": {
+                "<0.3": int(ps["lt_0_3"]),
+                "0.3-0.5": int(ps["b_3_5"]),
+                "0.5-0.7": int(ps["b_5_7"]),
+                "0.7-0.85": int(ps["b_7_85"]),
+                ">=0.85": int(ps["gte_0_85"]),
+            },
+        },
+        "per_posting_avg_sim": [
+            {"company": r["company"], "title": r["title"], "avg_sim": _f(r["avg_sim"])}
+            for r in per_posting
+        ],
+    }
+
+
 @app.get("/admin/diagnostics/no-candidate-breakdown", tags=["admin"])
 async def no_candidate_breakdown(db: DbSession) -> dict[str, Any]:
     """Read-only: why the outcome→posting matcher's ``no_candidate`` bucket is
