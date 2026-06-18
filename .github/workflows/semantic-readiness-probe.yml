@@ -1,0 +1,52 @@
+name: Semantic readiness probe
+
+# Read-only: GETs /admin/diagnostics/semantic-readiness — operator profile
+# similarity_weight + looking_for_text, the fixed semantic_fit weight inside
+# fit_score, and how many open postings have a non-NULL similarity_score
+# (semantic LIVE in fit_score) vs NULL. Pure GET; no writes.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Semantic readiness
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Fetch + print
+        run: |
+          echo "-- GET /admin/diagnostics/semantic-readiness --"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/diagnostics/semantic-readiness" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::diagnostic returned HTTP ${CODE}"
+            echo "$BODY"
+            exit 1
+          fi
+          echo
+          echo "=== similarity_weight (sort blend) ==="
+          echo "$BODY" | jq '.profile.similarity_weight'
+          echo
+          echo "=== looking_for_text (profile vector source) ==="
+          echo "$BODY" | jq -r '.profile.looking_for_text'
+          echo
+          echo "=== semantic_fit weight inside fit_score ==="
+          echo "$BODY" | jq '.semantic_fit_in_fit_score'
+          echo
+          echo "=== open postings: similarity_score non-NULL vs NULL ==="
+          echo "$BODY" | jq '.open_similarity_score'

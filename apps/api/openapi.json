@@ -3414,6 +3414,30 @@
         }
       }
     },
+    "/admin/diagnostics/semantic-readiness": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Semantic Readiness Diagnostic",
+        "description": "Read-only: ground-truth the semantic signal before tuning similarity_weight.\n\nPure SELECT; no writes.\n\n  * ``profile`` \u2014 the live operator_profile (id=1): ``similarity_weight`` (the\n    slice-2b SORT blend, 0 = off) and the verbatim ``looking_for_text`` that\n    is embedded as the profile vector.\n  * ``semantic_fit_in_fit_score`` \u2014 semantic_fit is a FIXED 20-weight feature\n    INSIDE fit_score (services/scoring._WEIGHTS), independent of\n    similarity_weight. score_semantic_fit returns similarity_score when\n    non-NULL else None; score_posting omits None features and renormalizes.\n    So semantic already influences fit_score for any open posting whose\n    similarity_score is non-NULL \u2014 that pool is counted here.\n  * ``open_similarity_score`` \u2014 open (closed_at IS NULL) postings with a\n    non-NULL similarity_score (embedded AND recalibrated \u2192 semantic LIVE in\n    their fit_score, and the pool the semantic sort can rank) vs NULL\n    (semantic term dropped, structured-five only).",
+        "operationId": "semantic_readiness_diagnostic_admin_diagnostics_semantic_readiness_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Semantic Readiness Diagnostic Admin Diagnostics Semantic Readiness Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/diagnostics/no-candidate-breakdown": {
       "get": {
         "tags": [

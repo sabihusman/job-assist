@@ -5576,6 +5576,72 @@ async def high_fit_gaps_diagnostic(db: DbSession) -> dict[str, Any]:
     }
 
 
+@app.get("/admin/diagnostics/semantic-readiness", tags=["admin"])
+async def semantic_readiness_diagnostic(db: DbSession) -> dict[str, Any]:
+    """Read-only: ground-truth the semantic signal before tuning similarity_weight.
+
+    Pure SELECT; no writes.
+
+      * ``profile`` — the live operator_profile (id=1): ``similarity_weight`` (the
+        slice-2b SORT blend, 0 = off) and the verbatim ``looking_for_text`` that
+        is embedded as the profile vector.
+      * ``semantic_fit_in_fit_score`` — semantic_fit is a FIXED 20-weight feature
+        INSIDE fit_score (services/scoring._WEIGHTS), independent of
+        similarity_weight. score_semantic_fit returns similarity_score when
+        non-NULL else None; score_posting omits None features and renormalizes.
+        So semantic already influences fit_score for any open posting whose
+        similarity_score is non-NULL — that pool is counted here.
+      * ``open_similarity_score`` — open (closed_at IS NULL) postings with a
+        non-NULL similarity_score (embedded AND recalibrated → semantic LIVE in
+        their fit_score, and the pool the semantic sort can rank) vs NULL
+        (semantic term dropped, structured-five only).
+    """
+    from sqlalchemy import select, text
+
+    from job_assist.db.models import OperatorProfile
+    from job_assist.services.scoring import _WEIGHTS
+
+    profile = (
+        await db.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
+    ).scalar_one_or_none()
+
+    sim = (
+        (
+            await db.execute(
+                text(
+                    "SELECT COUNT(*) AS open_total, "
+                    "  COUNT(similarity_score) AS with_similarity_score, "
+                    "  COUNT(*) FILTER (WHERE similarity_score IS NULL) AS without_similarity_score, "
+                    "  COUNT(*) FILTER (WHERE embedded_at IS NOT NULL) AS embedded_at_set "
+                    "FROM job_posting WHERE closed_at IS NULL"
+                )
+            )
+        )
+        .mappings()
+        .one()
+    )
+
+    return {
+        "profile": (
+            {
+                "similarity_weight": profile.similarity_weight,
+                "looking_for_text": profile.looking_for_text,
+            }
+            if profile is not None
+            else None
+        ),
+        "semantic_fit_in_fit_score": {
+            "weight": _WEIGHTS["semantic_fit"],
+            "note": (
+                "Fixed weight inside fit_score; LIVE for rows with non-NULL "
+                "similarity_score, dropped+renormalized otherwise. Independent of "
+                "similarity_weight (the sort blend)."
+            ),
+        },
+        "open_similarity_score": {k: int(v) for k, v in dict(sim).items()},
+    }
+
+
 @app.get("/admin/diagnostics/no-candidate-breakdown", tags=["admin"])
 async def no_candidate_breakdown(db: DbSession) -> dict[str, Any]:
     """Read-only: why the outcome→posting matcher's ``no_candidate`` bucket is
