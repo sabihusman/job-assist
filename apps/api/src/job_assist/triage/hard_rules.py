@@ -36,6 +36,7 @@ already-fetched ``ClosedChannel | None`` row as a parameter. The caller
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -93,6 +94,38 @@ def _collect_location_strings(posting: JobPosting) -> list[str]:
                     if isinstance(val, str) and val:
                         out.append(val)
     return out
+
+
+def _remote_kind(location_raw: str | None) -> str:
+    """Classify a raw location string's remote-ness for the geo gate.
+
+    Returns one of:
+      * ``"us_remote"``    — contains a remote keyword AND, after stripping the
+        keyword + US synonyms (US / U.S. / USA / United States) + non-US
+        filler ("fully", "100%", "position", …) + punctuation, NOTHING
+        geographic remains. These should PASS geo regardless of whitelist
+        (the operator wants US/unspecified-remote roles surfaced).
+      * ``"non_us_remote"`` — remote keyword present BUT a region qualifier
+        survives ("Remote - India", "EMEA Remote", "Remote (Canada)", and
+        ambiguous "North America"/"Americas"/"Anywhere"). These must NOT get a
+        free pass — they fall through to the normal whitelist match (and fail
+        unless a whitelisted city/state is also present, e.g. a US state).
+      * ``"not_remote"``   — no remote keyword; ordinary whitelist matching.
+
+    Dots are stripped first so "U.S." == "US". State/city-qualified US-remote
+    (e.g. "Remote - California") is intentionally NOT us_remote here — it still
+    passes via ``_geo_matches`` since the whitelist carries those states.
+    """
+    if not location_raw:
+        return "not_remote"
+    text = location_raw.lower().replace(".", "")
+    if not re.search(r"\bremote\b", text):
+        return "not_remote"
+    text = re.sub(r"\bremote\b", " ", text)
+    text = re.sub(r"\b(united states|usa|us)\b", " ", text)  # US synonyms (dots already gone)
+    text = re.sub(r"\b(fully|100|percent|position|role|based|only|wfh)\b", " ", text)
+    leftover = re.sub(r"[^a-z]", "", text)  # keep only letters
+    return "us_remote" if not leftover else "non_us_remote"
 
 
 def _geo_matches(locations: list[str], whitelist: tuple[str, ...]) -> bool:
@@ -211,9 +244,16 @@ def apply_hard_rules(
                 detail=f"'{name}' matches the staffing-firm blocklist",
             )
 
-    # 4. Geo whitelist.
+    # 4. Geo whitelist. US/unspecified-remote roles pass regardless of the
+    #    whitelist (the operator wants them surfaced even though "Remote" isn't
+    #    a whitelist entry); region-qualified non-US remote ("Remote - India")
+    #    gets NO free pass and must still satisfy the whitelist (so it fails).
     location_strings = _collect_location_strings(posting)
-    if location_strings and not _geo_matches(location_strings, cfg.geo_whitelist):
+    if (
+        location_strings
+        and _remote_kind(posting.location_raw) != "us_remote"
+        and not _geo_matches(location_strings, cfg.geo_whitelist)
+    ):
         return FilterResult(
             passed=False,
             failed_rule="geo_whitelist",
