@@ -5,13 +5,13 @@ import { PipelineBoard } from '@/components/pipeline/PipelineBoard';
 import type { PipelineStage } from '@/lib/applied/stages';
 import { type ApplicationCard, emptyBuckets } from '@/lib/pipeline/bucket';
 
-function card(id: string, name: string): ApplicationCard {
+function card(id: string, name: string, appliedAt = '2026-05-01T00:00:00Z'): ApplicationCard {
   return {
     id,
     companyName: name,
     roleTitle: 's',
     roleFamily: null,
-    appliedAt: '2026-05-01T00:00:00Z',
+    appliedAt,
   };
 }
 
@@ -66,5 +66,38 @@ describe('PipelineBoard reorder is presentational only', () => {
       within(screen.getByRole('region', { name: /still alive/i })).getByText('AppCo'),
     ).toBeInTheDocument();
     b.unmount();
+  });
+});
+
+describe('PipelineBoard per-column sort by date', () => {
+  function dated(): ReturnType<typeof emptyBuckets> {
+    const b = emptyBuckets();
+    // Out-of-order on purpose so the sort has to do work.
+    b.applied.push(card('mid', 'Mid', '2026-05-15T00:00:00Z'));
+    b.applied.push(card('new', 'New', '2026-06-01T00:00:00Z'));
+    b.applied.push(card('old', 'Old', '2026-04-01T00:00:00Z'));
+    return b;
+  }
+
+  function cardOrder(): string[] {
+    const col = screen.getByRole('region', { name: /still alive/i });
+    return Array.from(col.querySelectorAll('[data-card-id]')).map(
+      (el) => el.getAttribute('data-card-id') ?? '',
+    );
+  }
+
+  test("'recent' (default) orders newest-first within a column", () => {
+    render(<PipelineBoard buckets={dated()} sort="recent" />);
+    expect(cardOrder()).toEqual(['new', 'mid', 'old']);
+  });
+
+  test("'oldest' reverses to oldest-first", () => {
+    render(<PipelineBoard buckets={dated()} sort="oldest" />);
+    expect(cardOrder()).toEqual(['old', 'mid', 'new']);
+  });
+
+  test('default sort (no prop) is most-recent-first', () => {
+    render(<PipelineBoard buckets={dated()} />);
+    expect(cardOrder()).toEqual(['new', 'mid', 'old']);
   });
 });

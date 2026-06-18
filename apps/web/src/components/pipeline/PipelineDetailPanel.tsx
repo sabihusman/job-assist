@@ -46,7 +46,7 @@ export function PipelineDetailPanel({
   return (
     <>
       <aside
-        className="sticky top-12 hidden h-[calc(100vh-3rem)] w-[420px] shrink-0 flex-col self-start border-l border-border bg-surface lg:flex"
+        className="sticky top-12 hidden h-[calc(100vh-3rem)] w-[420px] shrink-0 flex-col self-start border-l border-border bg-surface lg:flex lg:animate-in lg:slide-in-from-right lg:duration-200"
         aria-label="Application details"
       >
         {body}
