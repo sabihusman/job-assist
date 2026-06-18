@@ -1,0 +1,49 @@
+name: Paused companies probe
+
+# Read-only: GETs /admin/diagnostics/paused-companies — soft-paused (handle
+# cleared, known ats) + deactivated companies, with tier/ats/handle/source,
+# open_postings count, and a reason bucket. Shows whether paused companies still
+# have live postings in triage. Pure GET; no writes.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Paused companies
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Fetch + print
+        run: |
+          echo "-- GET /admin/diagnostics/paused-companies --"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/diagnostics/paused-companies" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::diagnostic returned HTTP ${CODE}"
+            echo "$BODY"
+            exit 1
+          fi
+          echo
+          echo "=== definition ==="
+          echo "$BODY" | jq -r '.definition'
+          echo
+          echo "=== totals ==="
+          echo "$BODY" | jq '{total_paused, with_open_postings, by_reason}'
+          echo
+          echo "=== companies (grouped by reason) ==="
+          echo "$BODY" | jq -r '.companies[] | "- [\(.reason)] \(.name)  tier=\(.tier // "NULL")  ats=\(.ats)/\(.ats_handle // "NULL")  source=\(.source)  open_postings=\(.open_postings)  soft_paused=\(.soft_paused) deactivated=\(.deactivated)"'

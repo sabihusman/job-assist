@@ -3486,6 +3486,30 @@
         }
       }
     },
+    "/admin/diagnostics/paused-companies": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Paused Companies Diagnostic",
+        "description": "Read-only: what \"Paused\" means for target_company and what it excludes.\n\nPure SELECT; no writes. There is no ``paused`` column \u2014 \"paused\" is two\ndistinct things:\n  * ``soft_paused`` \u2014 the UI \"Paused\" badge: ``ats_handle IS NULL AND ats\n    IS NOT NULL AND ats <> 'unknown'`` (had a working adapter, operator\n    cleared the handle to stop the handle-based ingest probe). A row with\n    ats unknown/NULL + NULL handle is \"no adapter\" (default), NOT paused.\n  * ``deactivated`` \u2014 ``source = 'deactivated'`` (operator-paused; the\n    model's \"excluded from every sweep\").\n\nPause is INGEST-ONLY: it stops new-posting crawling. It does NOT hide the\ncompany's EXISTING job_postings \u2014 nothing in the hard-rule gate, scoring, or\npostings_query filters on company ``source``/handle, so existing OPEN\npostings stay in triage/scoring/search. ``open_postings`` per row shows\nwhether a paused company still has live cards (not shut out) vs nothing.\n\n``reason`` buckets each row: ``cost_paused_apify`` (ats workday/icims),\n``warm_path_no_handle`` (alumni seed), ``broken_handle`` (notes mention a\n404/401), else ``handle_cleared``.",
+        "operationId": "paused_companies_diagnostic_admin_diagnostics_paused_companies_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Paused Companies Diagnostic Admin Diagnostics Paused Companies Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/diagnostics/no-candidate-breakdown": {
       "get": {
         "tags": [
