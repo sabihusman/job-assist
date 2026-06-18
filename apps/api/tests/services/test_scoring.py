@@ -18,9 +18,12 @@ from job_assist.db.enums import RoleFamily, SeniorityLevel
 from job_assist.db.models.job_posting import JobPosting
 from job_assist.db.models.operator_profile import OperatorProfile
 from job_assist.services.scoring import (
+    _DISGUISED_SENIOR_CAP,
+    _WEIGHTS,
     ADJACENT_FAMILIES,
     ANNUAL_HOURS,
     PREFERRED_FAMILIES,
+    ROLE_GATE_CAP,
     SCORER_VERSION,
     bucket_for_score,
     display_tier,
@@ -28,6 +31,7 @@ from job_assist.services.scoring import (
     score_breakdown,
     score_geo,
     score_posting,
+    score_posting_decomposed,
     score_role_family,
     score_salary,
     score_semantic_fit,
@@ -767,3 +771,121 @@ def test_role_family_gate_still_caps_at_40_despite_high_semantic_fit() -> None:
         similarity_score=100,
     )
     assert score_posting(non_pm, profile, tier=1) <= 40
+
+
+# ── Phase A1: score decomposition (expose, don't alter) ──────────────────────
+
+
+def _decomp_cases() -> list[tuple[str, JobPosting, int]]:
+    """(label, posting, tier) covering: full match, semantic NULL (renormalize),
+    non-PM (role gate fires), disguised-senior (soft cap fires)."""
+    return [
+        ("full_match", _make_posting(similarity_score=100), 1),
+        ("semantic_null_renormalize", _make_posting(similarity_score=None), 2),
+        (
+            "role_gate",
+            _make_posting(role_family=RoleFamily.other.value, similarity_score=100),
+            1,
+        ),
+        (
+            "disguised_senior",
+            _make_posting(
+                role_family=RoleFamily.product_management.value,
+                seniority_level=SeniorityLevel.pm.value,
+                salary_min=175_000,
+                salary_max=210_000,
+                salary_currency="USD",
+                similarity_score=100,
+            ),
+            1,
+        ),
+    ]
+
+
+@pytest.mark.parametrize("label,posting,tier", _decomp_cases())
+def test_decomposed_final_equals_score_posting(label: str, posting: JobPosting, tier: int) -> None:
+    """The refactor is byte-for-byte: score_posting == score_posting_decomposed().final."""
+    profile = _make_profile()
+    decomp = score_posting_decomposed(posting, profile, tier=tier)
+    assert decomp.final == score_posting(posting, profile, tier=tier)
+
+
+@pytest.mark.parametrize("label,posting,tier", _decomp_cases())
+def test_decomposition_reconciles_to_final(label: str, posting: JobPosting, tier: int) -> None:
+    """sum(contributions)/total_weight → score_pre_caps → caps → final, and the
+    decomposition's final equals the row's fit_score (score_posting)."""
+    profile = _make_profile()
+    d = score_posting_decomposed(posting, profile, tier=tier)
+    # contributions sum / renormalized weight reproduces the pre-cap score.
+    recomputed_mean = (sum(d.contributions.values()) / d.total_weight) if d.total_weight else 0.0
+    assert recomputed_mean == d.weighted_mean
+    assert d.score_pre_caps == max(0, min(100, round(recomputed_mean)))
+    # Apply caps the same way score_posting does.
+    expected = d.score_pre_caps
+    if d.caps["role_family_gate"]["fired"]:
+        expected = min(expected, ROLE_GATE_CAP)
+    if d.caps["disguised_senior"]["fired"]:
+        expected = min(expected, _DISGUISED_SENIOR_CAP)
+    assert d.final == expected
+    assert d.final == score_posting(posting, profile, tier=tier)
+    # contributions are present-only; each is value*weight.
+    for key, contrib in d.contributions.items():
+        assert contrib == int(d.sub_scores[key]) * d.weights[key]
+
+
+def test_decomposition_semantic_null_drops_and_renormalizes() -> None:
+    profile = _make_profile()
+    d = score_posting_decomposed(_make_posting(similarity_score=None), profile, tier=2)
+    assert d.sub_scores["semantic_fit"] is None
+    assert d.dropped == ["semantic_fit"]
+    assert "semantic_fit" not in d.present
+    assert d.total_weight == sum(w for k, w in _WEIGHTS.items() if k != "semantic_fit")  # 80
+    assert d.total_weight == 80
+
+
+def test_decomposition_role_gate_cap_fires() -> None:
+    profile = _make_profile()
+    d = score_posting_decomposed(
+        _make_posting(role_family=RoleFamily.other.value, similarity_score=100), profile, tier=1
+    )
+    assert d.caps["role_family_gate"]["fired"] is True
+    assert d.caps["role_family_gate"]["cap"] == 40
+    assert d.final <= 40
+
+
+def test_decomposition_disguised_senior_cap_fires() -> None:
+    profile = _make_profile()
+    posting = _make_posting(
+        role_family=RoleFamily.product_management.value,
+        seniority_level=SeniorityLevel.pm.value,
+        salary_min=175_000,
+        salary_max=210_000,
+        salary_currency="USD",
+        similarity_score=100,
+    )
+    d = score_posting_decomposed(posting, profile, tier=1)
+    assert d.caps["disguised_senior"]["fired"] is True
+    assert d.caps["disguised_senior"]["cap"] == 55
+    assert d.final <= 55
+
+
+def test_decomposition_to_dict_shape_and_version() -> None:
+    profile = _make_profile()
+    d = score_posting_decomposed(_make_posting(similarity_score=100), profile, tier=1)
+    out = d.to_dict()
+    assert set(out) == {
+        "scorer_version",
+        "weights",
+        "sub_scores",
+        "present",
+        "dropped",
+        "total_weight",
+        "contributions",
+        "weighted_mean",
+        "score_pre_caps",
+        "caps",
+        "final",
+    }
+    assert out["scorer_version"] == SCORER_VERSION
+    assert out["weights"] == dict(_WEIGHTS)
+    assert out["final"] == score_posting(_make_posting(similarity_score=100), profile, tier=1)

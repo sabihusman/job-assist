@@ -124,6 +124,14 @@ class JobPosting(Base):
     fit_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     scored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     scorer_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ── Score decomposition (Phase A1, feat/score-decomposition) ─────────────
+    # Self-explaining breakdown of fit_score: per-sub-score value, weight,
+    # contribution, renormalization (present/dropped), and which caps fired.
+    # Written ALONGSIDE fit_score by score_posting_decomposed at every score
+    # site; ``final`` always equals fit_score by construction. NULL until the
+    # row is (re)scored or backfilled. Exposes the existing computation only —
+    # no new scoring signal.
+    score_components: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
     # ── Hard-rule eligibility (PR C) ─────────────────────────────────────
     # ``hard_rule_failed`` stores the RuleName that failed (e.g. "salary_floor")
     # or NULL when the posting passed every rule. Written at ingest and by
