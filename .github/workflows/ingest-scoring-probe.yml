@@ -44,3 +44,6 @@ jobs:
           echo
           echo "=== 2. open postings (closed_at IS NULL) with fit_score >= 80 ==="
           echo "$BODY" | jq '.q2_open_high_fit'
+          echo
+          echo "=== 3. of those >=80: hard-rule gate (cleared = would surface in triage) ==="
+          echo "$BODY" | jq '.q3_open_high_fit_hard_rule'

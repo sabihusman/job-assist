@@ -5351,6 +5351,13 @@ async def ingest_scoring_diagnostic(db: DbSession) -> dict[str, Any]:
         ``classified_at IS NOT NULL`` (the LLM reclassify sweep ran);
         ``embedded`` = ``embedded_at IS NOT NULL`` (the embeddings sweep ran).
         Includes a 2x2 cross-tab so the "neither" backlog is visible.
+      * ``q3_open_high_fit_hard_rule`` — the same open ``fit_score >= 80`` set
+        split by the hard-rule gate that ``GET /postings`` applies: ``cleared``
+        (``hard_rule_failed IS NULL`` — would surface in the triage queue) vs
+        ``gated_out`` (``hard_rule_failed IS NOT NULL``, with a per-rule
+        breakdown). ``not_yet_evaluated`` (``hard_rules_evaluated_at IS NULL``)
+        is called out separately because such rows read as cleared by default
+        (NULL hard_rule_failed) but haven't actually been checked.
     """
     from sqlalchemy import text
 
@@ -5389,9 +5396,47 @@ async def ingest_scoring_diagnostic(db: DbSession) -> dict[str, Any]:
         .one()
     )
 
+    q3 = (
+        (
+            await db.execute(
+                text(
+                    "SELECT "
+                    "  COUNT(*) AS total, "
+                    "  COUNT(*) FILTER (WHERE hard_rule_failed IS NULL) AS cleared, "
+                    "  COUNT(*) FILTER (WHERE hard_rule_failed IS NOT NULL) AS gated_out, "
+                    "  COUNT(*) FILTER (WHERE hard_rules_evaluated_at IS NULL) "
+                    "    AS not_yet_evaluated "
+                    "FROM job_posting "
+                    "WHERE closed_at IS NULL AND fit_score >= 80"
+                )
+            )
+        )
+        .mappings()
+        .one()
+    )
+    q3_by_rule = (
+        (
+            await db.execute(
+                text(
+                    "SELECT hard_rule_failed AS rule, COUNT(*) AS n "
+                    "FROM job_posting "
+                    "WHERE closed_at IS NULL AND fit_score >= 80 "
+                    "  AND hard_rule_failed IS NOT NULL "
+                    "GROUP BY hard_rule_failed ORDER BY n DESC"
+                )
+            )
+        )
+        .mappings()
+        .all()
+    )
+
     return {
         "q1_ingested_last_7d": int(q1),
         "q2_open_high_fit": {k: int(v) for k, v in dict(q2).items()},
+        "q3_open_high_fit_hard_rule": {
+            **{k: int(v) for k, v in dict(q3).items()},
+            "gated_by_rule": {r["rule"]: int(r["n"]) for r in q3_by_rule},
+        },
     }
 
 
