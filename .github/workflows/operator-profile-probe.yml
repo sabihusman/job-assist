@@ -1,0 +1,44 @@
+name: Operator profile probe
+
+# Read-only: GETs /operator/profile and prints the singleton operator profile,
+# highlighting geo_whitelist (does it still contain "remote"?). Pure GET; no
+# writes.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Operator profile
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Fetch + print
+        run: |
+          echo "-- GET /operator/profile --"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/operator/profile" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::probe returned HTTP ${CODE}"
+            echo "$BODY"
+            exit 1
+          fi
+          echo
+          echo "=== geo_whitelist ==="
+          echo "$BODY" | jq '.geo_whitelist'
+          echo "contains a remote token (case-insensitive)?"
+          echo "$BODY" | jq '[.geo_whitelist[] | select(ascii_downcase | test("remote"))] | {remote_entries: ., present: (length > 0)}'
