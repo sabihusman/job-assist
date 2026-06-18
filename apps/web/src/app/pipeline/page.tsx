@@ -6,6 +6,11 @@ import { AppShell } from '@/components/chrome/AppShell';
 import { PipelineBoard } from '@/components/pipeline/PipelineBoard';
 import { PipelineDetailPanel } from '@/components/pipeline/PipelineDetailPanel';
 import { PipelineExportButton } from '@/components/pipeline/PipelineExportButton';
+import {
+  DEFAULT_PIPELINE_SORT,
+  type PipelineSort,
+  PipelineSortControl,
+} from '@/components/pipeline/PipelineSortControl';
 import { useCompanySignals } from '@/lib/api/companySignals';
 import { usePipelineData } from '@/lib/api/pipeline';
 import { PIPELINE_STAGES, sanitizeColumnOrder } from '@/lib/applied/stages';
@@ -21,6 +26,7 @@ export default function PipelinePage() {
   const { buckets, isLoading, isError, error, refetch } = usePipelineData();
   const { data: signals } = useCompanySignals();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [sort, setSort] = useState<PipelineSort>(DEFAULT_PIPELINE_SORT);
 
   const rawOrder = useUiStore((s) => s.pipelineColumnOrder);
   const movePipelineColumn = useUiStore((s) => s.movePipelineColumn);
@@ -32,7 +38,12 @@ export default function PipelinePage() {
     <AppShell
       title="Pipeline"
       subtitle="Kanban by outcome stage"
-      adornments={<PipelineExportButton buckets={buckets} order={order} />}
+      adornments={
+        <div className="flex items-center gap-3">
+          <PipelineSortControl value={sort} onChange={setSort} />
+          <PipelineExportButton buckets={buckets} order={order} />
+        </div>
+      }
     >
       {isError ? (
         <ErrorCard message={(error as Error)?.message ?? 'Unknown error'} onRetry={refetch} />
@@ -46,12 +57,19 @@ export default function PipelinePage() {
             <PipelineBoard
               buckets={buckets}
               order={order}
+              sort={sort}
               onSelect={setSelectedId}
               onMove={movePipelineColumn}
               signals={signals}
             />
           </div>
-          <PipelineDetailPanel selectedId={selectedId} onClose={() => setSelectedId(null)} />
+          {/* feat/pipeline-autohide: render the detail panel ONLY when a card is
+              selected so the board reclaims the ~25% width when nothing is
+              selected. Selection logic / data fetching unchanged — purely
+              whether the panel mounts. */}
+          {selectedId !== null && (
+            <PipelineDetailPanel selectedId={selectedId} onClose={() => setSelectedId(null)} />
+          )}
         </div>
       )}
     </AppShell>
