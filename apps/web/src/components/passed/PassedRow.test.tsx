@@ -1,8 +1,22 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, test } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { PassedRow } from '@/components/passed/PassedRow';
 import type { PostingListItem } from '@/lib/triage/types';
+
+// PassedRow uses useRecordAction (useMutation) for Reinstate. Mock it so the
+// presentational tests don't need a QueryClientProvider and the click test can
+// assert the wire vars. Optimistic removal + invalidation are the hook's
+// responsibility and are covered by lib/api/hooks.test.tsx.
+const { mutateMock } = vi.hoisted(() => ({ mutateMock: vi.fn() }));
+vi.mock('@/lib/api/hooks', () => ({
+  useRecordAction: () => ({ mutate: mutateMock, isPending: false }),
+}));
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+
+beforeEach(() => {
+  mutateMock.mockReset();
+});
 
 function makePosting(overrides: Partial<PostingListItem> = {}): PostingListItem {
   return {
@@ -82,5 +96,18 @@ describe('PassedRow', () => {
       </ul>,
     );
     expect(screen.getByText(/passed/i)).toBeInTheDocument();
+  });
+
+  test('Reinstate click calls the mutation with action_type=reset (no kind)', () => {
+    render(
+      <ul>
+        <PassedRow posting={makePosting()} />
+      </ul>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Reinstate' }));
+    expect(mutateMock).toHaveBeenCalledTimes(1);
+    const [vars] = mutateMock.mock.calls[0] as [Record<string, unknown>];
+    expect(vars).toMatchObject({ postingId: 'p-1', action_type: 'reset' });
+    expect(vars).not.toHaveProperty('kind');
   });
 });

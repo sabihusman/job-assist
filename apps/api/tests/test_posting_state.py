@@ -861,3 +861,80 @@ async def test_get_postings_total_query_budget(db_session: Any) -> None:
     assert resp.status_code == 200
     # Folded state LATERAL keeps GET /postings at the PR #30a budget of 2.
     assert counter.count <= 2, f"GET /postings issued {counter.count} queries"
+
+
+@_NEEDS_DB
+async def test_reinstate_passed_returns_to_triage_append_only(db_session: Any) -> None:
+    """Reinstate = append a 'reset' over a 'passed' (not_interested) action.
+
+    The posting leaves the Passed view (state=not_interested) and reappears in
+    Triage (state=triage); the original not_interested row is preserved
+    (append-only audit); resume linkage is untouched.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    company = _company()
+    db_session.add(company)
+    await db_session.flush()
+    posting = _posting(target_company_id=company.id)
+    db_session.add(posting)
+    await db_session.flush()
+    # Passed earlier, with a reason; plus a resume attached to this application.
+    db_session.add(
+        _action(
+            job_posting_id=posting.id,
+            action_type="not_interested",
+            reason="wrong_role",
+            created_at=datetime.now(tz=UTC) - timedelta(minutes=5),
+        )
+    )
+    db_session.add(ApplicationResume(job_posting_id=posting.id, file_name="r.docx"))
+    await db_session.commit()
+
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            # Sanity: starts in Passed, not in Triage.
+            passed_before = await ac.get("/postings?state=not_interested")
+            triage_before = await ac.get("/postings?state=triage")
+            # Reinstate via the existing endpoint (append 'reset').
+            reinstate = await ac.post(
+                f"/postings/{posting.id}/state", json={"action_type": "reset"}
+            )
+            passed_after = await ac.get("/postings?state=not_interested")
+            triage_after = await ac.get("/postings?state=triage")
+    finally:
+        await _drop_override()
+
+    assert reinstate.status_code == 200, reinstate.text
+    pid = str(posting.id)
+    assert pid in {i["id"] for i in passed_before.json()["items"]}
+    assert pid not in {i["id"] for i in triage_before.json()["items"]}
+    # After reinstate: gone from Passed, present in Triage.
+    assert pid not in {i["id"] for i in passed_after.json()["items"]}
+    assert pid in {i["id"] for i in triage_after.json()["items"]}
+
+    # Append-only: BOTH rows survive (audit reads passed → reset).
+    rows = (
+        (
+            await db_session.execute(
+                select(PostingAction)
+                .where(PostingAction.job_posting_id == posting.id)
+                .order_by(PostingAction.created_at.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [r.action_type for r in rows] == ["not_interested", "reset"]
+    assert rows[0].reason == "wrong_role"  # original pass reason preserved
+
+    # Resume linkage untouched.
+    resume = (
+        await db_session.execute(
+            select(ApplicationResume).where(ApplicationResume.job_posting_id == posting.id)
+        )
+    ).scalar_one_or_none()
+    assert resume is not None and resume.file_name == "r.docx"
