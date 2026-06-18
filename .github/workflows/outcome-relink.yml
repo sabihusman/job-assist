@@ -1,14 +1,17 @@
-name: Outcome relink (free pass)
+name: Outcome relink (company matcher)
 
-# Measured FREE-PASS company re-link: POST /admin/outcomes/relink?use_classifier=false
-# (domain/name match only, NO Gemini, no LLM cost). Sets target_company_id on
-# unlinked job-related outcome_event rows; the service filters to
+# Measured company re-link: POST /admin/outcomes/relink. Sets target_company_id
+# on unlinked job-related outcome_event rows; the service filters to
 # _JOB_RELATED_TYPES_TO_RELINK and excludes 'unrelated'/'unclassified'. This is
 # the COMPANY matcher only — it never sets job_posting_id and never touches the
 # posting matcher / no-fanout firewall.
 #
-# use_classifier is intentionally NOT exposed here — this workflow is free-pass
-# only, by design. The Gemini pass is a separate, out-of-scope step.
+# Two modes via use_classifier:
+#   * false (default) — FREE pass: domain/name match only, no Gemini, ~0 cost.
+#   * true — Gemini pass: re-derives extracted_company from raw_snippet for rows
+#     the domain path misses. Slow (~4s/row) and needs GEMINI_API_KEY on Railway
+#     (503 if missing). The noise allowlist still applies — only the ~208
+#     funnel rows are scanned.
 #
 # Safe by default: apply=false is a DRY RUN — prints the BEFORE company-link
 # stats (unlinked by outcome_type) and does NOT write. apply=true runs the
@@ -20,7 +23,11 @@ on:
   workflow_dispatch:
     inputs:
       apply:
-        description: 'false = dry-run (BEFORE stats only); true = run free-pass relink + AFTER stats'
+        description: 'false = dry-run (BEFORE stats only); true = run relink + AFTER stats'
+        required: false
+        default: 'false'
+      use_classifier:
+        description: 'false = free pass (domain/name only); true = Gemini pass (needs GEMINI_API_KEY)'
         required: false
         default: 'false'
       limit:
@@ -33,12 +40,13 @@ permissions:
 
 jobs:
   relink:
-    name: relink free-pass (apply=${{ github.event.inputs.apply }})
+    name: relink (apply=${{ github.event.inputs.apply }} use_classifier=${{ github.event.inputs.use_classifier }})
     runs-on: ubuntu-latest
     env:
       API_URL: ${{ secrets.API_URL }}
       API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
       APPLY: ${{ github.event.inputs.apply }}
+      USE_CLASSIFIER: ${{ github.event.inputs.use_classifier }}
       LIMIT: ${{ github.event.inputs.limit }}
     steps:
       - name: Verify API is up
@@ -56,15 +64,17 @@ jobs:
 
       - name: Dry-run notice
         if: ${{ github.event.inputs.apply != 'true' }}
-        run: echo "DRY RUN — no write. Re-run with apply=true to run the free-pass relink."
+        run: echo "DRY RUN — no write. Re-run with apply=true to run the relink."
 
-      - name: Run free-pass relink (write)
+      - name: Run relink (write)
         if: ${{ github.event.inputs.apply == 'true' }}
         run: |
-          URL="${API_URL}/admin/outcomes/relink?use_classifier=false"
+          UC="${USE_CLASSIFIER:-false}"
+          URL="${API_URL}/admin/outcomes/relink?use_classifier=${UC}"
           if [ -n "$LIMIT" ]; then URL="${URL}&limit=${LIMIT}"; fi
           echo "POST ${URL}"
-          RESP=$(curl -s -w "\n%{http_code}" --max-time 300 -X POST \
+          # Gemini pass is ~4s/row → allow ~25 min for the full funnel backlog.
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 1500 -X POST \
             -H "Authorization: Bearer ${API_AUTH_TOKEN}" "$URL" || printf '\n000')
           CODE=$(echo "$RESP" | tail -n1)
           OUT=$(echo "$RESP" | head -n -1)
