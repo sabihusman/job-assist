@@ -5773,6 +5773,97 @@ async def score_decomposition_diagnostic(db: DbSession) -> dict[str, Any]:
     }
 
 
+@app.get("/admin/diagnostics/paused-companies", tags=["admin"])
+async def paused_companies_diagnostic(db: DbSession) -> dict[str, Any]:
+    """Read-only: what "Paused" means for target_company and what it excludes.
+
+    Pure SELECT; no writes. There is no ``paused`` column — "paused" is two
+    distinct things:
+      * ``soft_paused`` — the UI "Paused" badge: ``ats_handle IS NULL AND ats
+        IS NOT NULL AND ats <> 'unknown'`` (had a working adapter, operator
+        cleared the handle to stop the handle-based ingest probe). A row with
+        ats unknown/NULL + NULL handle is "no adapter" (default), NOT paused.
+      * ``deactivated`` — ``source = 'deactivated'`` (operator-paused; the
+        model's "excluded from every sweep").
+
+    Pause is INGEST-ONLY: it stops new-posting crawling. It does NOT hide the
+    company's EXISTING job_postings — nothing in the hard-rule gate, scoring, or
+    postings_query filters on company ``source``/handle, so existing OPEN
+    postings stay in triage/scoring/search. ``open_postings`` per row shows
+    whether a paused company still has live cards (not shut out) vs nothing.
+
+    ``reason`` buckets each row: ``cost_paused_apify`` (ats workday/icims),
+    ``warm_path_no_handle`` (alumni seed), ``broken_handle`` (notes mention a
+    404/401), else ``handle_cleared``.
+    """
+    from sqlalchemy import text
+
+    rows = (
+        (
+            await db.execute(
+                text(
+                    "SELECT tc.name, tc.tier, tc.ats, tc.ats_handle, tc.source, tc.notes, "
+                    "  (tc.ats_handle IS NULL AND tc.ats IS NOT NULL AND tc.ats <> 'unknown') "
+                    "    AS soft_paused, "
+                    "  (tc.source = 'deactivated') AS deactivated, "
+                    "  (SELECT COUNT(*) FROM job_posting jp "
+                    "     WHERE jp.target_company_id = tc.id AND jp.closed_at IS NULL) "
+                    "    AS open_postings "
+                    "FROM target_company tc "
+                    "WHERE (tc.ats_handle IS NULL AND tc.ats IS NOT NULL AND tc.ats <> 'unknown') "
+                    "   OR tc.source = 'deactivated' "
+                    "ORDER BY tc.tier NULLS LAST, tc.name"
+                )
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+    def _reason(r: Any) -> str:
+        ats = (r["ats"] or "").lower()
+        notes = (r["notes"] or "").lower()
+        if any(code in notes for code in ("404", "401", "broken", "dead")):
+            return "broken_handle"
+        if ats in ("workday", "icims"):
+            return "cost_paused_apify"
+        if r["source"] == "warm_path":
+            return "warm_path_no_handle"
+        return "handle_cleared"
+
+    out = []
+    reason_counts: dict[str, int] = {}
+    for r in rows:
+        reason = _reason(r)
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        out.append(
+            {
+                "name": r["name"],
+                "tier": r["tier"],
+                "ats": r["ats"],
+                "ats_handle": r["ats_handle"],
+                "source": r["source"],
+                "soft_paused": bool(r["soft_paused"]),
+                "deactivated": bool(r["deactivated"]),
+                "open_postings": int(r["open_postings"]),
+                "reason": reason,
+                "notes": r["notes"],
+            }
+        )
+
+    return {
+        "definition": (
+            "soft_paused = ats_handle NULL & ats not unknown (UI 'Paused' badge); "
+            "deactivated = source='deactivated'. Pause is INGEST-ONLY — existing "
+            "open postings stay in triage/scoring/search."
+        ),
+        "total_paused": len(out),
+        "with_open_postings": sum(1 for c in out if c["open_postings"] > 0),
+        "by_reason": reason_counts,
+        "companies": out,
+    }
+
+
 @app.get("/admin/diagnostics/no-candidate-breakdown", tags=["admin"])
 async def no_candidate_breakdown(db: DbSession) -> dict[str, Any]:
     """Read-only: why the outcome→posting matcher's ``no_candidate`` bucket is
