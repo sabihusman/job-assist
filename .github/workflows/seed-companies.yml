@@ -1,0 +1,80 @@
+name: Seed target companies
+
+# Ops tool: add target_company rows via POST /admin/seed/target-companies. The
+# body is a JSON array; each row needs `name` and `tier` (tier may be null).
+# Existing names are SKIPPED (insert-or-backfill, never overwrites). Validates
+# the source/tier/ats vocabularies (422 on a bad value).
+#
+# Manual-track / no-crawl company (e.g. a Gmail-match-only employer): give it
+#   {"name": "...", "source": "applied", "tier": null}
+# and OMIT `ats`/`ats_handle` — seed defaults ats to 'unknown' and the handle
+# stays NULL, so it's excluded from BOTH the daily curated plan (needs
+# tier IS NOT NULL + a real ATS handle) and the Apify sweep (needs
+# ats workday/icims). NOTE: do NOT pass `ats: "unknown"` explicitly — 'unknown'
+# is not an ATS enum value and the seed validator 422s on it; omit the key.
+#
+# Safe by default: apply=false is a DRY RUN — validates the JSON + echoes what
+# WOULD be sent, no write. Set apply=true to POST.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch:
+    inputs:
+      body:
+        description: 'JSON array, e.g. [{"name":"Casey''s General Stores","source":"applied","tier":null}]'
+        required: true
+      apply:
+        description: 'false = dry-run (validate + echo only); true = POST the insert'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: read
+
+jobs:
+  seed:
+    name: seed companies (apply=${{ github.event.inputs.apply }})
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+      BODY: ${{ github.event.inputs.body }}
+      APPLY: ${{ github.event.inputs.apply }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Validate JSON body
+        run: |
+          if ! echo "$BODY" | jq -e 'type == "array" and length > 0' >/dev/null; then
+            echo "::error::body must be a non-empty JSON array"
+            echo "$BODY"
+            exit 1
+          fi
+          echo "Parsed body:"
+          echo "$BODY" | jq .
+
+      - name: Dry-run notice
+        if: ${{ github.event.inputs.apply != 'true' }}
+        run: |
+          echo "DRY RUN — would POST the above body to /admin/seed/target-companies."
+          echo "Re-run with apply=true to write. (Existing names are skipped, never overwritten.)"
+
+      - name: POST seed (write)
+        if: ${{ github.event.inputs.apply == 'true' }}
+        run: |
+          echo "POST /admin/seed/target-companies"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 60 -X POST \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$BODY" \
+            "${API_URL}/admin/seed/target-companies" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          OUT=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          echo "$OUT" | jq .
+          if [ "$CODE" != "200" ]; then
+            echo "::error::seed returned HTTP ${CODE}"
+            exit 1
+          fi
