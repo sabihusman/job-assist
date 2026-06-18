@@ -95,6 +95,13 @@ class OperatorProfile(Base):
     similarity_weight: Mapped[float] = mapped_column(
         Float, nullable=False, server_default=text("0")
     )
+    # Phase A3 (feat/applied-corpus-boost): tunable weight for the surgical
+    # revealed-preference boost (applied_corpus_sim). DEFAULT 0 = OFF — at 0 the
+    # boost is byte-identical to the pre-A3 fit_score. Bounded, lift-only,
+    # eligibility-gated; see services/scoring.score_posting_decomposed.
+    applied_corpus_weight: Mapped[float] = mapped_column(
+        Float, nullable=False, server_default=text("0")
+    )
     looking_for_embedding: Mapped[list[float] | None] = mapped_column(Vector(768), nullable=True)
     looking_for_embedding_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     looking_for_embedded_at: Mapped[datetime | None] = mapped_column(

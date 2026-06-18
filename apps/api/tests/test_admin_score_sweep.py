@@ -111,7 +111,9 @@ def _patch_score(
     """
     calls: list[int] = call_counter if call_counter is not None else []
 
-    def _stub(posting: Any, profile: Any, *, tier: int | None) -> _StubDecomp:
+    def _stub(
+        posting: Any, profile: Any, *, tier: int | None, applied_basis: Any = None
+    ) -> _StubDecomp:
         calls.append(1)
         n = len(calls)
         if fail_on_call is not None and n == fail_on_call:
@@ -409,7 +411,9 @@ async def test_sweep_failed_row_preserves_previous_score(
     """A row whose scoring call fails keeps its previous fit_score."""
     from job_assist.main import app
 
-    def _always_raise(posting: Any, profile: Any, *, tier: int | None) -> _StubDecomp:
+    def _always_raise(
+        posting: Any, profile: Any, *, tier: int | None, applied_basis: Any = None
+    ) -> _StubDecomp:
         raise RuntimeError("always fails")
 
     monkeypatch.setattr("job_assist.services.scoring.score_posting_decomposed", _always_raise)
@@ -502,7 +506,9 @@ async def test_sweep_stable_tiebreaker_on_same_second_first_seen_at(
     # id-ascending order despite identical first_seen_at.
     visited_ids: list[str] = []
 
-    def _stub(posting: Any, profile: Any, *, tier: int | None) -> _StubDecomp:
+    def _stub(
+        posting: Any, profile: Any, *, tier: int | None, applied_basis: Any = None
+    ) -> _StubDecomp:
         visited_ids.append(str(posting.id))
         return _StubDecomp(50)
 

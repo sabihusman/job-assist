@@ -485,6 +485,49 @@ def score_breakdown(
     }
 
 
+# ── Phase A3: applied-corpus boost (Philosophy 2 — surgical, lift-only) ───────
+# Max points the boost can add at full weight x full confidence x full
+# similarity. The blend is bounded by this AND by ``applied_corpus_weight`` AND
+# by the confidence factor f(n) below.
+MAX_APPLIED_BOOST = 10.0
+# Upper anchor of the similarity ramp: sim at/above this gets the full fraction.
+# The lower anchor is the corpus's own reference_band (carried on AppliedBasis).
+_APPLIED_SIM_HI = 0.92
+
+
+@dataclass(frozen=True, slots=True)
+class AppliedBasis:
+    """Corpus-level inputs for the applied-corpus boost, computed ONCE per sweep
+    (NOT per posting) and injected into the pure scorer so it stays I/O-free.
+
+    ``centroid`` is the mean of the applied (non-gated) jd_embeddings;
+    ``centroid_norm`` is |centroid| (precomputed for cosine); ``reference_band``
+    is the avg cosine of the basis to its own centroid (the lower ramp anchor);
+    ``n`` is the basis size (confidence). Built by
+    services/applied_corpus.load_applied_basis.
+    """
+
+    centroid: list[float]
+    centroid_norm: float
+    reference_band: float
+    n: int
+
+
+def _applied_confidence(n: int) -> float:
+    """f(n) = min(1, n/30): thin corpus → fractional weight; grows with n."""
+    return min(1.0, n / 30.0)
+
+
+def _cosine_to_centroid(vec: list[float], basis: AppliedBasis) -> float:
+    """Cosine of a (unit-norm) posting embedding to the centroid.
+
+    jd_embedding is L2-normalized, centroid is not, so cos = dot / |centroid|.
+    """
+    if basis.centroid_norm <= 0:
+        return 0.0
+    return sum(v * c for v, c in zip(vec, basis.centroid, strict=False)) / basis.centroid_norm
+
+
 @dataclass(frozen=True, slots=True)
 class ScoreDecomposition:
     """Full, self-explaining breakdown of one posting's fit_score.
@@ -492,6 +535,8 @@ class ScoreDecomposition:
     Phase A1: makes the EXISTING computation legible. ``final`` is the
     authoritative fit_score — ``score_posting`` returns exactly this — so the
     decomposition reconciles to fit_score by construction (no separate math).
+    Phase A3: ``applied_corpus_boost`` records the surgical revealed-preference
+    boost (and WHY it did/didn't apply); ``final`` includes it.
     """
 
     scorer_version: str
@@ -504,6 +549,7 @@ class ScoreDecomposition:
     weighted_mean: float
     score_pre_caps: int
     caps: dict[str, dict[str, Any]]
+    applied_corpus_boost: dict[str, Any]
     final: int
 
     def to_dict(self) -> dict[str, Any]:
@@ -518,6 +564,7 @@ class ScoreDecomposition:
             "weighted_mean": self.weighted_mean,
             "score_pre_caps": self.score_pre_caps,
             "caps": self.caps,
+            "applied_corpus_boost": self.applied_corpus_boost,
             "final": self.final,
         }
 
@@ -527,13 +574,17 @@ def score_posting_decomposed(
     profile: OperatorProfile,
     *,
     tier: int | None,
+    applied_basis: AppliedBasis | None = None,
 ) -> ScoreDecomposition:
     """Compute the composite score AND its full decomposition (single source
-    of truth). Pure function of (posting, profile, tier). Deterministic, no I/O.
+    of truth). Pure function of (posting, profile, tier, applied_basis).
+    Deterministic, no I/O — the corpus-level ``applied_basis`` is injected.
 
     Phase A1 refactor: this holds the math that ``score_posting`` used to inline.
-    ``score_posting`` now returns ``.final`` — byte-for-byte identical output,
-    locked by the unchanged-output test matrix.
+    Phase A3: a surgical, lift-only applied-corpus boost is applied AFTER the
+    caps. Default ``applied_corpus_weight=0`` (or ``applied_basis=None``) => boost
+    is 0 => ``final`` byte-identical to the pre-A3 fit_score (no-op). Locked by
+    the unchanged-output test matrix.
     """
     parts = score_breakdown(posting, profile, tier=tier)
     # Weighted MEAN over the AVAILABLE weighted features (iterating ``_WEIGHTS``
@@ -583,6 +634,62 @@ def score_posting_decomposed(
     if disguised:
         score = min(score, _DISGUISED_SENIOR_CAP)
 
+    # ── Phase A3: surgical applied-corpus boost (Philosophy 2) ────────────────
+    # Lift-only, eligibility-gated, bounded; applied AFTER the caps. ELIGIBLE
+    # requires no cap fired AND seniority in-target — so a gated / disguised /
+    # senior role gets NO boost (the embedding's blind spots are structurally
+    # protected). boost >= 0 and 0 below the reference band => never buries.
+    ac_weight = float(getattr(profile, "applied_corpus_weight", 0.0) or 0.0)
+    included = list(profile.seniority_levels_included or [])
+    sen = str(posting.seniority_level) if posting.seniority_level is not None else None
+    # in-target iff a filter is set AND the level is in it (unknown/NULL → False).
+    seniority_in_target = bool(included) and sen in included
+    eligible = (not role_gate_fired) and (not disguised) and seniority_in_target
+
+    sim: float | None = None
+    applied_fit: int | None = None
+    conf: float | None = None
+    boost = 0.0
+    pre_boost_final = score
+    if applied_basis is not None:
+        conf = round(_applied_confidence(applied_basis.n), 4)
+        if ac_weight > 0 and posting.jd_embedding is not None:
+            sim = round(
+                _cosine_to_centroid([float(x) for x in posting.jd_embedding], applied_basis), 4
+            )
+            applied_fit = round(sim * 100)
+            denom = _APPLIED_SIM_HI - applied_basis.reference_band
+            frac = (
+                0.0
+                if denom <= 0
+                else max(0.0, min(1.0, (sim - applied_basis.reference_band) / denom))
+            )
+            if eligible:
+                boost = ac_weight * _applied_confidence(applied_basis.n) * frac * MAX_APPLIED_BOOST
+
+    if eligible and boost > 0:
+        score = int(min(100, round(pre_boost_final + boost)))
+
+    applied_corpus_boost = {
+        "weight": ac_weight,
+        "n": applied_basis.n if applied_basis is not None else None,
+        "confidence_factor": conf,
+        "reference_band": applied_basis.reference_band if applied_basis is not None else None,
+        "sim": sim,
+        "applied_fit": applied_fit,
+        "eligible": eligible,
+        "eligibility": {
+            "role_gate_ok": not role_gate_fired,
+            "not_disguised": not disguised,
+            "seniority_in_target": seniority_in_target,
+            "included_set": included,
+            "seniority_level": sen,
+        },
+        "boost_points": round(boost, 2),
+        "pre_boost_final": pre_boost_final,
+        "final": score,
+    }
+
     return ScoreDecomposition(
         scorer_version=SCORER_VERSION,
         weights=dict(_WEIGHTS),
@@ -597,6 +704,7 @@ def score_posting_decomposed(
             "role_family_gate": {"fired": role_gate_fired, "cap": ROLE_GATE_CAP},
             "disguised_senior": {"fired": disguised, "cap": _DISGUISED_SENIOR_CAP},
         },
+        applied_corpus_boost=applied_corpus_boost,
         final=score,
     )
 

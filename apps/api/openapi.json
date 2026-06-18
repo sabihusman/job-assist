@@ -5060,6 +5060,17 @@
             ],
             "title": "Similarity Weight"
           },
+          "applied_corpus_weight": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied Corpus Weight"
+          },
           "staffing_firm_blocklist": {
             "anyOf": [
               {

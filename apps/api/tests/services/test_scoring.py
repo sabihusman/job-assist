@@ -22,9 +22,11 @@ from job_assist.services.scoring import (
     _WEIGHTS,
     ADJACENT_FAMILIES,
     ANNUAL_HOURS,
+    MAX_APPLIED_BOOST,
     PREFERRED_FAMILIES,
     ROLE_GATE_CAP,
     SCORER_VERSION,
+    AppliedBasis,
     bucket_for_score,
     display_tier,
     is_disguised_senior,
@@ -884,8 +886,154 @@ def test_decomposition_to_dict_shape_and_version() -> None:
         "weighted_mean",
         "score_pre_caps",
         "caps",
+        "applied_corpus_boost",
         "final",
     }
     assert out["scorer_version"] == SCORER_VERSION
     assert out["weights"] == dict(_WEIGHTS)
     assert out["final"] == score_posting(_make_posting(similarity_score=100), profile, tier=1)
+    # A3: with no basis the boost block is present but inert.
+    assert out["applied_corpus_boost"]["boost_points"] == 0
+    assert out["applied_corpus_boost"]["n"] is None
+
+
+# ── Phase A3: surgical applied-corpus boost (Philosophy 2) ───────────────────
+
+
+def _basis(centroid: list[float], *, n: int = 16, ref: float = 0.884) -> AppliedBasis:
+    norm = sum(c * c for c in centroid) ** 0.5
+    return AppliedBasis(centroid=centroid, centroid_norm=norm, reference_band=ref, n=n)
+
+
+# in-target = {apm, pm}; senior_pm/lead_pm OUT (matches the operator's intent).
+def _a3_profile(weight: float = 1.0, **overrides: Any) -> OperatorProfile:
+    return _make_profile(
+        seniority_levels_included=["apm", "pm"],
+        applied_corpus_weight=weight,
+        **overrides,
+    )
+
+
+def test_a3_weight_zero_is_byte_exact_noop() -> None:
+    """Weight 0 ⇒ boost 0 ⇒ final identical to the no-basis score, even with a
+    basis + perfect similarity. A1 reconciliation (final==fit_score) holds."""
+    profile = _a3_profile(weight=0.0)
+    posting = _make_posting(seniority_level=SeniorityLevel.pm.value, jd_embedding=[1.0, 0.0, 0.0])
+    basis = _basis([1.0, 0.0, 0.0])
+    d = score_posting_decomposed(posting, profile, tier=1, applied_basis=basis)
+    assert d.applied_corpus_boost["boost_points"] == 0
+    assert d.final == score_posting(posting, profile, tier=1)  # no-basis path
+
+
+def test_a3_eligibility_gate_disguised_no_boost() -> None:
+    """A disguised-senior (capped) row gets NO boost even at high weight + sim —
+    stays at its cap (Plaid-PM-style)."""
+    profile = _a3_profile(weight=1.0)
+    posting = _make_posting(
+        role_family=RoleFamily.product_management.value,
+        seniority_level=SeniorityLevel.pm.value,
+        salary_min=175_000,  # disguised-senior trip
+        salary_max=210_000,
+        salary_currency="USD",
+        similarity_score=100,
+        jd_embedding=[1.0, 0.0, 0.0],
+    )
+    basis = _basis([1.0, 0.0, 0.0])  # sim = 1.0
+    d = score_posting_decomposed(posting, profile, tier=1, applied_basis=basis)
+    assert d.caps["disguised_senior"]["fired"] is True
+    assert d.applied_corpus_boost["eligible"] is False
+    assert d.applied_corpus_boost["eligibility"]["not_disguised"] is False
+    assert d.applied_corpus_boost["boost_points"] == 0
+    assert d.final <= _DISGUISED_SENIOR_CAP
+
+
+def test_a3_blindspot_senior_no_boost() -> None:
+    """Out-of-target seniority (senior PM) gets NO boost even at perfect sim —
+    the blind-spot guard (Range/MeridianLink Senior-style)."""
+    profile = _a3_profile(weight=1.0)
+    posting = _make_posting(
+        role_family=RoleFamily.product_management.value,
+        seniority_level=SeniorityLevel.senior_pm.value,  # NOT in {apm, pm}
+        similarity_score=100,
+        jd_embedding=[1.0, 0.0, 0.0],
+    )
+    basis = _basis([1.0, 0.0, 0.0])  # sim = 1.0
+    pre = score_posting(posting, profile, tier=1)
+    d = score_posting_decomposed(posting, profile, tier=1, applied_basis=basis)
+    assert d.applied_corpus_boost["eligibility"]["seniority_in_target"] is False
+    assert d.applied_corpus_boost["eligible"] is False
+    assert d.applied_corpus_boost["boost_points"] == 0
+    assert d.final == pre  # not lifted
+
+
+def test_a3_upside_eligible_pm_is_boosted() -> None:
+    """An eligible in-target PM, high sim, no cap → positive boost, final lifts
+    above pre-boost (JPMorgan-PM-style upside)."""
+    profile = _a3_profile(weight=1.0)
+    posting = _make_posting(
+        role_family=RoleFamily.product_management.value,
+        seniority_level=SeniorityLevel.pm.value,
+        similarity_score=50,  # keep pre-boost < 100 so the lift is visible
+        jd_embedding=[1.0, 0.0, 0.0],
+    )
+    basis = _basis([1.0, 0.0, 0.0], n=16)  # sim = 1.0
+    d = score_posting_decomposed(posting, profile, tier=4, applied_basis=basis)
+    assert d.applied_corpus_boost["eligible"] is True
+    assert d.applied_corpus_boost["boost_points"] > 0
+    assert d.final > d.applied_corpus_boost["pre_boost_final"]
+
+
+def test_a3_never_buries_low_sim() -> None:
+    """A high-fit, LOW-sim row (below reference band) is unchanged — boost is
+    lift-only and 0 below the band (the no-bury guard)."""
+    profile = _a3_profile(weight=1.0)
+    posting = _make_posting(
+        role_family=RoleFamily.product_management.value,
+        seniority_level=SeniorityLevel.pm.value,
+        similarity_score=100,
+        jd_embedding=[0.0, 1.0, 0.0],  # orthogonal to centroid → sim 0
+    )
+    basis = _basis([1.0, 0.0, 0.0])
+    pre = score_posting(posting, profile, tier=1)
+    d = score_posting_decomposed(posting, profile, tier=1, applied_basis=basis)
+    assert d.applied_corpus_boost["boost_points"] == 0
+    assert d.final == pre  # never lowered
+
+
+def test_a3_confidence_factor_scales_and_surfaces_n() -> None:
+    """f(n)=min(1,n/30) surfaced; a bigger basis yields a bigger boost."""
+    profile = _a3_profile(weight=1.0)
+    posting = _make_posting(
+        role_family=RoleFamily.product_management.value,
+        seniority_level=SeniorityLevel.pm.value,
+        similarity_score=50,
+        jd_embedding=[1.0, 0.0, 0.0],
+    )
+    d15 = score_posting_decomposed(
+        posting, profile, tier=4, applied_basis=_basis([1.0, 0, 0], n=15)
+    )
+    d30 = score_posting_decomposed(
+        posting, profile, tier=4, applied_basis=_basis([1.0, 0, 0], n=30)
+    )
+    assert d15.applied_corpus_boost["confidence_factor"] == round(min(1.0, 15 / 30), 4)
+    assert d30.applied_corpus_boost["confidence_factor"] == 1.0
+    assert d30.applied_corpus_boost["n"] == 30
+    assert d30.applied_corpus_boost["boost_points"] > d15.applied_corpus_boost["boost_points"]
+
+
+def test_a3_boost_block_surfaces_eligibility_inputs() -> None:
+    """The block exposes seniority_in_target, included_set, seniority_level so
+    every boost decision is inspectable."""
+    profile = _a3_profile(weight=1.0)
+    posting = _make_posting(
+        role_family=RoleFamily.product_management.value,
+        seniority_level=SeniorityLevel.pm.value,
+        jd_embedding=[1.0, 0.0, 0.0],
+    )
+    d = score_posting_decomposed(posting, profile, tier=1, applied_basis=_basis([1.0, 0, 0]))
+    elig = d.applied_corpus_boost["eligibility"]
+    assert elig["included_set"] == ["apm", "pm"]
+    assert elig["seniority_level"] == "pm"
+    assert elig["seniority_in_target"] is True
+    assert elig["role_gate_ok"] is True
+    assert d.applied_corpus_boost["boost_points"] <= MAX_APPLIED_BOOST
