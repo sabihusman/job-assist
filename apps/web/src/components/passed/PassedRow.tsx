@@ -1,6 +1,10 @@
 'use client';
 
+import { toast } from 'sonner';
+
 import { REASON_CHOICES } from '@/components/triage/ReasonPicker';
+import { showErrorToast } from '@/lib/api/error-toast';
+import { useRecordAction } from '@/lib/api/hooks';
 import type { ActionReason, PostingListItem } from '@/lib/triage/types';
 import { cn } from '@/lib/utils';
 
@@ -34,6 +38,23 @@ export function PassedRow({ posting }: { posting: PostingListItem }) {
   const reason = posting.state.reason;
   const reasonLabel = reason ? REASON_LABEL[reason] : null;
 
+  const recordAction = useRecordAction();
+
+  // Reinstate = append a 'reset' action (append-only — the original
+  // 'not_interested' row is preserved). 'reset' is triage-eligible, so the
+  // posting returns to triage; the hook's onMutate optimistically removes this
+  // row from the Passed list (key ['postings', {state:['not_interested']}]) and
+  // onSettled invalidates so triage refetches with it. No backend change.
+  const handleReinstate = () => {
+    recordAction.mutate(
+      { postingId: posting.id, action_type: 'reset' },
+      {
+        onSuccess: () => toast.success('✓ Reinstated to triage'),
+        onError: (err) => showErrorToast(err, "Couldn't reinstate — try refreshing"),
+      },
+    );
+  };
+
   return (
     <li
       data-testid="passed-row"
@@ -62,6 +83,18 @@ export function PassedRow({ posting }: { posting: PostingListItem }) {
           {reasonLabel}
         </span>
       )}
+      <button
+        type="button"
+        onClick={handleReinstate}
+        disabled={recordAction.isPending}
+        className={cn(
+          'shrink-0 rounded-md border border-border bg-surface px-2.5 py-1 text-[12px]',
+          'text-muted-foreground hover:bg-accent hover:text-foreground',
+          'focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50',
+        )}
+      >
+        Reinstate
+      </button>
     </li>
   );
 }
