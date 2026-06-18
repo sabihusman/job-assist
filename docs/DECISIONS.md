@@ -191,3 +191,71 @@ Defaults (the values that seed `HardRuleConfig`):
 **Trade-off:** the `MAX` query runs on every poll. Cheap — the `idx_outcome_event_received_at` index makes it O(log n), and at 96 polls/day × < 1 ms each, it's lost in the noise.
 
 **Bootstrap fallback (24 hours):** the orchestrator decides this. The default isn't load-bearing — a fresh deploy that immediately gets the production backfill (PR #22) will have weeks of `outcome_event` rows by the time the first 15-min poll fires.
+
+---
+
+## ADR-010 · Scoring evolution shipped read-only first (Version A staging)
+
+**Status:** Accepted
+
+**Context:** Adding a revealed-preference (applied-corpus) signal to `fit_score`
+risked silently changing every score before anyone could see whether the signal
+was sane.
+
+**Decision:** Ship in three read-only-first stages. **A1** — make the existing
+`fit_score` legible via a stored `score_components` decomposition (no value
+change). **A2** — compute the applied-corpus similarity as a pure read-only
+diagnostic (compute + expose, never blend). **A3** — blend it behind a default-0
+weight so deploy is a no-op until the operator opts in.
+
+**Rationale:** each stage was independently inspectable and reversible; the
+decomposition (A1) became the surface A3's contribution is shown in; A2 proved
+the signal coherent (and surfaced its blind spot) before it could move a score.
+
+**Alternatives considered:** blend directly behind a low default weight — rejected;
+no way to look before it influences anything, and the decomposition surface
+wouldn't exist to audit it.
+
+---
+
+## ADR-011 · Applied-corpus boost is surgical (lift-only), not a weighted blend
+
+**Status:** Accepted
+
+**Context:** The applied-corpus embedding captures topical similarity but is blind
+to seniority and the operator's negative/exclude preferences — it ranks senior/
+staff PM roles highly even though the heuristic correctly caps them.
+
+**Decision:** Philosophy 2 — the boost can only **lift** a posting, and only when
+no cap fired AND seniority is in-target (`eligible = role-gate-ok AND
+not-disguised AND seniority_in_target`). Applied after the caps, bounded by
+`weight × f(n) × ramp × MAX_BOOST`, and 0 below the corpus reference band.
+
+**Rationale:** a plain weighted-mean blend (Philosophy 1) inherently nudges senior
+roles up and shaves high-fit/low-sim roles down — exactly the embedding's blind
+spots. Boost-only + eligibility turns the heuristic's seniority/negative signals
+into a hard structural guard: it can't lift gated/capped/senior roles and can't
+bury anything. Confidence `f(n)=min(1,n/30)` keeps it weak while the applied
+corpus is thin (n≈16).
+
+**Alternatives considered:** Philosophy 1 (7th weighted sub-score) — rejected on
+the blind-spot and no-bury grounds above, evaluated side-by-side on real
+divergence cases before choosing.
+
+---
+
+## ADR-012 · Reinstate a passed role by appending, not mutating
+
+**Status:** Accepted
+
+**Context:** "Reinstate" returns a passed role to the triage queue. `posting_action`
+is append-only and feeds `resolved_status`.
+
+**Decision:** Append a new `reset` action rather than deleting/editing the original
+`not_interested` row. `reset` is already triage-eligible, so the latest-action
+membership flips the posting back to triage; the audit trail reads
+"not_interested (reason) → reset".
+
+**Rationale:** preserves the append-only history and the firewall/resolved-status
+logic; needs no new action_type, endpoint, or response-shape change. The same
+`reset` primitive already powers bulk-undo.

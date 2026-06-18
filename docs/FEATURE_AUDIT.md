@@ -14,11 +14,58 @@ Rules (per VERIFICATION.md): each non-WORKING item is a tracked fix; every fix
 lands with the guard test that would have caught the bug; an item moves to
 WORKING only after **re-verification in production**.
 
-_Last updated: 2026-06-03._
+_Last updated: 2026-06-18._
 
 ---
 
 ## Recently resolved
+
+### `looking_for_text` / semantic signal — **WORKING** ✅ (was: MISLABELED)
+Slice 2 landed: `similarity_score` is calibrated (0–100 PERCENT_RANK) and
+`semantic_fit` is a live 20-weight feature inside `fit_score` for embedded rows
+(~2,088/2,105 open). The semantic→score path is real, not aspirational. The
+`best_fit_semantic` *sort* blend remains operator-tunable via `similarity_weight`
+(0 = off). Verified via `/admin/diagnostics/semantic-readiness`.
+
+### Score transparency (Version A1) — **WORKING** ✅ (new)
+Every posting's `fit_score` is now fully explainable: `score_components` (JSONB)
+records each sub-score, weight, contribution, renormalization, caps fired, and
+`final`. `score_posting_decomposed()` is the single source of truth (`final ==
+fit_score`, reconciled 2,239/2,239 in prod). Surfaced read-only via
+`/admin/diagnostics/score-decomposition`.
+
+### Applied-corpus boost (Version A3) — **WORKING (dormant)** ✅ (new)
+A bounded, lift-only, eligibility-gated revealed-preference boost behind
+`operator_profile.applied_corpus_weight` (**default 0 = no-op**, proven on prod:
+0 drifted on a weight-0 rescore). Structurally cannot lift gated/disguised/senior
+roles or bury anything. Read-only A2 signal exposed at
+`/admin/diagnostics/applied-similarity`. Live but off until the operator raises
+the weight.
+
+### geo_whitelist US-remote — **WORKING** ✅ (was: PARTIAL)
+The geo gate now passes US/unspecified-remote (`_remote_kind`) while still
+failing region-qualified non-US remote (`Remote - India`, `EMEA Remote`). A
+`reeval-hard-rules` backfill surfaced 4 genuine US-remote high-fit roles (+1
+stale-eval correction); 0 wrongly surfaced.
+
+### outcome-linking q4 (resume coverage) — **WORKING** ✅ (was: MISLABELED)
+q4 anchored on `application_state` (only 2 legacy rows) → reported 2; now counts
+`application_resume` directly → the true 12. `resume_text` backfill brought
+paste-only 3 → 12 across `.docx` resumes.
+
+### classifier non-object JSON — **WORKING** ✅ (was: latent BROKEN)
+The relink classifier path is regression-tested against non-object Gemini JSON
+(top-level array / bare string): degrades to unclassified, row left unlinked, no
+raise (the `#198` classify() fix + relink's try/except, locked end-to-end).
+
+### Reinstate a passed role — **WORKING** ✅ (new)
+A "Reinstate" control on each Passed row returns the role to triage by appending
+a `reset` action (append-only — the original `not_interested` + reason preserved).
+Frontend-only; reuses the existing `reset` path.
+
+---
+
+## Earlier resolved
 
 ### Per-company cap — **WORKING** ✅ (was: silent suppressor)
 The default Triage cap of 3 roles/company was enforced server-side but
@@ -55,9 +102,8 @@ itself cleanly instead of taking prod down.
 | Feature | Status | Defect | Harm |
 |---|---|---|---|
 | **"Interested" view** | BROKEN | key `1` sets `interested`, posting leaves Triage into **no view** | ↓↓ suppresses operator's hand-picked best roles |
-| **`looking_for_text`** | VALIDATED — Slice 2 pending | Embedding Slice 1 is now live (PR #114/#115): `looking_for_text` is embedded and powers `GET /admin/embeddings/nearest`. Validation gate ran in prod — **1,591 postings embedded**; the top-20 nearest the profile vector are **all fintech/wealthtech PM roles** matching the operator (Justworks, Plaid, Ramp, Altruist, MeridianLink, Betterment, Upstart, Gusto), and it **meaningfully disagrees with the heuristic on domain fit**. Cosine spread 0.58–0.75 (median 0.64) — relative ordering is good but compressed, so Slice 2 must calibrate before blending. Still MISLABELED ("the strongest signal") until Slice 2 wires it into ranking. | none yet (read-only gate); the label remains aspirational until Slice 2 |
 | **`role_keywords`** | INERT | stored; read by nothing (scorer uses hardcoded families) | lost intent |
-| **Pass reasons** (`posting_action.reason`) | INERT | stored + displayed only; no scorer/classifier consumer | lost feedback signal |
+| **Pass reasons** (`posting_action.reason`) | INERT | stored + displayed only; no scorer/classifier consumer. (Revealed-preference now feeds scoring via the A3 applied-corpus boost, but it reads the *applied* set, not pass *reasons*.) | lost feedback signal |
 | **API-keys Settings section** | MISLABELED | hardcodes "set" for all 5 keys regardless of real env state | can mask a missing key (e.g. dead Gmail token) |
 | **`applicant_cap` hard rule** | INERT (in practice) | `applicant_count` is uniformly NULL (no adapter populates it) → cap never fires | a no-op the operator may trust |
 | **Applied view** | PARTIAL | "applied" includes company-level `application_confirmation` | ↑ shows un-applied roles at a confirmed company |

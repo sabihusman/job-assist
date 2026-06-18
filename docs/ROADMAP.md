@@ -61,3 +61,29 @@ Do not build: resume tailoring, Workday adapter, learned scoring.
 - Application velocity: maintain or increase rate of *quality* applications
 - Source yield: answerable with data
 - Triage quality: precision/recall against manual decisions, tracked over time
+
+---
+
+## Status (2026-06)
+
+What actually shipped vs the six-week plan:
+
+**Built and live:** Greenhouse/Lever/Ashby adapters + Workday/iCIMS via Apify;
+broad ATS-handle discovery; hard-rule filter (geo incl. US-remote, seniority,
+PM/PO gate, staffing, salary); heuristic `fit_score` with a transparent
+decomposition; pgvector embeddings + calibrated semantic similarity; Gmail
+OAuth + backfill + 6-hourly polling + outcome classification; the Next.js triage
+UI (keyboard-driven) plus Applied/Passed/Rejected/Pipeline/Companies/Contacts/
+Resumes/Stats/Settings; per-application résumé attach + text extraction; health
+dot + Sentry; full GitHub-Actions cron chain.
+
+**Beyond the plan — Version A (revealed-preference scoring), shipped read-only
+first:** A1 score-decomposition surface → A2 applied-corpus similarity signal →
+A3 a bounded, lift-only surgical boost (default-0, dormant until tuned). Plus a
+large read-only `/admin/diagnostics/*` suite + manual ops workflows for prod
+introspection without a DB connection, and "Reinstate" (passed → triage via an
+appended `reset`).
+
+**Not built (deliberately deferred):** daily Resend digest, self-hosted RAG Q&A,
+outreach/résumé tailoring agents, JSearch adapter, learned scoring weights. The
+triage queue + diagnostics surface — not a digest email — became the product.

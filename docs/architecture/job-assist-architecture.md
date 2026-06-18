@@ -150,7 +150,7 @@ flowchart TB
   classDef llm fill:#7c3aed,color:#fff,stroke:#4c1d95;
   classDef ext fill:#d97706,color:#fff,stroke:#92400e;
 
-  SCO["score_posting() — pure fn · SCORER_VERSION v2_semantic<br/>weighted mean of 6 sub-scores (Σ=100):<br/>role_family 20 · seniority 20 · salary 15 · tier 10 · geo 15 · semantic_fit 20<br/>HARD GATE: role_family not in (product_management, product_owner) → cap 40 · :521<br/>SOFT CAP: disguised-senior (PM + pm/unknown + USD salary_min ≥ 175k) → 55 · :529"]:::svc
+  SCO["score_posting_decomposed() — pure fn · SCORER_VERSION v2_semantic<br/>weighted mean of 6 sub-scores (Σ=100):<br/>role_family 20 · seniority 20 · salary 15 · tier 10 · geo 15 · semantic_fit 20<br/>HARD GATE: role_family not in (product_management, product_owner) → cap 40<br/>SOFT CAP: disguised-senior (PM + pm/unknown + USD salary_min ≥ 175k) → 55<br/>A1: emits score_components (full decomposition, final == fit_score)<br/>A3: applied-corpus boost AFTER caps — lift-only, eligibility-gated,<br/>behind applied_corpus_weight (default 0 = no-op)"]:::svc
 
   CLS["reclassify sweep (Gemini)<br/>main.py:2000+ · cron 07:30"]:::svc
   GEMC{{"Gemini 2.5 Flash-Lite<br/>classify_posting()<br/>role_family + seniority"}}:::llm
@@ -161,8 +161,8 @@ flowchart TB
   RECAL["recalibrate_similarity()<br/>PERCENT_RANK vs profile vector → 0..100"]:::svc
   RESC["rescore_open_postings()<br/>batched, memory-flat"]:::svc
 
-  JP[("job_posting<br/>fit_score · role_family · jd_embedding<br/>similarity_score · jd_summary_markdown")]:::db
-  PROF[("operator_profile<br/>looking_for_embedding · similarity_weight")]:::db
+  JP[("job_posting<br/>fit_score · score_components · role_family · jd_embedding<br/>similarity_score · jd_summary_markdown")]:::db
+  PROF[("operator_profile<br/>looking_for_embedding · similarity_weight · applied_corpus_weight")]:::db
 
   CLS --> GEMC --> CLS
   CLS -->|"writes role_family, seniority"| JP

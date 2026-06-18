@@ -206,6 +206,49 @@ HAVING count(*) >= 3
 ORDER BY rejections DESC;
 ```
 
+### Prod introspection without a DB connection (diagnostics + ops workflows)
+
+There's no direct prod DB connection — prod reads/writes go through admin
+endpoints triggered by manual GitHub `workflow_dispatch` workflows that carry the
+`API_AUTH_TOKEN` / `API_URL` secrets (prod host
+`api-production-ca5ad.up.railway.app`).
+
+**Read-only diagnostics** — each `/admin/diagnostics/*` endpoint has a matching
+`*-probe.yml` workflow (pure GET; safe to run anytime):
+
+| Probe | Answers |
+|---|---|
+| `outcome-linking-probe` | outcome→posting/company link rates; q4 = true resume count |
+| `rag-corpus-probe` | corpus viability (apply+resume+outcome triples) |
+| `triples-probe` | per-applied-posting (posting+resume+outcome) + "applied, no résumé" gap list |
+| `curated-zero-postings-probe` | why curated companies have 0 postings (bucketed) |
+| `company-references-probe` | a company's row + all FK reference counts (dedup safety) |
+| `ingest-scoring-probe` | last-7d ingest volume; open `fit≥80` by classify/embed/hard-rule gate |
+| `high-fit-gaps-probe` | geo-gated high-fit list + classifier-backlog drain estimate |
+| `semantic-readiness-probe` | `similarity_weight`, `looking_for_text`, embedded/calibrated counts |
+| `paused-companies-probe` | soft-paused + deactivated companies, with open-posting counts |
+| `applied-corpus-embeddings-probe` | applied-set clustering (centroid vs k-NN decider) |
+| `applied-similarity-probe` | open postings ranked by applied-corpus similarity |
+| `score-decomposition-probe` | `score_components` reconciliation (final == fit_score) |
+| `operator-profile-probe` | live operator profile (geo whitelist, weights) |
+| `ingest-runs-probe` | recent `ingest_run` rows, failed-run isolation |
+
+**Write / ops workflows** (dry-run by default where applicable):
+
+| Workflow | Does |
+|---|---|
+| `crawl-config` | patch `tier`/`source`/`ats`/`ats_handle` by name (tier backfill, retire, dedup) |
+| `ingest-handle` | crawl one `(ats, handle)` on demand |
+| `reeval-hard-rules` | re-run hard rules over open postings (e.g. after a geo-rule change) |
+| `outcome-relink` | re-link unlinked outcomes to companies (free domain pass / Gemini pass) |
+| `backfill-score-components` | populate `score_components` on reconciling rows (never rewrites `fit_score`) |
+| `deactivate-company` | retire a dead board (`tier=null, source=deactivated`) |
+
+Gotchas: a `workflow_dispatch` workflow is only dispatchable once it's on the
+default branch (merge first). `crawl-config` rejects `ats='unknown'` — to retire a
+dupe, null the `ats_handle` (leave `ats`). The dedup pattern is **deactivate, not
+delete** (`division` FK cascades on a company delete).
+
 ### Gmail OAuth setup
 
 One-time operator setup to populate the env vars that the

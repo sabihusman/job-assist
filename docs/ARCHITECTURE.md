@@ -86,3 +86,32 @@ Single project, both apps connect. Core tables:
 - **Web:** Vercel, preview deploy per PR, production deploy on merge to `main`.
 - **API:** Railway (or Fly.io). Production deploy on merge to `main`.
 - **DB:** Supabase. Migrations run via Alembic, gated by CI shadow-DB check.
+
+## Current state (2026-06)
+
+This file describes the original plan; the system as built has moved on. Key
+deltas (see [`TECH_SPEC.md`](TECH_SPEC.md) for the authoritative current spec):
+
+- **Hosting:** API on Railway; DB on Supabase Postgres + pgvector; web on Vercel.
+- **Ingest** is live for Greenhouse/Lever/Ashby (direct) plus Workday/iCIMS via
+  the Apify "Fantastic" path (boards that block Railway's egress IP), with broad
+  ATS-handle discovery. Daily curated cron + weekly warm-path sweep.
+- **Scoring is heuristic + transparent, not learned.** `fit_score` is a six-feature
+  weighted composite with a role-family gate and disguised-senior cap. **Version A**
+  added, in read-only stages: **A1** the `score_components` decomposition (every
+  posting's score is fully explainable), **A2** an applied-corpus (revealed-
+  preference) similarity signal, and **A3** a bounded, lift-only **surgical boost**
+  of that signal behind a default-0 weight. Semantic cosine also feeds an optional
+  `best_fit_semantic` sort.
+- **Outcome-driven Pipeline:** Applied/Passed/Rejected/Pipeline views are built
+  from Gmail `outcome_event`s (most still unlinked to a posting), unified with
+  manual `posting_action` / `application_state`. "Reinstate" returns a passed role
+  to triage by appending a `reset` action (append-only).
+- **Cron chain (UTC):** ingest 06:00 → broad-ingest 06:30 → company-enrich 07:00 →
+  classifier 07:30 → divisions 08:00 → JD-summaries 08:30 → embeddings 09:00 →
+  ingest-health 09:30; Gmail poll every 6h.
+- **Ops without a prod DB:** a suite of read-only `/admin/diagnostics/*` endpoints
+  (each with a manual probe workflow) answers corpus questions; manual
+  `workflow_dispatch` workflows carry the auth token for prod reads/writes.
+- **Digest / RAG Q&A** from the original plan are not built; triage + the
+  diagnostics surface are the live product.
