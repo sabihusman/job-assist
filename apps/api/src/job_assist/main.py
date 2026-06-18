@@ -5335,6 +5335,66 @@ async def company_references(db: DbSession, names: str) -> dict[str, Any]:
     }
 
 
+@app.get("/admin/diagnostics/ingest-scoring", tags=["admin"])
+async def ingest_scoring_diagnostic(db: DbSession) -> dict[str, Any]:
+    """Read-only: recent ingest volume + high-fit open-posting readiness.
+
+    Pure SELECT; no writes.
+
+      * ``q1_ingested_last_7d`` — job_posting rows first seen in the last 7 days.
+        Ingest time is ``first_seen_at`` (server-default now() at ingest; there
+        is no ``created_at`` column).
+      * ``q2_open_high_fit`` — currently-OPEN postings (``closed_at IS NULL``)
+        with ``fit_score >= 80``, broken down by enrichment status. fit_score is
+        heuristics-only until the sweeps run, so this shows how many high-fit
+        rows are still un-classified / un-embedded: ``classified`` =
+        ``classified_at IS NOT NULL`` (the LLM reclassify sweep ran);
+        ``embedded`` = ``embedded_at IS NOT NULL`` (the embeddings sweep ran).
+        Includes a 2x2 cross-tab so the "neither" backlog is visible.
+    """
+    from sqlalchemy import text
+
+    q1 = (
+        await db.execute(
+            text(
+                "SELECT COUNT(*) FROM job_posting WHERE first_seen_at >= now() - interval '7 days'"
+            )
+        )
+    ).scalar_one()
+
+    q2 = (
+        (
+            await db.execute(
+                text(
+                    "SELECT "
+                    "  COUNT(*) AS total, "
+                    "  COUNT(*) FILTER (WHERE classified_at IS NOT NULL) AS classified, "
+                    "  COUNT(*) FILTER (WHERE classified_at IS NULL) AS not_classified, "
+                    "  COUNT(*) FILTER (WHERE embedded_at IS NOT NULL) AS embedded, "
+                    "  COUNT(*) FILTER (WHERE embedded_at IS NULL) AS not_embedded, "
+                    "  COUNT(*) FILTER (WHERE classified_at IS NOT NULL "
+                    "    AND embedded_at IS NOT NULL) AS classified_and_embedded, "
+                    "  COUNT(*) FILTER (WHERE classified_at IS NOT NULL "
+                    "    AND embedded_at IS NULL) AS classified_not_embedded, "
+                    "  COUNT(*) FILTER (WHERE classified_at IS NULL "
+                    "    AND embedded_at IS NOT NULL) AS embedded_not_classified, "
+                    "  COUNT(*) FILTER (WHERE classified_at IS NULL "
+                    "    AND embedded_at IS NULL) AS neither "
+                    "FROM job_posting "
+                    "WHERE closed_at IS NULL AND fit_score >= 80"
+                )
+            )
+        )
+        .mappings()
+        .one()
+    )
+
+    return {
+        "q1_ingested_last_7d": int(q1),
+        "q2_open_high_fit": {k: int(v) for k, v in dict(q2).items()},
+    }
+
+
 @app.get("/admin/diagnostics/no-candidate-breakdown", tags=["admin"])
 async def no_candidate_breakdown(db: DbSession) -> dict[str, Any]:
     """Read-only: why the outcome→posting matcher's ``no_candidate`` bucket is
