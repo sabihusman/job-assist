@@ -1,0 +1,41 @@
+name: Reeval hard rules
+
+# Ops tool: POST /admin/postings/reeval-hard-rules — re-runs apply_hard_rules
+# over all OPEN postings and rewrites hard_rule_failed / hard_rules_evaluated_at.
+# Pure function, no LLM/network, one pass + one commit. Run after a hard-rule
+# logic or operator-profile change so the existing corpus reflects it.
+# Prints the resulting passed / evaluated / by_rule counts.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  reeval:
+    name: Reeval hard rules (open postings)
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Trigger reeval
+        run: |
+          echo "POST /admin/postings/reeval-hard-rules"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 300 -X POST \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/postings/reeval-hard-rules" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          OUT=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          echo "$OUT" | jq .
+          if [ "$CODE" != "200" ]; then
+            echo "::error::reeval returned HTTP ${CODE}"
+            exit 1
+          fi
