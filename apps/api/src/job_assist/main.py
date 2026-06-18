@@ -778,6 +778,7 @@ async def backfill_score_components_endpoint(db: DbSession) -> dict[str, Any]:
     from sqlalchemy import select
 
     from job_assist.db.models import JobPosting, OperatorProfile, TargetCompany
+    from job_assist.services.applied_corpus import load_applied_basis
     from job_assist.services.scoring import score_posting_decomposed
 
     operator_profile = (
@@ -785,6 +786,11 @@ async def backfill_score_components_endpoint(db: DbSession) -> dict[str, Any]:
     ).scalar_one_or_none()
     if operator_profile is None:
         raise HTTPException(status_code=400, detail="operator_profile is unseeded")
+
+    # A3: load the applied-corpus basis ONCE (only when the boost is on).
+    applied_basis = (
+        await load_applied_basis(db) if (operator_profile.applied_corpus_weight or 0) > 0 else None
+    )
 
     rows = (
         await db.execute(
@@ -802,7 +808,9 @@ async def backfill_score_components_endpoint(db: DbSession) -> dict[str, Any]:
             skipped += 1
             continue
         try:
-            decomp = score_posting_decomposed(posting, operator_profile, tier=tier)
+            decomp = score_posting_decomposed(
+                posting, operator_profile, tier=tier, applied_basis=applied_basis
+            )
         except Exception:
             skipped += 1
             continue
@@ -2464,6 +2472,15 @@ async def reclassify_sweep_endpoint(
     op_row = await db.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
     operator_profile = op_row.scalar_one_or_none()
 
+    # A3: applied-corpus basis, loaded ONCE for the sweep (only when boost on).
+    from job_assist.services.applied_corpus import load_applied_basis
+
+    applied_basis = (
+        await load_applied_basis(db)
+        if operator_profile is not None and (operator_profile.applied_corpus_weight or 0) > 0
+        else None
+    )
+
     # slice 2b: inject the operator's free-form targets + keywords into the
     # classifier as DISAMBIGUATION context (None when unseeded → prompt
     # unchanged). The LLM reclassifier is where the profile text matters; the
@@ -2527,6 +2544,7 @@ async def reclassify_sweep_endpoint(
                     posting,
                     operator_profile,
                     tier=tier_value,
+                    applied_basis=applied_basis,
                 )
                 posting.fit_score = _decomp.final
                 posting.score_components = _decomp.to_dict()
@@ -2635,27 +2653,32 @@ async def score_sweep_endpoint(
             detail="operator_profile is unseeded; cannot score postings",
         )
 
+    # A3: applied-corpus basis, loaded ONCE (only when the boost is on). When on,
+    # the boost reads jd_embedding, so we must NOT defer it below.
+    from job_assist.services.applied_corpus import load_applied_basis
+
+    applied_basis = (
+        await load_applied_basis(db) if (operator_profile.applied_corpus_weight or 0) > 0 else None
+    )
+
     # ── 1. Select candidates ─────────────────────────────────────────────
     # Tier comes from target_company via OUTER JOIN — postings without a
     # matched company get NULL tier, which the scorer maps to 50 (neutral).
     #
-    # Defer the heavy columns the scorer never reads (full JD text + 768-float
-    # JD vector + JD summary). The scorer needs only small structured fields +
-    # the ``similarity_score`` int; loading the JD text/vector for every
-    # candidate row ballooned memory on a fully-embedded corpus and OOMed the
-    # worker. Deferring them keeps the sweep light (everything else loads — no
-    # N+1).
+    # Defer the heavy columns the scorer never reads (full JD text + JD summary,
+    # and the 768-float JD vector UNLESS the A3 boost is on). Loading the JD
+    # text/vector for every row ballooned memory and OOMed the worker; deferring
+    # keeps the sweep light (everything else loads — no N+1).
+    _defers = [defer(JobPosting.jd_text), defer(JobPosting.jd_summary_markdown)]
+    if applied_basis is None:
+        _defers.append(defer(JobPosting.jd_embedding))
     stmt = (
         select(JobPosting, TargetCompany.tier)
         .outerjoin(TargetCompany, JobPosting.target_company_id == TargetCompany.id)
         # Skip stale/closed postings (Bestiary 5.18) — no point scoring a
         # removed posting that won't surface in Triage anyway.
         .where(JobPosting.closed_at.is_(None))
-        .options(
-            defer(JobPosting.jd_text),
-            defer(JobPosting.jd_embedding),
-            defer(JobPosting.jd_summary_markdown),
-        )
+        .options(*_defers)
     )
     if payload.only_unscored:
         stmt = stmt.where(JobPosting.fit_score.is_(None))
@@ -2687,7 +2710,9 @@ async def score_sweep_endpoint(
         old_score = posting.fit_score
 
         try:
-            _decomp = score_posting_decomposed(posting, operator_profile, tier=tier)
+            _decomp = score_posting_decomposed(
+                posting, operator_profile, tier=tier, applied_basis=applied_basis
+            )
             new_score = _decomp.final
         except Exception as exc:
             logger.warning(

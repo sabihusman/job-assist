@@ -58,6 +58,8 @@ class OperatorProfileRead(BaseModel):
     per_company_cap: int
     # slice 2a: semantic blend weight 0..1; 0 = off (heuristic unchanged).
     similarity_weight: float
+    # Phase A3: applied-corpus boost weight 0..1; 0 = off (no-op).
+    applied_corpus_weight: float
     staffing_firm_blocklist: list[str]
     # PR #43: list of SeniorityLevel enum values to include. NULL or empty
     # means "include all levels".
@@ -91,6 +93,8 @@ class OperatorProfileUpdate(BaseModel):
     per_company_cap: int | None = None
     # slice 2a: semantic blend weight 0..1; 0 = off. None = leave unchanged.
     similarity_weight: float | None = None
+    # Phase A3: applied-corpus boost weight 0..1; 0 = off. None = leave unchanged.
+    applied_corpus_weight: float | None = None
     staffing_firm_blocklist: list[str] | None = None
     # PR #43: list of SeniorityLevel enum values. None = "leave column
     # unchanged"; empty list = "clear filter" (include all levels).
@@ -134,6 +138,13 @@ class OperatorProfileUpdate(BaseModel):
     def _validate_similarity_weight(cls, value: float | None) -> float | None:
         if value is not None and not (0.0 <= value <= 1.0):
             raise ValueError("similarity_weight must be between 0 and 1 (0 = off)")
+        return value
+
+    @field_validator("applied_corpus_weight")
+    @classmethod
+    def _validate_applied_corpus_weight(cls, value: float | None) -> float | None:
+        if value is not None and not (0.0 <= value <= 1.0):
+            raise ValueError("applied_corpus_weight must be between 0 and 1 (0 = off)")
         return value
 
     @field_validator("seniority_levels_included")

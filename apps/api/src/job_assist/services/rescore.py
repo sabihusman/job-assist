@@ -57,6 +57,15 @@ async def rescore_open_postings(
     if profile is None:
         return 0, 0
 
+    # A3: applied-corpus basis, loaded ONCE for the whole rescore (only when the
+    # boost is on). When on, the boost reads jd_embedding, so it must NOT be
+    # deferred below.
+    from job_assist.services.applied_corpus import load_applied_basis
+
+    applied_basis = (
+        await load_applied_basis(session) if (profile.applied_corpus_weight or 0) > 0 else None
+    )
+
     # Lightweight: just the open posting ids (UUIDs are tiny even for 1000s of
     # rows). We page over these so we never hold more than ``batch_size`` full
     # rows in memory at once.
@@ -77,23 +86,24 @@ async def rescore_open_postings(
         # Tier via OUTER JOIN (NULL → neutral 50 in the scorer). Heavy columns
         # deferred — the scorer reads only small structured fields + the
         # similarity_score int.
+        _defers = [defer(JobPosting.jd_text), defer(JobPosting.jd_summary_markdown)]
+        if applied_basis is None:
+            _defers.append(defer(JobPosting.jd_embedding))
         rows = (
             await session.execute(
                 select(JobPosting, TargetCompany.tier)
                 .outerjoin(TargetCompany, JobPosting.target_company_id == TargetCompany.id)
                 .where(JobPosting.id.in_(chunk_ids))
-                .options(
-                    defer(JobPosting.jd_text),
-                    defer(JobPosting.jd_embedding),
-                    defer(JobPosting.jd_summary_markdown),
-                )
+                .options(*_defers)
             )
         ).all()
 
         now = datetime.now(tz=UTC)
         for posting, tier in rows:
             try:
-                _decomp = score_posting_decomposed(posting, profile, tier=tier)
+                _decomp = score_posting_decomposed(
+                    posting, profile, tier=tier, applied_basis=applied_basis
+                )
                 new_score = _decomp.final
             except Exception:
                 # A per-row scoring failure must not abort the batch.
