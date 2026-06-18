@@ -1,0 +1,46 @@
+name: High-fit gaps probe
+
+# Read-only: GETs /admin/diagnostics/high-fit-gaps — (A) open fit_score>=80
+# postings gated out by geo_whitelist (company/title/location/remote_type), and
+# (B) the classifier backlog (age of unclassified-open, sweep drain estimate,
+# re-classify waste). Pure GET; no writes.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: High-fit gaps
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+    steps:
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - name: Fetch + print
+        run: |
+          echo "-- GET /admin/diagnostics/high-fit-gaps --"
+          RESP=$(curl -s -w "\n%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${API_AUTH_TOKEN}" \
+            "${API_URL}/admin/diagnostics/high-fit-gaps" || printf '\n000')
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n -1)
+          echo "-- HTTP ${CODE} --"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::diagnostic returned HTTP ${CODE}"
+            echo "$BODY"
+            exit 1
+          fi
+          echo
+          echo "=== PART A: geo_whitelist-gated open fit>=80 ($(echo "$BODY" | jq '.geo_gated | length') rows) ==="
+          echo "$BODY" | jq -r '.geo_gated[] | "- \(.company) — \(.title) [fit=\(.fit_score)]\n    remote_type=\(.remote_type)  location_raw=\(.location_raw // "NULL")  normalized=\(.locations_normalized)"'
+          echo
+          echo "=== PART B: classifier backlog ==="
+          echo "$BODY" | jq '.classifier_backlog'

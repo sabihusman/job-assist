@@ -3390,6 +3390,30 @@
         }
       }
     },
+    "/admin/diagnostics/high-fit-gaps": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "High Fit Gaps Diagnostic",
+        "description": "Read-only: why high-fit open postings don't surface \u2014 geo gate + the\nclassifier backlog. Pure SELECT; no writes.\n\nPART A ``geo_gated`` \u2014 every open (``closed_at IS NULL``) ``fit_score >= 80``\nposting that failed the ``geo_whitelist`` hard rule, with company, title,\nand raw/normalized location + remote_type so genuinely-remote roles wrongly\nexcluded can be told apart from out-of-region ones.\n\nPART B ``classifier_backlog`` \u2014 diagnoses why most high-fit rows are\nunclassified. NOTE two different \"classified\" notions:\n  * ``classified_at IS NOT NULL`` = the LLM sweep stamped the row (the\n    marker q2 of ingest-scoring uses).\n  * the sweep's OWN candidate definition (``only_unclassified``) is\n    ``role_family='other' OR seniority_level='unknown'`` AND not already\n    judged at the current ``CLASSIFIER_VERSION`` \u2014 that's what actually\n    drains. Both are reported.\n  - ``age_unclassified_open`` \u2014 age buckets (by first_seen_at) of open rows\n    with ``classified_at IS NULL`` \u2014 stall vs normal draining.\n  - ``drain`` \u2014 sweep candidate-pool size, daily limit (50), days to drain.\n  - ``reclassify_waste`` \u2014 open ``other/unknown`` rows already LLM-judged,\n    split into those judged at the CURRENT version (correctly SKIPPED by the\n    audit guard \u2014 the waste that USED to recur) vs an older/NULL version\n    (still re-selectable, i.e. intended re-keying).",
+        "operationId": "high_fit_gaps_diagnostic_admin_diagnostics_high_fit_gaps_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response High Fit Gaps Diagnostic Admin Diagnostics High Fit Gaps Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/diagnostics/no-candidate-breakdown": {
       "get": {
         "tags": [

@@ -5440,6 +5440,142 @@ async def ingest_scoring_diagnostic(db: DbSession) -> dict[str, Any]:
     }
 
 
+@app.get("/admin/diagnostics/high-fit-gaps", tags=["admin"])
+async def high_fit_gaps_diagnostic(db: DbSession) -> dict[str, Any]:
+    """Read-only: why high-fit open postings don't surface — geo gate + the
+    classifier backlog. Pure SELECT; no writes.
+
+    PART A ``geo_gated`` — every open (``closed_at IS NULL``) ``fit_score >= 80``
+    posting that failed the ``geo_whitelist`` hard rule, with company, title,
+    and raw/normalized location + remote_type so genuinely-remote roles wrongly
+    excluded can be told apart from out-of-region ones.
+
+    PART B ``classifier_backlog`` — diagnoses why most high-fit rows are
+    unclassified. NOTE two different "classified" notions:
+      * ``classified_at IS NOT NULL`` = the LLM sweep stamped the row (the
+        marker q2 of ingest-scoring uses).
+      * the sweep's OWN candidate definition (``only_unclassified``) is
+        ``role_family='other' OR seniority_level='unknown'`` AND not already
+        judged at the current ``CLASSIFIER_VERSION`` — that's what actually
+        drains. Both are reported.
+      - ``age_unclassified_open`` — age buckets (by first_seen_at) of open rows
+        with ``classified_at IS NULL`` — stall vs normal draining.
+      - ``drain`` — sweep candidate-pool size, daily limit (50), days to drain.
+      - ``reclassify_waste`` — open ``other/unknown`` rows already LLM-judged,
+        split into those judged at the CURRENT version (correctly SKIPPED by the
+        audit guard — the waste that USED to recur) vs an older/NULL version
+        (still re-selectable, i.e. intended re-keying).
+    """
+    from sqlalchemy import bindparam, text
+
+    from job_assist.gmail.classifier import CLASSIFIER_VERSION
+
+    _DAILY_LIMIT = 50  # enrich-classifier.yml posts {"limit": 50}
+
+    # ── PART A: geo-gated high-fit open postings ──────────────────────────────
+    geo_rows = (
+        (
+            await db.execute(
+                text(
+                    "SELECT COALESCE(tc.name, jp.canonical_company_name) AS company, "
+                    "  jp.normalized_title AS title, jp.fit_score, "
+                    "  jp.remote_type, jp.location_raw, jp.locations_normalized "
+                    "FROM job_posting jp "
+                    "LEFT JOIN target_company tc ON tc.id = jp.target_company_id "
+                    "WHERE jp.closed_at IS NULL AND jp.fit_score >= 80 "
+                    "  AND jp.hard_rule_failed = 'geo_whitelist' "
+                    "ORDER BY jp.fit_score DESC, company"
+                )
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+    def _ser_geo(m: Any) -> dict[str, Any]:
+        d = dict(m)
+        d["remote_type"] = _enum_value(d["remote_type"])
+        d["locations_normalized"] = _extract_location_strings(d["locations_normalized"])
+        return d
+
+    # ── PART B2: age distribution of unclassified (classified_at IS NULL) open ─
+    age = (
+        (
+            await db.execute(
+                text(
+                    "SELECT "
+                    "  COUNT(*) FILTER (WHERE first_seen_at >= now() - interval '1 day') "
+                    "    AS d_0_1, "
+                    "  COUNT(*) FILTER (WHERE first_seen_at < now() - interval '1 day' "
+                    "    AND first_seen_at >= now() - interval '3 days') AS d_1_3, "
+                    "  COUNT(*) FILTER (WHERE first_seen_at < now() - interval '3 days' "
+                    "    AND first_seen_at >= now() - interval '7 days') AS d_3_7, "
+                    "  COUNT(*) FILTER (WHERE first_seen_at < now() - interval '7 days') "
+                    "    AS d_8_plus, "
+                    "  COUNT(*) AS total "
+                    "FROM job_posting WHERE closed_at IS NULL AND classified_at IS NULL"
+                )
+            )
+        )
+        .mappings()
+        .one()
+    )
+
+    # ── PART B3: sweep candidate pool (what actually drains) + drain estimate ──
+    pool = (
+        await db.execute(
+            text(
+                "SELECT COUNT(*) FROM job_posting "
+                "WHERE closed_at IS NULL "
+                "  AND (role_family::text = 'other' OR seniority_level::text = 'unknown') "
+                "  AND (classified_at IS NULL OR classifier_version IS NULL "
+                "       OR classifier_version != :ver)"
+            ).bindparams(bindparam("ver")),
+            {"ver": CLASSIFIER_VERSION},
+        )
+    ).scalar_one()
+    pool = int(pool)
+    days_to_drain = (pool + _DAILY_LIMIT - 1) // _DAILY_LIMIT if pool else 0
+
+    # ── PART B4: re-classify waste (already-judged other/unknown open rows) ────
+    waste = (
+        (
+            await db.execute(
+                text(
+                    "SELECT "
+                    "  COUNT(*) AS other_or_unknown_open, "
+                    "  COUNT(*) FILTER (WHERE classified_at IS NOT NULL) AS already_llm_judged, "
+                    "  COUNT(*) FILTER (WHERE classified_at IS NOT NULL "
+                    "    AND classifier_version = :ver) AS judged_current_version_skipped, "
+                    "  COUNT(*) FILTER (WHERE classified_at IS NOT NULL "
+                    "    AND (classifier_version IS NULL OR classifier_version != :ver)) "
+                    "    AS judged_old_version_reselectable "
+                    "FROM job_posting "
+                    "WHERE closed_at IS NULL "
+                    "  AND (role_family::text = 'other' OR seniority_level::text = 'unknown')"
+                ).bindparams(bindparam("ver")),
+                {"ver": CLASSIFIER_VERSION},
+            )
+        )
+        .mappings()
+        .one()
+    )
+
+    return {
+        "geo_gated": [_ser_geo(r) for r in geo_rows],
+        "classifier_backlog": {
+            "classifier_version": CLASSIFIER_VERSION,
+            "age_unclassified_open": {k: int(v) for k, v in dict(age).items()},
+            "drain": {
+                "sweep_candidate_pool": pool,
+                "daily_limit": _DAILY_LIMIT,
+                "days_to_drain": days_to_drain,
+            },
+            "reclassify_waste": {k: int(v) for k, v in dict(waste).items()},
+        },
+    }
+
+
 @app.get("/admin/diagnostics/no-candidate-breakdown", tags=["admin"])
 async def no_candidate_breakdown(db: DbSession) -> dict[str, Any]:
     """Read-only: why the outcome→posting matcher's ``no_candidate`` bucket is
