@@ -3534,6 +3534,30 @@
         }
       }
     },
+    "/admin/diagnostics/applied-similarity": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Applied Similarity Diagnostic",
+        "description": "Phase A2 (read-only exposure): applied-corpus similarity for open postings.\n\nRevealed-preference signal \u2014 how close a posting is to the set the operator\nactually applied to. Basis = CENTROID (mean) of the applied jd_embeddings,\nover applied (resolved_status='applied') AND NOT role-gated (fit_score > 40,\nso a gated CSM can't define \"what good looks like\"). Step 1 showed one tight\ncluster (avg pairwise 0.76), so centroid (not k-NN) is the right basis.\n\nFor each open posting: ``applied_corpus_sim = 1 - (jd_embedding <=> centroid)``\n(cosine; `<=>` is magnitude-invariant so the centroid needn't be\nrenormalized). Centroid is computed on read \u2014 no stored column \u2014 so it tracks\nthe growing corpus. ``n`` (basis size) is returned for CONFIDENCE; with n~16\nthis is thin/low-confidence and strengthens as the corpus grows. Same blind\nspot as semantic_fit: TOPICAL similarity only, no negative/exclude prefs.\n\nHARD CONSTRAINT: pure SELECT. Does NOT write score_components, does NOT touch\nfit_score, does NOT blend \u2014 A3 owns blending.",
+        "operationId": "applied_similarity_diagnostic_admin_diagnostics_applied_similarity_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Applied Similarity Diagnostic Admin Diagnostics Applied Similarity Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/diagnostics/no-candidate-breakdown": {
       "get": {
         "tags": [
