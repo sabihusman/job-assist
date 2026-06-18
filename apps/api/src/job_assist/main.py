@@ -5004,7 +5004,12 @@ async def outcome_linking_diagnostic(db: DbSession) -> dict[str, Any]:
       * ``q2_by_outcome_type`` — the same fill rate split by outcome_type.
       * ``q3_complete_triples`` — distinct postings that have BOTH an outcome and
         an attached resume (the rows usable as training signal).
-      * ``q4_resume_coverage`` — application_state rows vs how many have a resume.
+      * ``q4_resume_coverage`` — the REAL resume store: total ``application_resume``
+        rows and how many carry non-empty ``resume_text``. Counts
+        ``application_resume`` DIRECTLY (keyed on job_posting_id) rather than
+        joining ``application_state`` — the apply button writes
+        ``posting_action``, not ``application_state``, so an application_state
+        anchor undercounts (reported 2 when the true resume count is 12).
     """
     from decimal import Decimal
 
@@ -5058,9 +5063,10 @@ async def outcome_linking_diagnostic(db: DbSession) -> dict[str, Any]:
         (
             await db.execute(
                 text(
-                    "SELECT COUNT(*) AS total_applications, COUNT(ar.id) AS with_resume "
-                    "FROM application_state a "
-                    "LEFT JOIN application_resume ar ON ar.job_posting_id = a.job_posting_id"
+                    "SELECT COUNT(*) AS total_resumes, "
+                    "COUNT(*) FILTER (WHERE resume_text IS NOT NULL AND resume_text <> '') "
+                    "  AS with_resume_text "
+                    "FROM application_resume"
                 )
             )
         )
