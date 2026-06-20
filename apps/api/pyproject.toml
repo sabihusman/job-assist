@@ -57,6 +57,11 @@ dev = [
     "ruff>=0.7.0",
     "mypy>=1.13.0",
     "types-requests>=2.32.0",
+    # A4 eval (offline ONLY) — OpenAI independent pre-labeler. Kept OUT of the
+    # production `dependencies` block so the prod runtime need never ship it;
+    # lives in the dev group so CI + the eval workflow_dispatch can import it.
+    # The import-guard test enforces that no production module imports openai.
+    "openai>=1.50.0",
 ]
 
 [project.scripts]

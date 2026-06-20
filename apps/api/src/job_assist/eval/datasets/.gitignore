@@ -1,0 +1,6 @@
+# Generated eval artifacts (counts snapshots, pre-label JSONL) are reproducible
+# from the runner; keep them out of git. The directory itself is tracked via
+# .gitkeep so the runner has a place to write.
+*.json
+*.jsonl
+!.gitkeep
