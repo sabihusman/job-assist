@@ -12,8 +12,32 @@ import os
 from typing import Any
 
 import httpx
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 _PAGE = 100  # /postings hard-caps limit at 100
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """Retry on Railway 5xx (the heavy uncapped /postings query 502s sometimes)
+    and on transport errors."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    return isinstance(exc, httpx.TransportError)
+
+
+@retry(
+    retry=retry_if_exception(_is_transient),
+    wait=wait_exponential(multiplier=1, min=2, max=20),
+    stop=stop_after_attempt(5),
+    reraise=True,
+)
+def _get_json(
+    client: httpx.Client, url: str, params: dict[str, Any], headers: dict[str, str]
+) -> Any:
+    """GET + raise_for_status + .json(), retried on transient 5xx/transport."""
+    resp = client.get(url, params=params, headers=headers)
+    resp.raise_for_status()
+    return resp.json()
 
 
 def _base_and_headers() -> tuple[str, dict[str, str]]:
@@ -37,19 +61,18 @@ def fetch_open_postings() -> list[dict[str, Any]]:
     offset = 0
     with httpx.Client(timeout=60) as client:
         while True:
-            resp = client.get(
+            body = _get_json(
+                client,
                 f"{base}/postings",
-                params={
+                {
                     "include_filtered": "true",
                     "include_closed": "false",
                     "per_company_cap": 0,
                     "limit": _PAGE,
                     "offset": offset,
                 },
-                headers=headers,
+                headers,
             )
-            resp.raise_for_status()
-            body = resp.json()
             items = body.get("items", [])
             out.extend(items)
             total = int(body.get("total", 0))
@@ -67,9 +90,7 @@ def fetch_posting_detail(posting_id: str) -> dict[str, Any]:
     """
     base, headers = _base_and_headers()
     with httpx.Client(timeout=60) as client:
-        resp = client.get(f"{base}/postings/{posting_id}", headers=headers)
-        resp.raise_for_status()
-        body = resp.json()
+        body = _get_json(client, f"{base}/postings/{posting_id}", {}, headers)
     role = body.get("role") or {}
     return {
         "title": role.get("title") or body.get("title") or "",
@@ -89,17 +110,16 @@ def fetch_outcomes(*, job_related: bool, max_rows: int = 4000) -> list[dict[str,
     page = 200
     with httpx.Client(timeout=60) as client:
         while len(out) < max_rows:
-            resp = client.get(
+            body = _get_json(
+                client,
                 f"{base}/outcomes",
-                params={
+                {
                     "job_related": "true" if job_related else "false",
                     "limit": page,
                     "offset": offset,
                 },
-                headers=headers,
+                headers,
             )
-            resp.raise_for_status()
-            body = resp.json()
             items = body.get("items", [])
             out.extend(items)
             total = int(body.get("total", 0))
