@@ -2345,11 +2345,25 @@ async def update_operator_profile(
             detail="operator_profile id=1 is missing — seeding migration did not run",
         )
 
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    fields = payload.model_dump(exclude_unset=True)
+    # Capture the pre-update weight BEFORE the setattr loop overwrites it, so we
+    # can tell whether a weight-only change occurred (the save-hook below fires a
+    # rescore on a real applied_corpus_weight change — including a change to 0).
+    old_applied_corpus_weight = row.applied_corpus_weight or 0.0
+    for key, value in fields.items():
         setattr(row, key, value)
 
     await db.commit()
     await db.refresh(row)
+
+    # A3 lever: a weight-only change (no looking_for_text edit) still needs a
+    # rescore so moving the "Applied-corpus boost" slider actually moves
+    # fit_score / score_components. A change to 0 also counts — it must revert
+    # cleanly to pure fit_score (the basis=None path inside the rescore).
+    applied_corpus_weight_changed = (
+        "applied_corpus_weight" in fields
+        and (row.applied_corpus_weight or 0.0) != old_applied_corpus_weight
+    )
 
     # Semantic profile embedding (slice 1): re-embed looking_for_text when it
     # changed (hash-gated inside the helper). Wrapped so an embedding failure
@@ -2371,6 +2385,15 @@ async def update_operator_profile(
             # slice 2b: the recalibrated similarity_score feeds the scorer's
             # semantic_fit feature — re-score open postings so a looking_for_text
             # edit actually moves fit_score (not just the next embedding sweep).
+            from job_assist.services.rescore import rescore_open_postings
+
+            await rescore_open_postings(db)
+        elif applied_corpus_weight_changed:
+            # A3: weight-only change — looking_for_text (and thus the profile
+            # vector + similarity calibration) is unchanged, so skip the
+            # re-embed/recalibrate. Just rescore: rescore_open_postings loads the
+            # applied-corpus basis when the new weight > 0 (boost lands) and
+            # passes basis=None when it's 0 (clean revert to pure fit_score).
             from job_assist.services.rescore import rescore_open_postings
 
             await rescore_open_postings(db)

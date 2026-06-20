@@ -69,6 +69,7 @@ async def reset_operator_profile(db_session: Any) -> Any:
                    geo_whitelist = CAST(:geo AS jsonb),
                    salary_floor_usd = 85000,
                    applicant_cap = 500,
+                   applied_corpus_weight = 0,
                    staffing_firm_blocklist = CAST(:blocklist AS jsonb)
              WHERE id = 1
             """
@@ -298,3 +299,110 @@ async def test_singleton_constraint_rejects_id_2(
         await db_session.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
     ).scalar_one()
     assert row.id == 1
+
+
+# ── A3: applied_corpus_weight tunable + rescore-on-change ────────────────────
+
+
+def _patch_save_hook(monkeypatch: Any) -> dict[str, int]:
+    """Stub the profile-save side effects so the rescore trigger is observable
+    without a Gemini call or a real corpus rescore.
+
+    The PUT handler imports these lazily inside the function, so patching the
+    module attributes is picked up at call time. ``embed_profile_if_changed``
+    is forced to report "unchanged" (looking_for_text untouched in these tests)
+    so only the applied_corpus_weight branch can fire the rescore.
+    """
+    import job_assist.services.embeddings as embeddings_mod
+    import job_assist.services.rescore as rescore_mod
+
+    counts = {"rescore": 0}
+
+    async def _no_embed_change(_db: Any) -> bool:
+        return False
+
+    async def _count_rescore(_db: Any, **_kw: Any) -> tuple[int, int]:
+        counts["rescore"] += 1
+        return (0, 0)
+
+    monkeypatch.setattr(embeddings_mod, "embed_profile_if_changed", _no_embed_change)
+    monkeypatch.setattr(rescore_mod, "rescore_open_postings", _count_rescore)
+    return counts
+
+
+@_NEEDS_DB
+async def test_put_applied_corpus_weight_change_triggers_rescore(
+    db_session: Any, reset_operator_profile: Any, monkeypatch: Any
+) -> None:
+    """A real applied_corpus_weight change (0 → 0.1) fires a single rescore and
+    round-trips the new value."""
+    counts = _patch_save_hook(monkeypatch)
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp = await ac.put("/operator/profile", json={"applied_corpus_weight": 0.1})
+    finally:
+        await _drop_override()
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["applied_corpus_weight"] == 0.1
+    assert counts["rescore"] == 1
+
+
+@_NEEDS_DB
+async def test_put_applied_corpus_weight_unchanged_no_rescore(
+    db_session: Any, reset_operator_profile: Any, monkeypatch: Any
+) -> None:
+    """Setting the weight to its current value (0 → 0), or changing an unrelated
+    field, does NOT trigger a rescore."""
+    counts = _patch_save_hook(monkeypatch)
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            # Same value as the seeded default (0) — no change, no rescore.
+            r_same = await ac.put("/operator/profile", json={"applied_corpus_weight": 0.0})
+            # Field absent entirely — no rescore.
+            r_other = await ac.put("/operator/profile", json={"salary_floor_usd": 90_000})
+    finally:
+        await _drop_override()
+
+    assert r_same.status_code == 200 and r_other.status_code == 200
+    assert counts["rescore"] == 0
+
+
+@_NEEDS_DB
+async def test_put_applied_corpus_weight_to_zero_triggers_rescore(
+    db_session: Any, reset_operator_profile: Any, monkeypatch: Any
+) -> None:
+    """Turning the boost OFF (0.1 → 0) must also rescore so scores revert cleanly
+    to pure fit_score — not leave stale boosted values behind."""
+    counts = _patch_save_hook(monkeypatch)
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            await ac.put("/operator/profile", json={"applied_corpus_weight": 0.1})
+            assert counts["rescore"] == 1
+            resp = await ac.put("/operator/profile", json={"applied_corpus_weight": 0.0})
+    finally:
+        await _drop_override()
+
+    assert resp.status_code == 200
+    assert resp.json()["applied_corpus_weight"] == 0.0
+    assert counts["rescore"] == 2  # the 0.1→0 change fired a second rescore
+
+
+@_NEEDS_DB
+async def test_put_rejects_out_of_range_applied_corpus_weight(
+    db_session: Any, reset_operator_profile: Any
+) -> None:
+    """The validator rejects weights outside [0, 1] with 422."""
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp_hi = await ac.put("/operator/profile", json={"applied_corpus_weight": 1.5})
+            resp_lo = await ac.put("/operator/profile", json={"applied_corpus_weight": -0.1})
+    finally:
+        await _drop_override()
+
+    assert resp_hi.status_code == 422
+    assert resp_lo.status_code == 422

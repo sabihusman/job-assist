@@ -29,6 +29,8 @@ export type OperatorProfileRead = {
   per_company_cap: number;
   // Slice 2b: semantic blend weight for "Best fit (semantic)" sort; 0 = off.
   similarity_weight: number;
+  // A3: applied-corpus RAG boost weight 0..1; 0 = off (no boost).
+  applied_corpus_weight: number;
   staffing_firm_blocklist: string[];
   // PR #43: list of SeniorityLevel enum values to include. null or empty
   // means "include all levels".
@@ -46,6 +48,7 @@ export type OperatorProfileUpdate = Partial<{
   applicant_cap: number;
   per_company_cap: number;
   similarity_weight: number;
+  applied_corpus_weight: number;
   staffing_firm_blocklist: string[];
   seniority_levels_included: string[];
 }>;

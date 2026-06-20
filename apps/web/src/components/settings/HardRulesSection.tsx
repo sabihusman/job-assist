@@ -35,6 +35,8 @@ type HardRulesFormState = {
   per_company_cap: number;
   // Slice 2b: semantic blend weight 0..1; 0 = off (heuristic-only ranking).
   similarity_weight: number;
+  // A3: applied-corpus RAG boost weight 0..1; 0 = off (no boost).
+  applied_corpus_weight: number;
   salary_floor_usd: number;
   // PR #43: nullable ceiling. The form represents "no ceiling" as 0 so the
   // numeric input works naturally; the save handler converts 0 back to null.
@@ -62,6 +64,9 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
       // similarity_weight response field would otherwise feed `undefined`
       // into `n.toFixed(1)` and crash the entire Settings page render.
       similarity_weight: profile.similarity_weight ?? 0,
+      // Same ?? 0 coalesce as similarity_weight: an API predating this field
+      // would otherwise feed `undefined` into `n.toFixed(1)` and crash render.
+      applied_corpus_weight: profile.applied_corpus_weight ?? 0,
       salary_floor_usd: profile.salary_floor_usd,
       // PR #43: backend stores null when unset; surface that as 0 in the
       // form so the numeric input has a real value to bind to.
@@ -91,6 +96,7 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
       applicant_cap: values.applicant_cap,
       per_company_cap: values.per_company_cap,
       similarity_weight: values.similarity_weight,
+      applied_corpus_weight: values.applied_corpus_weight,
       salary_floor_usd: values.salary_floor_usd,
       salary_ceiling_usd: ceiling,
       seniority_levels_included: values.seniority_levels_included,
@@ -134,6 +140,15 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
     const wFrom = profile.similarity_weight ?? 0;
     changes.push({
       label: 'Semantic weight',
+      from: wFrom === 0 ? 'Off' : wFrom.toFixed(1),
+      to: wNow === 0 ? 'Off' : wNow.toFixed(1),
+    });
+  }
+  if (formState.dirtyFields.applied_corpus_weight) {
+    const wNow = watch('applied_corpus_weight');
+    const wFrom = profile.applied_corpus_weight ?? 0;
+    changes.push({
+      label: 'Applied-corpus boost',
       from: wFrom === 0 ? 'Off' : wFrom.toFixed(1),
       to: wNow === 0 ? 'Off' : wNow.toFixed(1),
     });
@@ -236,6 +251,27 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
                 max={1}
                 step={0.1}
                 inputAriaLabel="Semantic weight"
+                displayFormat={(n) => (n === 0 ? 'Off' : n.toFixed(1))}
+              />
+            )}
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          label="Applied-corpus boost"
+          sub="How much to boost roles resembling jobs you've already applied to (revealed preference). 0 = off. Only lifts eligible roles — never bypasses hard rules, never buries anything."
+        >
+          <Controller
+            control={control}
+            name="applied_corpus_weight"
+            render={({ field }) => (
+              <SliderRow
+                value={field.value}
+                onChange={field.onChange}
+                min={0}
+                max={1}
+                step={0.1}
+                inputAriaLabel="Applied-corpus boost"
                 displayFormat={(n) => (n === 0 ? 'Off' : n.toFixed(1))}
               />
             )}
