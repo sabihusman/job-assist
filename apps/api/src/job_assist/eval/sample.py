@@ -64,6 +64,102 @@ def is_hard_seniority(item: dict[str, Any]) -> bool:
     )
 
 
+def is_hard_seniority_mismatch(item: dict[str, Any]) -> bool:
+    """Senior-marker title BUT parsed pm/unknown — the under-leveling signal."""
+    role = item.get("role") or {}
+    title = role.get("title") or ""
+    return bool(
+        HARD_SENIORITY_TITLE_RE.search(title)
+        and role.get("seniority") in DISGUISED_SENIORITY_BUCKETS
+    )
+
+
+def is_disguised_comp(item: dict[str, Any]) -> bool:
+    role = item.get("role") or {}
+    floor = _salary_min_usd(item)
+    return bool(
+        floor is not None
+        and floor >= DISGUISED_COMP_FLOOR_USD
+        and role.get("seniority") in DISGUISED_SENIORITY_BUCKETS
+    )
+
+
+# Approved JD strata sizes (priority order — a row is assigned its FIRST match).
+JD_STRATA_SIZES: list[tuple[str, int]] = [
+    ("applied", 17),
+    ("hard_seniority_mismatch", 20),
+    ("disguised_comp", 13),
+    ("triage", 25),
+    ("passed", 15),
+]
+
+# Approved email strata sizes (by outcome_type / stage).
+EMAIL_STRATA_SIZES: dict[str, int] = {
+    "application_confirmation": 12,
+    "rejection_post_screen": 12,
+    "rejection_pre_screen": 10,
+    "rejection_post_interview": 5,
+    "recruiter_screen_invite": 10,
+    "phone_interview_invite": 2,
+    "onsite_interview_invite": 1,
+    "unclassified": 5,
+    "unrelated": 9,
+}
+
+
+def select_jd_sample(postings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deterministic stratified JD selection. Each posting appears once, tagged
+    with the first stratum it satisfies (priority order in ``JD_STRATA_SIZES``).
+    """
+    by_id = {str(p.get("id")): p for p in postings}
+    ordered_ids = sorted(by_id)  # deterministic
+    chosen: dict[str, str] = {}  # id -> stratum
+
+    def _matches(item: dict[str, Any], stratum: str) -> bool:
+        if stratum == "hard_seniority_mismatch":
+            return is_hard_seniority_mismatch(item)
+        if stratum == "disguised_comp":
+            return is_disguised_comp(item)
+        return resolved_bucket(item) == stratum
+
+    for stratum, size in JD_STRATA_SIZES:
+        taken = 0
+        for pid in ordered_ids:
+            if taken >= size:
+                break
+            if pid in chosen:
+                continue
+            if _matches(by_id[pid], stratum):
+                chosen[pid] = stratum
+                taken += 1
+
+    out: list[dict[str, Any]] = []
+    for pid in ordered_ids:
+        if pid in chosen:
+            item = dict(by_id[pid])
+            item["_stratum"] = chosen[pid]
+            out.append(item)
+    return out
+
+
+def select_email_sample(
+    outcomes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Deterministic stratified email selection by stage (outcome_type)."""
+    by_stage: dict[str, list[dict[str, Any]]] = {}
+    for o in outcomes:
+        stage = str(o.get("stage"))
+        by_stage.setdefault(stage, []).append(o)
+    out: list[dict[str, Any]] = []
+    for stage, size in EMAIL_STRATA_SIZES.items():
+        pool = sorted(by_stage.get(stage, []), key=lambda o: str(o.get("id")))
+        for o in pool[:size]:
+            picked = dict(o)
+            picked["_stratum"] = stage
+            out.append(picked)
+    return out
+
+
 def compute_counts(postings: list[dict[str, Any]]) -> dict[str, Any]:
     """Aggregate the open-posting pool for sample sizing (counts only, no rows)."""
     by_resolved: Counter[str] = Counter()
