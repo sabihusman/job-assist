@@ -57,6 +57,7 @@ import logging
 from typing import Any
 
 from job_assist.config import settings
+from job_assist.services.tracing import traceable
 
 logger = logging.getLogger(__name__)
 
@@ -335,6 +336,7 @@ def _coerce_result(payload: dict[str, Any]) -> tuple[str, str]:
 # ── Gemini call ───────────────────────────────────────────────────────────────
 
 
+@traceable(run_type="llm", name="gemini.classify_posting")
 async def classify_posting(
     jd_text: str,
     title: str,

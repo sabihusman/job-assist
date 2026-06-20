@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from job_assist.config import settings
 from job_assist.db.models import TargetCompany
+from job_assist.services.tracing import traceable
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,7 @@ def _validate_description(text: str) -> str:
 # ── Gemini call ──────────────────────────────────────────────────────────────
 
 
+@traceable(run_type="llm", name="gemini.company_description")
 async def generate_description(
     company_name: str,
     domain: str | None,
@@ -244,6 +246,7 @@ async def enrich_company(
 # ── Sweep ────────────────────────────────────────────────────────────────────
 
 
+@traceable(run_type="chain", name="company_enrichment_sweep")
 async def sweep_companies(session: AsyncSession) -> SweepSummary:
     """Run ``enrich_company`` over every ``target_company`` row, sequentially.
 

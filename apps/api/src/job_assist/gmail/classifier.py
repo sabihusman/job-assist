@@ -30,6 +30,7 @@ from tenacity import (
 )
 
 from job_assist.gmail.models import ClassificationResult, RawEmail
+from job_assist.services.tracing import traceable
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +186,7 @@ class EmailClassifier:
                         break
         return text or ""
 
+    @traceable(run_type="llm", name="gemini.gmail_outcome_classify")
     async def classify(self, email: RawEmail) -> ClassificationResult:
         """Return the classifier's verdict for *email*.
 

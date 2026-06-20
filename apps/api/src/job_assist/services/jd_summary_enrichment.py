@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from job_assist.config import settings
 from job_assist.db.models import JobPosting
+from job_assist.services.tracing import traceable
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +190,7 @@ _C0_CONTROL_STRIP = {cp: None for cp in [*range(0x00, 0x20), 0x7F] if cp not in 
 # ── Gemini call ──────────────────────────────────────────────────────────────
 
 
+@traceable(run_type="llm", name="gemini.generate_jd_summary")
 async def generate_summary(
     jd_text: str,
     *,
@@ -303,6 +305,7 @@ async def enrich_one_posting(
 # ── Sweep ────────────────────────────────────────────────────────────────────
 
 
+@traceable(run_type="chain", name="jd_summary_sweep")
 async def sweep_jd_summaries(
     session: AsyncSession,
     limit: int = 100,

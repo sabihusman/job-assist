@@ -32,6 +32,10 @@ dependencies = [
     # Observability
     "structlog>=24.4.0",
     "sentry-sdk[fastapi]>=2.18.0",
+    # LLM tracing (Phase A4). Imported lazily-safe via services/tracing.py; the
+    # SDK stays inert unless LANGSMITH_TRACING=true + LANGSMITH_API_KEY are set
+    # in the environment. >=0.1.140 for the process_inputs scrubbing hook.
+    "langsmith>=0.1.140",
     # CLI
     "typer>=0.15.0",
     # Excel export (feat/triage-export-xlsx). Used by both the runtime

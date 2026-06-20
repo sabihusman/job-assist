@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from job_assist.db.models import OutcomeEvent, TargetCompany
 from job_assist.gmail.classifier import CLASSIFIER_VERSION
 from job_assist.gmail.models import BackfillReport, ClassificationResult, RawEmail
+from job_assist.services.tracing import traceable
 
 logger = logging.getLogger(__name__)
 
@@ -316,6 +317,7 @@ async def _run_email_ingest(
 # ── Public wrappers ──────────────────────────────────────────────────────────
 
 
+@traceable(run_type="chain", name="gmail_backfill_sweep")
 async def run_backfill(
     session: AsyncSession,
     gmail: _GmailClientLike,
@@ -357,6 +359,7 @@ POLL_BOOTSTRAP_LOOKBACK = timedelta(hours=24)
 POLL_SAFETY_OVERLAP = timedelta(hours=24)
 
 
+@traceable(run_type="chain", name="gmail_poll_sweep")
 async def run_poll(
     session: AsyncSession,
     gmail: _GmailClientLike,

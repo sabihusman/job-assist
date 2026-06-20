@@ -45,6 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from job_assist.config import settings
 from job_assist.db.models import JobPosting, OperatorProfile
+from job_assist.services.tracing import traceable
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +155,7 @@ def select_embedding_text(posting: JobPosting) -> tuple[str, str] | None:
 # ── Gemini embedding call (the single mock seam) ──────────────────────────────
 
 
+@traceable(run_type="llm", name="gemini.embed_text")
 async def embed_text(
     text: str,
     *,
@@ -279,6 +281,7 @@ async def embed_one_posting(
 # ── Sweep ──────────────────────────────────────────────────────────────────────
 
 
+@traceable(run_type="chain", name="embeddings_sweep")
 async def sweep_embeddings(session: AsyncSession, limit: int = 100) -> SweepSummary:
     """Embed eligible OPEN postings; call ``embed_one_posting`` on each.
 
