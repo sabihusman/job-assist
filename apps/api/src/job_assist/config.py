@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     # LLM APIs
     gemini_api_key: str = Field(default="")
     anthropic_api_key: str = Field(default="")
+    # A4 eval ONLY — OpenAI is the independent offline pre-labeler, never called
+    # in any production cron/sweep/ingest/scoring path (enforced by the import
+    # guard test). Railway-env secret; typed here for visibility only. The eval
+    # runner reads OPENAI_API_KEY from the environment at call time.
+    openai_api_key: str = Field(default="")
 
     # Company enrichment (PR #27) — logo.dev publishable token + Gemini
     # model id for the one-sentence description. The token is a public

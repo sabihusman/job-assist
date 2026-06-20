@@ -1,0 +1,54 @@
+name: A4 eval pre-labeler (offline)
+
+# OFFLINE eval only — never part of any production cron/sweep. Runs the
+# job_assist.eval runner:
+#   * mode=count    — read-only: pull prod counts for sample sizing (API_URL +
+#                     API_AUTH_TOKEN). No OpenAI, no writes to prod.
+#   * mode=generate — run the OpenAI pre-labeler over the confirmed sample
+#                     (needs OPENAI_API_KEY). Gated until the sample is approved.
+#
+# OpenAI is invoked ONLY here / in the eval package — never in the app runtime.
+# Required secrets: API_URL, API_AUTH_TOKEN, and (generate only) OPENAI_API_KEY.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "count (read-only sizing) | generate (pre-label, needs OPENAI_API_KEY)"
+        required: true
+        default: "count"
+      model:
+        description: "Override the o-series model id (default o3)"
+        required: false
+        default: "o3"
+
+permissions:
+  contents: read
+
+jobs:
+  prelabel:
+    name: "eval ${{ github.event.inputs.mode }}"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      EVAL_OPENAI_MODEL: ${{ github.event.inputs.model }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install deps (incl. dev group → openai)
+        run: uv sync --frozen
+
+      - name: Run eval runner (mode=${{ github.event.inputs.mode }})
+        run: uv run python -m job_assist.eval.run "${{ github.event.inputs.mode }}" --stamp "run-${{ github.run_id }}"
