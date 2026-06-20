@@ -69,6 +69,7 @@ async def reset_operator_profile(db_session: Any) -> Any:
                    geo_whitelist = CAST(:geo AS jsonb),
                    salary_floor_usd = 85000,
                    applicant_cap = 500,
+                   applied_corpus_weight = 0,
                    staffing_firm_blocklist = CAST(:blocklist AS jsonb)
              WHERE id = 1
             """
