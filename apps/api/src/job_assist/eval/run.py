@@ -14,14 +14,42 @@ API_AUTH_TOKEN / OPENAI_API_KEY) or locally with those env vars set.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
+from collections import Counter
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
-from job_assist.eval.api_client import fetch_open_postings, fetch_outcome_type_breakdown
-from job_assist.eval.sample import compute_counts
+from job_assist.eval.api_client import (
+    fetch_open_postings,
+    fetch_outcome_type_breakdown,
+    fetch_outcomes,
+    fetch_posting_detail,
+)
+from job_assist.eval.sample import compute_counts, select_email_sample, select_jd_sample
 
 DATASETS_DIR = Path(__file__).parent / "datasets"
+
+
+def _sha256(payload: dict[str, Any]) -> str:
+    """Stable hash of the exact model input — Phase 3 asserts identical input."""
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+def _dedup_by_id(*lists: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for lst in lists:
+        for row in lst:
+            rid = str(row.get("id"))
+            if rid not in seen:
+                seen.add(rid)
+                out.append(row)
+    return out
 
 
 def _run_count(stamp: str) -> int:
@@ -42,12 +70,101 @@ def _run_count(stamp: str) -> int:
 
 
 def _run_generate(stamp: str) -> int:
-    """Pre-label the confirmed sample. Wired after the Phase-1 count review."""
-    raise SystemExit(
-        "generate mode is gated until the stratified sample is confirmed "
-        "(Phase 1 review) and the JD-text / email-body fetch is wired. Run "
-        "`count` first and confirm the sample sizes."
-    )
+    """Pre-label the confirmed stratified sample with the o-series model.
+
+    Identical-input lock: JDs use ``description_markdown``; emails use
+    ``subject`` + ``raw_snippet`` — the SAME text Phase-3 Gemini must re-score,
+    captured verbatim with a sha256 so the comparison measures model difference,
+    not input difference. Per-item failures are collected, not fatal.
+    """
+    from job_assist.eval.openai_labeler import label_email, label_jd, new_client
+
+    client = new_client()
+    labeled_at = datetime.now(UTC).isoformat()
+    records: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    jd_dist: Counter[str] = Counter()
+    sen_dist: Counter[str] = Counter()
+    email_dist: Counter[str] = Counter()
+
+    # ── JDs ──────────────────────────────────────────────────────────────────
+    jd_sample = select_jd_sample(fetch_open_postings())
+    for item in jd_sample:
+        pid = str(item.get("id"))
+        try:
+            detail = fetch_posting_detail(pid)
+            model_input = {"title": detail["title"], "jd_text": detail["jd_text"]}
+            res = label_jd(client, title=detail["title"], jd_text=detail["jd_text"])
+            records.append(
+                {
+                    "kind": "jd",
+                    "id": pid,
+                    "stratum": item.get("_stratum"),
+                    "input": model_input,
+                    "input_sha256": _sha256(model_input),
+                    "openai_label": res.label,
+                    "model_id": res.served_model,
+                    "prompt_version": res.prompt_version,
+                    "temperature_mode": res.temperature_mode,
+                    "generated_at": stamp,
+                    "labeled_at": labeled_at,
+                }
+            )
+            jd_dist[str(res.label.get("role_family"))] += 1
+            sen_dist[str(res.label.get("seniority_level"))] += 1
+        except Exception as exc:  # collect, never abort the batch
+            errors.append({"kind": "jd", "id": pid, "error": str(exc)[:300]})
+
+    # ── Emails (identical subject+raw_snippet input) ─────────────────────────
+    lifecycle = fetch_outcomes(job_related=True)
+    negatives = fetch_outcomes(job_related=False, max_rows=800)
+    email_sample = select_email_sample(_dedup_by_id(lifecycle, negatives))
+    for o in email_sample:
+        oid = str(o.get("id"))
+        try:
+            subject = o.get("subject") or ""
+            snippet = o.get("raw_snippet") or ""
+            model_input = {"subject": subject, "raw_snippet": snippet}
+            res = label_email(client, subject=subject, body=snippet)
+            records.append(
+                {
+                    "kind": "email",
+                    "id": oid,
+                    "stratum": o.get("_stratum"),
+                    "production_outcome_type": o.get("stage"),
+                    "input": model_input,
+                    "input_sha256": _sha256(model_input),
+                    "openai_label": res.label,
+                    "model_id": res.served_model,
+                    "prompt_version": res.prompt_version,
+                    "temperature_mode": res.temperature_mode,
+                    "generated_at": stamp,
+                    "labeled_at": labeled_at,
+                }
+            )
+            email_dist[str(res.label.get("outcome_type"))] += 1
+        except Exception as exc:
+            errors.append({"kind": "email", "id": oid, "error": str(exc)[:300]})
+
+    DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+    out = DATASETS_DIR / f"prelabels.{stamp}.jsonl"
+    with out.open("w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    summary = {
+        "jd_labeled": jd_dist.total(),
+        "email_labeled": email_dist.total(),
+        "total_labeled": len(records),
+        "errors": len(errors),
+        "o3_jd_role_family_distribution": dict(jd_dist),
+        "o3_jd_seniority_distribution": dict(sen_dist),
+        "o3_email_outcome_distribution": dict(email_dist),
+        "error_detail": errors[:20],
+    }
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    print(f"\n[generate] wrote {len(records)} records → {out}", file=sys.stderr)
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -59,6 +59,56 @@ def fetch_open_postings() -> list[dict[str, Any]]:
     return out
 
 
+def fetch_posting_detail(posting_id: str) -> dict[str, Any]:
+    """GET /postings/{id} → the JD detail. ``description_markdown`` is jd_text.
+
+    Returns ``{"title": ..., "jd_text": ...}`` — the exact input used for BOTH
+    the OpenAI pre-label and the Phase-3 Gemini re-score (identical input).
+    """
+    base, headers = _base_and_headers()
+    with httpx.Client(timeout=60) as client:
+        resp = client.get(f"{base}/postings/{posting_id}", headers=headers)
+        resp.raise_for_status()
+        body = resp.json()
+    role = body.get("role") or {}
+    return {
+        "title": role.get("title") or body.get("title") or "",
+        "jd_text": body.get("description_markdown") or "",
+    }
+
+
+def fetch_outcomes(*, job_related: bool, max_rows: int = 4000) -> list[dict[str, Any]]:
+    """Page /outcomes → outcome rows (id, stage, subject, raw_snippet, ...).
+
+    ``job_related=true`` excludes unrelated/unclassified (the ~197 lifecycle
+    rows). ``job_related=false`` returns everything (for negative controls).
+    """
+    base, headers = _base_and_headers()
+    out: list[dict[str, Any]] = []
+    offset = 0
+    page = 200
+    with httpx.Client(timeout=60) as client:
+        while len(out) < max_rows:
+            resp = client.get(
+                f"{base}/outcomes",
+                params={
+                    "job_related": "true" if job_related else "false",
+                    "limit": page,
+                    "offset": offset,
+                },
+                headers=headers,
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            items = body.get("items", [])
+            out.extend(items)
+            total = int(body.get("total", 0))
+            offset += page
+            if offset >= total or not items:
+                break
+    return out
+
+
 def fetch_outcome_type_breakdown() -> dict[str, int]:
     """Outcome_type counts from the read-only outcome-linking diagnostic.
 
