@@ -60,19 +60,23 @@ def fetch_open_postings() -> list[dict[str, Any]]:
 
 
 def fetch_outcome_type_breakdown() -> dict[str, int]:
-    """Outcome_type counts from the read-only outcome-linking diagnostic."""
+    """Outcome_type counts from the read-only outcome-linking diagnostic.
+
+    The live endpoint returns the q1-q4 resume-coverage shape, whose
+    ``q2_by_outcome_type`` is the per-type breakdown (``{outcome_type, total,
+    linked, pct_linked}``). Fall back to ``by_outcome_type`` for forward-compat.
+    """
     base, headers = _base_and_headers()
     with httpx.Client(timeout=60) as client:
         resp = client.get(f"{base}/admin/diagnostics/outcome-linking", headers=headers)
         resp.raise_for_status()
         body = resp.json()
+    rows = body.get("q2_by_outcome_type") or body.get("by_outcome_type") or []
     counts: dict[str, int] = {}
-    for row in body.get("by_outcome_type", []):
+    for row in rows:
         ot = row.get("outcome_type")
         if ot is None:
             continue
-        # OutcomeTypeFill exposes linked_to_company + unlinked; total may also be
-        # present. Prefer an explicit total, else sum the two components.
         if "total" in row:
             n = int(row["total"])
         else:
