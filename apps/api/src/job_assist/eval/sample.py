@@ -79,9 +79,11 @@ def compute_counts(postings: list[dict[str, Any]]) -> dict[str, Any]:
         if is_hard_seniority(item):
             hard_seniority += 1
         floor = _salary_min_usd(item)
-        if floor is not None and floor >= DISGUISED_COMP_FLOOR_USD and role.get(
-            "seniority"
-        ) in DISGUISED_SENIORITY_BUCKETS:
+        if (
+            floor is not None
+            and floor >= DISGUISED_COMP_FLOOR_USD
+            and role.get("seniority") in DISGUISED_SENIORITY_BUCKETS
+        ):
             disguised_comp += 1
     return {
         "total_open": len(postings),
