@@ -45,6 +45,12 @@ export function useUpdateProfile() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: PROFILE_KEY });
+      // A profile save can re-score the whole open corpus server-side (a
+      // looking_for_text edit, or an applied_corpus_weight change firing the
+      // A3 rescore). Invalidate the postings/count caches so triage & pipeline
+      // refetch the updated rankings instead of showing stale scores.
+      qc.invalidateQueries({ queryKey: ['postings'] });
+      qc.invalidateQueries({ queryKey: ['postings-count'] });
     },
   });
 }

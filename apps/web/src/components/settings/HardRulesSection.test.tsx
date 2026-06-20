@@ -35,6 +35,7 @@ function profile(overrides: Partial<OperatorProfileRead> = {}): OperatorProfileR
     applicant_cap: 500,
     per_company_cap: 3,
     similarity_weight: 0,
+    applied_corpus_weight: 0,
     staffing_firm_blocklist: [],
     seniority_levels_included: null,
     created_at: '2026-05-26T00:00:00Z',
@@ -136,7 +137,8 @@ describe('HardRulesSection — PR #43 controls', () => {
   test('renders the "Semantic weight" control, off by default', () => {
     wrap(<HardRulesSection profile={profile({ similarity_weight: 0 })} />);
     expect(screen.getByLabelText('Semantic weight')).toBeInTheDocument();
-    expect(screen.getByText('Off')).toBeInTheDocument();
+    // Both the Semantic weight and Applied-corpus boost readouts show "Off" at 0.
+    expect(screen.getAllByText('Off').length).toBeGreaterThanOrEqual(1);
   });
 
   // Regression: an API that predates the similarity_weight response field
@@ -148,9 +150,10 @@ describe('HardRulesSection — PR #43 controls', () => {
     const { similarity_weight: _omit, ...legacy } = profile();
     wrap(<HardRulesSection profile={legacy as OperatorProfileRead} />);
     expect(screen.getByLabelText('Semantic weight')).toBeInTheDocument();
-    // Both the ceiling readout ("No ceiling") and the semantic readout
-    // ("Off") render — proving the section mounted fully past the slider.
-    expect(screen.getByText('Off')).toBeInTheDocument();
+    // The semantic readout ("Off") renders — proving the section mounted fully
+    // past the slider. (Applied-corpus boost also reads "Off" at 0, so there
+    // may be more than one.)
+    expect(screen.getAllByText('Off').length).toBeGreaterThanOrEqual(1);
   });
 
   test('changing the semantic weight and saving sends similarity_weight', async () => {
@@ -168,6 +171,41 @@ describe('HardRulesSection — PR #43 controls', () => {
 
     expect(mockMutate).toHaveBeenCalledTimes(1);
     expect(mockMutate.mock.calls[0][0]).toMatchObject({ similarity_weight: 0.5 });
+  });
+
+  // A3 — the "Applied-corpus boost" control sends applied_corpus_weight (off by
+  // default; the operator must be able to see it and move it, per rule 2).
+  test('renders the "Applied-corpus boost" control, off by default', () => {
+    wrap(<HardRulesSection profile={profile({ applied_corpus_weight: 0 })} />);
+    expect(screen.getByLabelText('Applied-corpus boost')).toBeInTheDocument();
+    // Both Semantic weight and Applied-corpus boost read "Off" at 0.
+    expect(screen.getAllByText('Off').length).toBeGreaterThanOrEqual(2);
+  });
+
+  // Regression: an API that predates the applied_corpus_weight response field
+  // serves a profile without it. The control must default to Off and the page
+  // must still render — never crash on `undefined.toFixed()`.
+  test('renders without crashing when the API omits applied_corpus_weight', () => {
+    const { applied_corpus_weight: _omit, ...legacy } = profile();
+    wrap(<HardRulesSection profile={legacy as OperatorProfileRead} />);
+    expect(screen.getByLabelText('Applied-corpus boost')).toBeInTheDocument();
+  });
+
+  test('changing the applied-corpus boost and saving sends applied_corpus_weight', async () => {
+    const user = userEvent.setup();
+    mockMutate.mockClear();
+    mockMutate.mockResolvedValueOnce(undefined);
+    wrap(<HardRulesSection profile={profile({ applied_corpus_weight: 0 })} />);
+
+    const input = screen.getByLabelText('Applied-corpus boost');
+    await user.clear(input);
+    await user.type(input, '0.1');
+
+    await user.click(screen.getByRole('button', { name: /save hard rules/i }));
+    await user.click(await screen.findByRole('button', { name: /save changes/i }));
+
+    expect(mockMutate).toHaveBeenCalledTimes(1);
+    expect(mockMutate.mock.calls[0][0]).toMatchObject({ applied_corpus_weight: 0.1 });
   });
 
   test('pre-selected seniority levels render as pressed', () => {
