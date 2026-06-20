@@ -1,0 +1,59 @@
+name: A4 eval — verify-build
+
+# OFFLINE eval only. Downloads a generate run's pre-label JSONL artifact and
+# builds the Excel verify sheet (operator confirms/corrects o3's labels). No
+# OpenAI, no prod writes. Output: the verify sheet as a downloadable artifact.
+#
+# Required secrets: none beyond the default GITHUB_TOKEN (artifact download).
+
+on:
+  workflow_dispatch:
+    inputs:
+      prelabel_run_id:
+        description: "Run id of the eval generate run (artifact eval-generate-<id>)"
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install deps
+        run: uv sync --frozen
+
+      - name: Download pre-label artifact
+        run: |
+          gh run download "${{ github.event.inputs.prelabel_run_id }}" \
+            -R "${{ github.repository }}" \
+            -n "eval-generate-${{ github.event.inputs.prelabel_run_id }}" \
+            -D _prelabels
+          ls -la _prelabels
+
+      - name: Build verify sheet
+        run: |
+          JSONL=$(ls _prelabels/prelabels.*.jsonl | head -n1)
+          echo "using $JSONL"
+          uv run python -m job_assist.eval.run verify-build \
+            --jsonl "$JSONL" --stamp "build-${{ github.run_id }}"
+
+      - name: Upload verify sheet
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-sheet-${{ github.run_id }}
+          path: apps/api/src/job_assist/eval/datasets/verify_sheet.*.xlsx
+          retention-days: 30
+          if-no-files-found: error

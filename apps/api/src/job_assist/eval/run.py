@@ -183,18 +183,82 @@ def _run_generate(stamp: str) -> int:
     return 0
 
 
+def _read_jsonl(path: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            out.append(json.loads(line))
+    return out
+
+
+def _run_verify_build(stamp: str, jsonl: str) -> int:
+    """Build the Excel verify sheet from a pre-label JSONL."""
+    from job_assist.eval.verify import build_workbook
+
+    prelabels = _read_jsonl(jsonl)
+    wb = build_workbook(prelabels)
+    DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+    out = DATASETS_DIR / f"verify_sheet.{stamp}.xlsx"
+    wb.save(out)
+    jd = sum(1 for r in prelabels if r.get("kind") == "jd")
+    em = sum(1 for r in prelabels if r.get("kind") == "email")
+    print(json.dumps({"jd_rows": jd, "email_rows": em, "sheet": str(out.name)}, indent=2))
+    print(f"\n[verify-build] wrote {out}", file=sys.stderr)
+    return 0
+
+
+def _run_verify_score(stamp: str, jsonl: str, xlsx: str) -> int:
+    """Score the edited verify sheet → verified labels JSONL + override summary."""
+    from openpyxl import load_workbook
+
+    from job_assist.eval.verify import read_verify_rows, score
+
+    prelabels = _read_jsonl(jsonl)
+    wb = load_workbook(xlsx, data_only=True)
+    jd_rows, email_rows = read_verify_rows(wb)
+    verified, summary = score(prelabels, jd_rows, email_rows)
+
+    DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+    labels_out = DATASETS_DIR / f"verified_labels.{stamp}.jsonl"
+    with labels_out.open("w", encoding="utf-8") as fh:
+        for rec in verified:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    summary_out = DATASETS_DIR / f"override_summary.{stamp}.json"
+    summary_out.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    print(
+        f"\n[verify-score] wrote {len(verified)} labels → {labels_out.name}; "
+        f"summary → {summary_out.name}",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="eval.run")
-    parser.add_argument("mode", choices=["count", "generate"])
+    parser.add_argument("mode", choices=["count", "generate", "verify-build", "verify-score"])
     parser.add_argument(
         "--stamp",
         required=True,
         help="Timestamp tag for artifacts (passed in for reproducibility).",
     )
+    parser.add_argument("--jsonl", help="Pre-label JSONL path (verify-build / verify-score).")
+    parser.add_argument("--xlsx", help="Edited verify sheet path (verify-score).")
     args = parser.parse_args(argv)
     if args.mode == "count":
         return _run_count(args.stamp)
-    return _run_generate(args.stamp)
+    if args.mode == "generate":
+        return _run_generate(args.stamp)
+    if args.mode == "verify-build":
+        if not args.jsonl:
+            parser.error("verify-build requires --jsonl")
+        return _run_verify_build(args.stamp, args.jsonl)
+    # verify-score
+    if not args.jsonl or not args.xlsx:
+        parser.error("verify-score requires --jsonl and --xlsx")
+    return _run_verify_score(args.stamp, args.jsonl, args.xlsx)
 
 
 if __name__ == "__main__":

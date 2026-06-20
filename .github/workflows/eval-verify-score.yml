@@ -1,0 +1,71 @@
+name: A4 eval — verify-score
+
+# OFFLINE eval only. Reads the operator's EDITED verify sheet (committed in the
+# repo at xlsx_path on the dispatched ref) + the generate run's pre-label JSONL,
+# computes override rates, and emits the verified ground-truth labels. No
+# OpenAI, no prod writes.
+#
+# Flow: edit the sheet from verify-build, commit it (default
+# apps/api/src/job_assist/eval/verify_inbox/edited.xlsx) on a branch, then run
+# this with that branch + the generate run id.
+
+on:
+  workflow_dispatch:
+    inputs:
+      prelabel_run_id:
+        description: "Run id of the eval generate run (artifact eval-generate-<id>)"
+        required: true
+      xlsx_path:
+        description: "Repo-relative path to the edited verify sheet"
+        required: false
+        default: "apps/api/src/job_assist/eval/verify_inbox/edited.xlsx"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  score:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install deps
+        run: uv sync --frozen
+
+      - name: Download pre-label artifact
+        run: |
+          gh run download "${{ github.event.inputs.prelabel_run_id }}" \
+            -R "${{ github.repository }}" \
+            -n "eval-generate-${{ github.event.inputs.prelabel_run_id }}" \
+            -D _prelabels
+
+      - name: Verify edited sheet exists
+        run: test -f "../../${{ github.event.inputs.xlsx_path }}" || { echo "::error::edited sheet not found at ${{ github.event.inputs.xlsx_path }} on this ref — commit it first"; exit 1; }
+
+      - name: Score verify sheet
+        run: |
+          JSONL=$(ls _prelabels/prelabels.*.jsonl | head -n1)
+          uv run python -m job_assist.eval.run verify-score \
+            --jsonl "$JSONL" \
+            --xlsx "../../${{ github.event.inputs.xlsx_path }}" \
+            --stamp "score-${{ github.run_id }}"
+
+      - name: Upload verified labels + override summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-labels-${{ github.run_id }}
+          path: |
+            apps/api/src/job_assist/eval/datasets/verified_labels.*.jsonl
+            apps/api/src/job_assist/eval/datasets/override_summary.*.json
+          retention-days: 30
+          if-no-files-found: error
