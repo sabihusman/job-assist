@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from job_assist.config import settings
 from job_assist.db.models import Division, JobPosting, TargetCompany
+from job_assist.services.tracing import traceable
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,7 @@ def _validate_description(text: str) -> str:
 # ── Gemini call ──────────────────────────────────────────────────────────────
 
 
+@traceable(run_type="llm", name="gemini.division_description")
 async def generate_description(
     company_name: str,
     company_description: str | None,
@@ -324,6 +326,7 @@ async def enrich_division(session: AsyncSession, division_id: uuid.UUID) -> Enri
 # ── Sweep ────────────────────────────────────────────────────────────────────
 
 
+@traceable(run_type="chain", name="division_enrichment_sweep")
 async def sweep_divisions(session: AsyncSession) -> SweepSummary:
     """Discover first, then enrich every division sequentially."""
     discovery = await discover_divisions(session)

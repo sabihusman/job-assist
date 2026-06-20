@@ -112,5 +112,15 @@ class Settings(BaseSettings):
     # Observability
     sentry_dsn: str = Field(default="")
 
+    # LangSmith LLM tracing (Phase A4). Triple-gated OFF by default: the SDK
+    # reads these from the environment directly (LANGSMITH_API_KEY /
+    # LANGSMITH_TRACING / LANGSMITH_PROJECT). These typed fields exist only for
+    # visibility (e.g. a health readout of whether tracing is configured) — the
+    # key is set in Railway env only, never committed, and tracing stays OFF
+    # unless ``langsmith_tracing`` is true AND the key is present.
+    langsmith_api_key: str = Field(default="")
+    langsmith_tracing: bool = Field(default=False)
+    langsmith_project: str = Field(default="")
+
 
 settings = Settings()
