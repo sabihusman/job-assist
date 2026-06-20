@@ -52,3 +52,12 @@ jobs:
 
       - name: Run eval runner (mode=${{ github.event.inputs.mode }})
         run: uv run python -m job_assist.eval.run "${{ github.event.inputs.mode }}" --stamp "run-${{ github.run_id }}"
+
+      - name: Upload eval artifacts (counts / pre-label JSONL)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-${{ github.event.inputs.mode }}-${{ github.run_id }}
+          path: apps/api/src/job_assist/eval/datasets/*.json*
+          retention-days: 14
+          if-no-files-found: warn

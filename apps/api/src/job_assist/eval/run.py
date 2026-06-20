@@ -86,6 +86,9 @@ def _run_generate(stamp: str) -> int:
     jd_dist: Counter[str] = Counter()
     sen_dist: Counter[str] = Counter()
     email_dist: Counter[str] = Counter()
+    # Q3 sanity: for the hard-seniority-mismatch stratum, capture title +
+    # Gemini's (production) seniority + o3's seniority side by side.
+    mismatch_detail: list[dict[str, Any]] = []
 
     # ── JDs ──────────────────────────────────────────────────────────────────
     jd_sample = select_jd_sample(fetch_open_postings())
@@ -112,6 +115,16 @@ def _run_generate(stamp: str) -> int:
             )
             jd_dist[str(res.label.get("role_family"))] += 1
             sen_dist[str(res.label.get("seniority_level"))] += 1
+            if item.get("_stratum") == "hard_seniority_mismatch":
+                role = item.get("role") or {}
+                mismatch_detail.append(
+                    {
+                        "title": role.get("title"),
+                        "gemini_seniority": role.get("seniority"),
+                        "o3_seniority": res.label.get("seniority_level"),
+                        "o3_role_family": res.label.get("role_family"),
+                    }
+                )
         except Exception as exc:  # collect, never abort the batch
             errors.append({"kind": "jd", "id": pid, "error": str(exc)[:300]})
 
@@ -160,6 +173,9 @@ def _run_generate(stamp: str) -> int:
         "o3_jd_role_family_distribution": dict(jd_dist),
         "o3_jd_seniority_distribution": dict(sen_dist),
         "o3_email_outcome_distribution": dict(email_dist),
+        "hard_seniority_mismatch_detail": sorted(
+            mismatch_detail, key=lambda d: str(d.get("title"))
+        ),
         "error_detail": errors[:20],
     }
     print(json.dumps(summary, indent=2, sort_keys=True))

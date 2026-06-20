@@ -24,6 +24,8 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
+
 from job_assist.eval.prompts import (
     EMAIL_PROMPT_VERSION,
     EMAIL_SYSTEM_PROMPT,
@@ -69,6 +71,17 @@ def _client() -> Any:
     return OpenAI(api_key=key)
 
 
+def _is_rate_limit(exc: BaseException) -> bool:
+    s = str(exc).lower()
+    return "429" in s or "rate limit" in s or "tokens per min" in s
+
+
+@retry(
+    retry=retry_if_exception(_is_rate_limit),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    stop=stop_after_attempt(6),
+    reraise=True,
+)
 def _complete(
     client: Any,
     *,
