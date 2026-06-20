@@ -8,10 +8,6 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
  * Heading: "Save N rule changes?" where N matches `changes.length`.
  * Body: list of changed fields formatted as `{label}: {from} → {to}`.
  * Buttons: Cancel (secondary) + Save changes (primary filled).
- *
- * `role_family_weights` is filtered upstream — the spec calls that out
- * specifically since 4 sliders all snapping by 0.05 produces noisy
- * diff lines.
  */
 
 export type RuleChange = {

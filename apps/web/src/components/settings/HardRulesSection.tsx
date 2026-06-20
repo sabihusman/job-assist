@@ -9,20 +9,17 @@ import { SettingsRow, SettingsSection } from '@/components/settings/layout';
 import { useUpdateProfile } from '@/lib/api/settings';
 import {
   CLOSED_CHANNELS_STUB,
-  DEFAULT_ROLE_FAMILY_WEIGHTS,
   type OperatorProfileRead,
-  type RoleFamilyWeights,
   SENIORITY_LEVELS,
 } from '@/lib/settings/types';
 import { cn } from '@/lib/utils';
 
 /**
- * Hard rule thresholds. Five subsections:
+ * Hard rule thresholds. Four subsections:
  *   - Maximum applicant count    (numeric + slider, backend column)
  *   - Salary floor               (numeric + slider, backend column)
  *   - Closed channels            (read-only stub; no backend API)
  *   - Staffing firm blocklist    (textarea, backend column)
- *   - Role family weights        (frontend-only state; no backend column)
  *
  * Save button is the only dirty-aware control in the entire Settings
  * page (per UI_SPEC.md). Clicking it on a dirty form opens the
@@ -44,14 +41,6 @@ type HardRulesFormState = {
   // PR #43: which SeniorityLevel enum values to include. Empty = no filter.
   seniority_levels_included: string[];
   staffing_firm_blocklist: string; // textarea: newline-joined
-  role_family_weights: RoleFamilyWeights;
-};
-
-const FAMILY_LABELS: Record<keyof RoleFamilyWeights, string> = {
-  product_management: 'Product Management',
-  product_owner: 'Product Owner',
-  product_marketing: 'Product Marketing',
-  program_management: 'Program Manager',
 };
 
 export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) {
@@ -73,7 +62,6 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
       salary_ceiling_usd: profile.salary_ceiling_usd ?? 0,
       seniority_levels_included: profile.seniority_levels_included ?? [],
       staffing_firm_blocklist: profile.staffing_firm_blocklist.join('\n'),
-      role_family_weights: { ...DEFAULT_ROLE_FAMILY_WEIGHTS },
     },
   });
   const { control, register, handleSubmit, formState, watch, reset, getValues } = form;
@@ -116,9 +104,8 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
     }
   };
 
-  // Build the field-diff list for the modal. Skip role_family_weights
-  // (per spec — too noisy to enumerate four sliders) and only include
-  // fields whose dirty flag is set.
+  // Build the field-diff list for the modal — only fields whose dirty flag
+  // is set.
   const changes: RuleChange[] = [];
   if (formState.dirtyFields.applicant_cap) {
     changes.push({
@@ -357,39 +344,6 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
             aria-label="Staffing firm blocklist"
             className="min-h-[100px] w-full rounded-md border border-border bg-input px-3 py-2 text-[13px] outline-none placeholder:text-muted-foreground focus:border-border-strong"
           />
-        </SettingsRow>
-
-        <SettingsRow label="Role family weights" sub="0.0 = never surface · 1.0 = full weight">
-          <div className="flex flex-col gap-3">
-            {(Object.keys(FAMILY_LABELS) as (keyof RoleFamilyWeights)[]).map((family) => (
-              <Controller
-                key={family}
-                control={control}
-                name={`role_family_weights.${family}`}
-                render={({ field }) => (
-                  <div className="flex items-center gap-3 text-[13px]">
-                    <span className="w-44">{FAMILY_LABELS[family]}</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      value={field.value}
-                      aria-label={`${FAMILY_LABELS[family]} weight`}
-                      onChange={(e) => field.onChange(Number.parseFloat(e.target.value))}
-                      className="h-1 w-48 cursor-pointer accent-primary"
-                    />
-                    <span className="w-12 text-right font-mono text-[12px]">
-                      {field.value.toFixed(2)}
-                    </span>
-                  </div>
-                )}
-              />
-            ))}
-            <p className="text-[12px] text-muted-foreground">
-              How aggressively to surface each role family.
-            </p>
-          </div>
         </SettingsRow>
 
         <div className="flex items-center justify-end">
