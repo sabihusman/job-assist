@@ -140,7 +140,7 @@ jobs:
           username: ${{ secrets.MAIL_USERNAME }}
           password: ${{ secrets.MAIL_PASSWORD }}
           subject: "[job-assist] Ingest health alert: ${{ steps.health.outputs.date }}"
-          to: sabih.usman@gmail.com
+          to: ${{ secrets.ALERT_TO_EMAIL }}
           from: job-assist alerts <${{ secrets.MAIL_USERNAME }}>
           body: |
             The job-assist ingest pipeline reported a problem on ${{ steps.health.outputs.date }}:
