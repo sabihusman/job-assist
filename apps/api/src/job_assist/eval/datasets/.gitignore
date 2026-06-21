@@ -1,6 +1,10 @@
-# Generated eval artifacts (counts snapshots, pre-label JSONL) are reproducible
-# from the runner; keep them out of git. The directory itself is tracked via
-# .gitkeep so the runner has a place to write.
+# Generated eval artifacts (counts snapshots, pre-label JSONL, verify sheets,
+# verified labels) are reproducible from the runner and may contain real
+# application data (JD text, email subjects/snippets). Keep them ALL out of git
+# — this is a PUBLIC repo. The directory itself is tracked via .gitkeep so the
+# runner has a place to write.
 *.json
 *.jsonl
+*.xlsx
+*.csv
 !.gitkeep

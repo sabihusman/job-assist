@@ -1,0 +1,7 @@
+# PUBLIC repo — a filled verify sheet contains real JD text + email
+# subjects/snippets. Block EVERYTHING in this directory from git except this
+# file and the README, so an edited sheet can never be committed (even with
+# `git add`). Score the sheet LOCALLY instead (see README.md).
+*
+!.gitignore
+!README.md
