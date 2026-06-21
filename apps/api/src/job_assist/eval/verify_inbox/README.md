@@ -15,8 +15,8 @@ data leaves your machine via git.
    (Note: that artifact contains real JD text + email snippets — see the
    repo-root privacy note. Treat it as sensitive; delete it when done.)
 
-2. **Get the verify sheet** — either download the `verify-build` artifact, or
-   build it locally from the pre-labels:
+2. **Build the verify sheet locally** from the pre-labels (there is no CI build
+   — it would emit a public artifact with real data):
    ```
    uv run python -m job_assist.eval.run verify-build \
      --jsonl _prelabels/prelabels.*.jsonl --stamp local
