@@ -1,0 +1,53 @@
+name: A4 eval — count (read-only sizing)
+
+# OFFLINE eval, COUNT ONLY. Pulls AGGREGATE prod counts for sample sizing
+# (resolved-status / seniority / role-family / outcome-type distributions +
+# hard-seniority pool sizes). Emits ONLY aggregate counts — never JD text,
+# email subjects/snippets, titles, or any per-row application data.
+#
+# The data-bearing steps (generate / build / verify / score) are LOCAL ONLY and
+# are NOT runnable from CI — so no public path can emit real application data.
+# See apps/api/src/job_assist/eval/README.md.
+#
+# Required secrets: API_URL, API_AUTH_TOKEN. (No OPENAI_API_KEY — no labeling.)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  count:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify API is up
+        run: curl -fsS --max-time 10 "$API_URL/health"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install deps
+        run: uv sync --frozen
+
+      - name: Run count (aggregates only)
+        run: uv run python -m job_assist.eval.run count --stamp "run-${{ github.run_id }}"
+
+      - name: Upload aggregate counts only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-counts-${{ github.run_id }}
+          # ONLY the aggregate pool-counts file — never prelabels/sheets/labels.
+          path: apps/api/src/job_assist/eval/datasets/pool_counts.*.json
+          retention-days: 14
+          if-no-files-found: warn

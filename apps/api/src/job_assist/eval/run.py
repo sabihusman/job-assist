@@ -1,14 +1,18 @@
 """Offline eval runner (CLI) — NEVER a route/cron/sweep.
 
 Modes:
-  * ``count``    — read-only: pull prod counts for sample sizing, print JSON,
-                   and write a counts artifact under ``eval/datasets/``.
-  * ``generate`` — run the OpenAI pre-labeler over the confirmed sample and
-                   write the pre-label JSONL. Gated: requires the sample to be
-                   confirmed (Phase 1 review) and OPENAI_API_KEY in the env.
+  * ``count``         — read-only: pull AGGREGATE prod counts for sample sizing
+                        (no per-row text). Safe for CI (``eval-count`` workflow)
+                        or local.
+  * ``generate``      — o3 pre-labeler over the stratified sample → pre-label
+                        JSONL. LOCAL ONLY (real JD text + email snippets).
+  * ``verify-build``  — build the Excel verify sheet. LOCAL ONLY.
+  * ``verify-score``  — override rates + verified labels. LOCAL ONLY.
 
-Run via the ``eval-prelabel`` workflow_dispatch (which injects API_URL /
-API_AUTH_TOKEN / OPENAI_API_KEY) or locally with those env vars set.
+PUBLIC repo: only ``count`` runs in CI (aggregates only). The data-bearing
+modes have no CI workflow and run on the operator's machine with OPENAI_API_KEY
+/ API_URL / API_AUTH_TOKEN in the env. All outputs under ``eval/datasets/`` and
+``verify_inbox/`` are gitignored. See ``eval/README.md``.
 """
 
 from __future__ import annotations
