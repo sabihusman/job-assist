@@ -409,6 +409,24 @@ def finalize(
     """
     b_jd = {str(r["id"]): r for r in build_jd_rows}
     b_em = {str(r["id"]): r for r in build_em_rows}
+
+    # Guard: a PRISTINE build sheet always leaves the anti-anchor strata blank
+    # (hard_seniority_mismatch seniority + rejection-stage outcome). If the
+    # passed build sheet has ZERO such blanks it's a filled/corrected copy, not
+    # the original o3 build — comparing against it silently yields 0% override.
+    # Fail loud instead.
+    build_blanks = sum(
+        1 for r in build_jd_rows if _norm(r.get("verified_seniority")) is None
+    ) + sum(1 for r in build_em_rows if _norm(r.get("verified_outcome_type")) is None)
+    if build_blanks == 0:
+        raise ValueError(
+            "--build-xlsx has no anti-anchor blanks (0 blank verified_seniority / "
+            "verified_outcome_type cells). That looks like a filled or corrected "
+            "copy, not the pristine o3 build sheet — pass the ORIGINAL build sheet "
+            "(the one verify-build produced, with the mismatch seniority + "
+            "rejection outcome cells left blank)."
+        )
+
     prelabels: list[dict[str, Any]] = []
     relabeled = 0
 
