@@ -193,6 +193,27 @@ flowchart TB
 
 **Hidden dependency / failure point** — **Embedding-timing**: `similarity_score` is NULL until the embed sweep *and* recalibration run. The whole semantic feature degrades gracefully to heuristics via the `COALESCE` fallback, but a stalled embed cron silently means "semantic off." The enrichment crons also form an **ordered chain** (company 07:00 → classifier 07:30 → divisions 08:00 → JD-summaries 08:30 → embeddings 09:00); each is idempotent so a stall doesn't block downstream, but downstream runs on staler inputs (e.g. embeddings fall back from summary to raw JD). Gemini **rate limits** and the 3-attempt cap mean a backlog drains over successive days rather than in one run.
 
+### A4 — eval & observability (how good is the classifier, really?)
+
+Two pieces sit *beside* the scoring path, observing it without changing it:
+
+- **Tracing (A4 Part 1)** — the 6 direct Gemini call sites are wrapped with an
+  opt-in LangSmith `@traceable` (`services/tracing.py`), **triple-gated off by
+  default** (no-op if the SDK is absent; inert unless `LANGSMITH_TRACING=true`;
+  Railway-env key only). Inputs are scrubbed of secrets; export is background +
+  failure-swallowing, so tracing never adds latency or a failure mode to a sweep.
+
+- **Evaluation (A4 Parts 2–3)** — an **offline, local-only** pipeline (no CI, no
+  public artifact, no real JD/email text in git — it handles the operator's real
+  data): an independent **o3** pre-labeler → **human verification** (override
+  rate as the honesty signal) → **production-Gemini scoring** against the
+  verified ground truth, with a per-row `input_sha256` identical-input lock so
+  the comparison isolates the model. Headline finding (illustrative — N=25 to 90):
+  the hypothesized seniority weakness was **corrected** — on clean PM JDs Gemini
+  **ties o3 at 68%**; the production `seniority=unknown` rate (77%) is **input
+  coverage** (broad-ingest non-PM noise), not classifier accuracy. Full
+  methodology + numbers: [`docs/eval/README.md`](../eval/README.md).
+
 ---
 
 ## 3. Gmail → Outcomes → Pipeline → Applied view (with the no-fanout guard)

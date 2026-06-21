@@ -14,11 +14,24 @@ Rules (per VERIFICATION.md): each non-WORKING item is a tracked fix; every fix
 lands with the guard test that would have caught the bug; an item moves to
 WORKING only after **re-verification in production**.
 
-_Last updated: 2026-06-18._
+_Last updated: 2026-06-21._
 
 ---
 
 ## Recently resolved
+
+### LLM eval + observability (Version A4) — **WORKING** ✅ (new)
+End-to-end classifier evaluation: independent o3 pre-labeler → human
+verification (override rate as honesty signal) → production-Gemini scoring vs
+verified ground truth, plus opt-in LangSmith tracing of the Gemini call sites
+(A4 Part 1, default-off, triple-gated). **Privacy-first: all data-bearing steps
+run locally; no real JD/email text in CI, artifacts, or git.** Headline finding
+(illustrative, see N): the hypothesized seniority weakness was **corrected** —
+on clean PM JDs Gemini commits to a level and **ties o3 at 68% (N=25)**; the
+production `seniority=unknown` epidemic (77% of postings) is **input coverage**
+(broad-ingest non-PM noise), not classifier accuracy. role_family: Gemini 82.2%
+vs o3 93.3% (N=90); outcome_type: Gemini 65.2% vs o3 66.7% (N=66, rejection
+pre/post ambiguity hits both). Methodology + numbers: `docs/eval/README.md`.
 
 ### `looking_for_text` / semantic signal — **WORKING** ✅ (was: MISLABELED)
 Slice 2 landed: `similarity_score` is calibrated (0–100 PERCENT_RANK) and
