@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from job_assist.eval.verify import (
     NA_NON_PM,
     build_workbook,
@@ -212,6 +214,41 @@ def test_finalize_recovers_o3_from_prefills_and_relabels_anchor_rows() -> None:
     assert j2["input_sha256"] and j2["o3_source"] == "fresh_relabel"
     j1 = next(r for r in prelabels if r["id"] == "j1")
     assert j1["o3_source"] == "build_prefill"
+
+
+def test_finalize_rejects_filled_build_sheet() -> None:
+    """A build sheet with no anti-anchor blanks (a filled/corrected copy) must
+    fail loud, not silently score 0% override."""
+    filled_jd = [
+        {
+            "id": "j1",
+            "stratum": "hard_seniority_mismatch",
+            "title": "Director",
+            "jd_text": "y",
+            "verified_role_family": "other",
+            "verified_seniority": "senior_pm",
+        },
+    ]
+    filled_em = [
+        {
+            "id": "e1",
+            "stratum": "rejection_post_screen",
+            "subject": "no",
+            "raw_snippet": "s",
+            "verified_outcome_type": "rejection_pre_screen",
+        },
+    ]
+    corr_jd = [{"id": "j1", "verified_role_family": "other", "verified_seniority": NA_NON_PM}]
+    corr_em = [{"id": "e1", "verified_outcome_type": "rejection_post_screen"}]
+    with pytest.raises(ValueError, match="anti-anchor blanks"):
+        finalize(
+            filled_jd,
+            filled_em,
+            corr_jd,
+            corr_em,
+            relabel_jd=lambda t, j: "x",
+            relabel_em=lambda s, n: "x",
+        )
 
 
 def test_score_blank_seniority_is_incomplete_not_agreement() -> None:
