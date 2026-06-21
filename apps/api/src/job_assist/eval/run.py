@@ -290,11 +290,78 @@ def _run_verify_finalize(stamp: str, build_xlsx: str, corrected_xlsx: str) -> in
     return 0
 
 
+def _run_gemini_score(stamp: str, labels: str, profile_context: str | None) -> int:
+    """Score the UNCHANGED production Gemini classifier vs the verified labels.
+
+    LOCAL ONLY — reads the gitignored verified_labels JSONL, runs classify_posting
+    (JDs) and GmailOutcomeClassifier.classify (emails) on the SAME input bytes
+    (input_sha256 lock), and writes the three-way accuracy summary. Needs
+    GEMINI_API_KEY in the env. Observes the classifier; changes nothing.
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from job_assist.config import settings
+    from job_assist.eval.gemini_score import aggregate, collect
+    from job_assist.gmail.classifier import EmailClassifier
+    from job_assist.gmail.models import RawEmail
+    from job_assist.services.classifier import classify_posting
+
+    rows = _read_jsonl(labels)
+    gmail_clf = EmailClassifier(api_key=settings.gemini_api_key)
+    fixed_ts = datetime(2026, 1, 1, tzinfo=UTC)
+
+    async def classify_jd(title: str, jd_text: str) -> tuple[Any, Any]:
+        return await classify_posting(jd_text=jd_text, title=title, profile_context=profile_context)
+
+    async def classify_email(subject: str, snippet: str) -> Any:
+        # from_address/from_domain are required by the model but unused by the
+        # classifier prompt (build_prompt reads subject + body_text only).
+        email = RawEmail(
+            message_id="eval",
+            from_address="eval@local",
+            from_domain="local",
+            subject=subject,
+            received_at=fixed_ts,
+            body_text=snippet,
+        )
+        result = await gmail_clf.classify(email)
+        return result.outcome_type
+
+    scored, skipped = asyncio.run(
+        collect(rows, classify_jd=classify_jd, classify_email=classify_email)
+    )
+    summary = aggregate(scored, skipped, profile_context_used=profile_context is not None)
+
+    DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+    scores_out = DATASETS_DIR / f"gemini_scores.{stamp}.jsonl"
+    with scores_out.open("w", encoding="utf-8") as fh:
+        for rec in scored:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    (DATASETS_DIR / f"gemini_accuracy_summary.{stamp}.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    print(
+        f"\n[gemini-score] scored {len(scored)} rows ({len(skipped)} skipped) → "
+        f"{scores_out.name} + gemini_accuracy_summary.{stamp}.json",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="eval.run")
     parser.add_argument(
         "mode",
-        choices=["count", "generate", "verify-build", "verify-score", "verify-finalize"],
+        choices=[
+            "count",
+            "generate",
+            "verify-build",
+            "verify-score",
+            "verify-finalize",
+            "gemini-score",
+        ],
     )
     parser.add_argument(
         "--stamp",
@@ -306,6 +373,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--build-xlsx",
         help="Original build sheet (o3 prefills) — verify-finalize recovery path.",
+    )
+    parser.add_argument(
+        "--labels",
+        help="verified_labels JSONL path (gemini-score).",
+    )
+    parser.add_argument(
+        "--profile-context",
+        help=(
+            "gemini-score: optional operator disambiguation context to match prod "
+            "exactly. Omit for the no-profile classifier path (recorded in the summary)."
+        ),
     )
     args = parser.parse_args(argv)
     if args.mode == "count":
@@ -320,6 +398,9 @@ def main(argv: list[str] | None = None) -> int:
         if not args.build_xlsx or not args.xlsx:
             parser.error("verify-finalize requires --build-xlsx and --xlsx")
         return _run_verify_finalize(args.stamp, args.build_xlsx, args.xlsx)
+    if args.mode == "gemini-score":
+        labels = args.labels or str(DATASETS_DIR / "verified_labels.final.jsonl")
+        return _run_gemini_score(args.stamp, labels, args.profile_context)
     # verify-score
     if not args.jsonl or not args.xlsx:
         parser.error("verify-score requires --jsonl and --xlsx")
