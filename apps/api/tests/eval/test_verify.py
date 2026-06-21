@@ -7,6 +7,7 @@ from typing import Any
 from job_assist.eval.verify import (
     NA_NON_PM,
     build_workbook,
+    finalize,
     read_verify_rows,
     score,
 )
@@ -126,6 +127,91 @@ def test_score_overrides_exclusions_and_incomplete() -> None:
     j2 = next(r for r in verified if r["id"] == "j2")
     assert j2["seniority_eval_eligible"] is False
     assert j2["verified_label"]["seniority_level"] is None  # N/A normalized to None
+
+
+def test_finalize_recovers_o3_from_prefills_and_relabels_anchor_rows() -> None:
+    # Build sheet (o3 prefills): a normal PM row + an anti-anchor mismatch row
+    # (seniority blank) + a normal email + a rejection email (outcome blank).
+    build_jd = [
+        {
+            "id": "j1",
+            "stratum": "triage",
+            "title": "PM",
+            "jd_text": "x",
+            "verified_role_family": "product_management",
+            "verified_seniority": "pm",
+        },
+        {
+            "id": "j2",
+            "stratum": "hard_seniority_mismatch",
+            "title": "Director",
+            "jd_text": "y",
+            "verified_role_family": "product_owner",
+            "verified_seniority": None,
+        },
+    ]
+    build_em = [
+        {
+            "id": "e1",
+            "stratum": "application_confirmation",
+            "subject": "got it",
+            "raw_snippet": "s",
+            "verified_outcome_type": "application_confirmation",
+        },
+        {
+            "id": "e2",
+            "stratum": "rejection_post_screen",
+            "subject": "no",
+            "raw_snippet": "s",
+            "verified_outcome_type": None,
+        },
+    ]
+    # Corrected sheet (operator final): j2 kept PM-family with a cold seniority;
+    # e2 labeled a rejection stage cold.
+    corr_jd = [
+        {"id": "j1", "verified_role_family": "product_management", "verified_seniority": "pm"},
+        {"id": "j2", "verified_role_family": "product_owner", "verified_seniority": "lead_pm"},
+    ]
+    corr_em = [
+        {"id": "e1", "verified_outcome_type": "application_confirmation"},
+        {"id": "e2", "verified_outcome_type": "rejection_pre_screen"},
+    ]
+
+    # Stub relabel: fresh o3 says senior_pm for the mismatch JD, pre_screen for
+    # the rejection email.
+    calls = {"jd": 0, "em": 0}
+
+    def relabel_jd(title: str, jd_text: str) -> str:
+        calls["jd"] += 1
+        return "senior_pm"
+
+    def relabel_em(subject: str, snippet: str) -> str:
+        calls["em"] += 1
+        return "rejection_pre_screen"
+
+    prelabels, _verified, summary = finalize(
+        build_jd, build_em, corr_jd, corr_em, relabel_jd=relabel_jd, relabel_em=relabel_em
+    )
+
+    # Only the 2 anti-anchor rows are relabeled (not the prefilled ones).
+    assert calls == {"jd": 1, "em": 1}
+    assert summary["relabeled_anchor_rows"] == 2
+
+    # j2 seniority now scored: o3=senior_pm (fresh) vs verified=lead_pm → override.
+    sen = summary["jd"]["seniority"]
+    assert sen["n_eligible"] == 2  # j1 + j2 both PM-family + filled
+    assert sen["overrides"] == 1  # j2 differs
+    assert sen.get("unscored_o3_missing_mismatch") is None  # nothing missing now
+
+    # e2 outcome now scored: o3=pre_screen (fresh) vs verified=pre_screen → agree.
+    ot = summary["email"]["outcome_type"]
+    assert ot["scored"] == 2 and ot["overrides"] == 0
+
+    # input_sha256 present on every reconstructed prelabel; o3_source recorded.
+    j2 = next(r for r in prelabels if r["id"] == "j2")
+    assert j2["input_sha256"] and j2["o3_source"] == "fresh_relabel"
+    j1 = next(r for r in prelabels if r["id"] == "j1")
+    assert j1["o3_source"] == "build_prefill"
 
 
 def test_score_blank_seniority_is_incomplete_not_agreement() -> None:

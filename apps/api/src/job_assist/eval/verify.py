@@ -16,6 +16,9 @@ other rows the visible anchor is simply the pre-filled ``verified_*`` value.
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Callable
 from typing import Any
 
 from openpyxl import Workbook
@@ -373,6 +376,96 @@ def score(
 
 
 # ── Sheet IO (thin; the math above is pure for testing) ──────────────────────
+
+
+def _input_sha256(payload: dict[str, Any]) -> str:
+    """Match run._sha256 exactly so reconstructed hashes equal the originals."""
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+def finalize(
+    build_jd_rows: list[dict[str, Any]],
+    build_em_rows: list[dict[str, Any]],
+    corr_jd_rows: list[dict[str, Any]],
+    corr_em_rows: list[dict[str, Any]],
+    *,
+    relabel_jd: Callable[[str, str], str | None],
+    relabel_em: Callable[[str, str], str | None],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """Recover the complete o3 baseline and score the corrected sheet against it.
+
+    o3 for the 109 non-anchor rows comes from the ORIGINAL build sheet's
+    pre-fills (the labels the operator anchored on). o3 for the 47 anti-anchor
+    rows (blank in the build sheet, lost with the JSONL) is recovered by a FRESH
+    o3 relabel of just those inputs — valid because those rows were labeled cold,
+    so a fresh independent o3 is the intended unanchored comparison.
+
+    ``relabel_jd(title, jd_text) -> seniority_level`` and
+    ``relabel_em(subject, raw_snippet) -> outcome_type`` are injected (run.py
+    wires them to the o3 labeler; tests pass stubs). They are called ONLY for
+    rows missing an o3 label.
+    """
+    b_jd = {str(r["id"]): r for r in build_jd_rows}
+    b_em = {str(r["id"]): r for r in build_em_rows}
+    prelabels: list[dict[str, Any]] = []
+    relabeled = 0
+
+    for r in corr_jd_rows:
+        rid = str(r["id"])
+        b = b_jd.get(rid, {})
+        o3_rf = _norm(b.get("verified_role_family"))  # build always pre-filled rf
+        o3_sen = _norm(b.get("verified_seniority"))  # None for the 20 mismatch rows
+        title = r.get("title") or ""
+        jd_text = r.get("jd_text") or ""
+        source = "build_prefill"
+        if o3_sen is None:
+            o3_sen = _norm(relabel_jd(title, jd_text))
+            relabeled += 1
+            source = "fresh_relabel"
+        inp = {"title": r.get("title"), "jd_text": r.get("jd_text")}
+        prelabels.append(
+            {
+                "kind": "jd",
+                "id": rid,
+                "stratum": r.get("stratum"),
+                "input": inp,
+                "input_sha256": _input_sha256(inp),
+                "openai_label": {"role_family": o3_rf, "seniority_level": o3_sen},
+                "o3_source": source,
+            }
+        )
+
+    for r in corr_em_rows:
+        rid = str(r["id"])
+        b = b_em.get(rid, {})
+        o3_ot = _norm(b.get("verified_outcome_type"))  # None for the 27 rejection rows
+        subject = r.get("subject") or ""
+        snippet = r.get("raw_snippet") or ""
+        source = "build_prefill"
+        if o3_ot is None:
+            o3_ot = _norm(relabel_em(subject, snippet))
+            relabeled += 1
+            source = "fresh_relabel"
+        inp = {"subject": r.get("subject"), "raw_snippet": r.get("raw_snippet")}
+        prelabels.append(
+            {
+                "kind": "email",
+                "id": rid,
+                "stratum": r.get("stratum"),
+                "production_outcome_type": r.get("stratum"),
+                "input": inp,
+                "input_sha256": _input_sha256(inp),
+                "openai_label": {"outcome_type": o3_ot},
+                "o3_source": source,
+            }
+        )
+
+    verified, summary = score(prelabels, corr_jd_rows, corr_em_rows)
+    summary["relabeled_anchor_rows"] = relabeled
+    summary["recovery"] = "o3: 109 build-sheet prefills + fresh relabel of anti-anchor rows"
+    return prelabels, verified, summary
 
 
 def read_verify_rows(wb: Workbook) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:

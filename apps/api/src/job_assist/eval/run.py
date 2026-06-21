@@ -240,16 +240,73 @@ def _run_verify_score(stamp: str, jsonl: str, xlsx: str) -> int:
     return 0
 
 
+def _run_verify_finalize(stamp: str, build_xlsx: str, corrected_xlsx: str) -> int:
+    """Recovery path: o3 for the 109 non-anchor rows from the original build
+    sheet's prefills + a FRESH o3 relabel of the 47 anti-anchor rows, then score
+    the corrected sheet. LOCAL ONLY — needs OPENAI_API_KEY in the env for the
+    47-row relabel. Use when the original pre-label JSONL is lost.
+    """
+    from openpyxl import load_workbook
+
+    from job_assist.eval.openai_labeler import label_email, label_jd, new_client
+    from job_assist.eval.verify import finalize, read_verify_rows
+
+    bjd, bem = read_verify_rows(load_workbook(build_xlsx, data_only=True))
+    cjd, cem = read_verify_rows(load_workbook(corrected_xlsx, data_only=True))
+
+    # Lazy client: only constructed (and only needs the key) if there are
+    # anti-anchor rows to relabel.
+    holder: dict[str, Any] = {}
+
+    def _client() -> Any:
+        if "c" not in holder:
+            holder["c"] = new_client()
+        return holder["c"]
+
+    def relabel_jd(title: str, jd_text: str) -> str | None:
+        return label_jd(_client(), title=title, jd_text=jd_text).label.get("seniority_level")
+
+    def relabel_em(subject: str, snippet: str) -> str | None:
+        return label_email(_client(), subject=subject, body=snippet).label.get("outcome_type")
+
+    _prelabels, verified, summary = finalize(
+        bjd, bem, cjd, cem, relabel_jd=relabel_jd, relabel_em=relabel_em
+    )
+
+    DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+    labels_out = DATASETS_DIR / f"verified_labels.{stamp}.jsonl"
+    with labels_out.open("w", encoding="utf-8") as fh:
+        for rec in verified:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    (DATASETS_DIR / f"override_summary.{stamp}.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    print(
+        f"\n[verify-finalize] relabeled {summary['relabeled_anchor_rows']} anti-anchor rows; "
+        f"wrote {len(verified)} verified labels → {labels_out.name}",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="eval.run")
-    parser.add_argument("mode", choices=["count", "generate", "verify-build", "verify-score"])
+    parser.add_argument(
+        "mode",
+        choices=["count", "generate", "verify-build", "verify-score", "verify-finalize"],
+    )
     parser.add_argument(
         "--stamp",
         required=True,
         help="Timestamp tag for artifacts (passed in for reproducibility).",
     )
     parser.add_argument("--jsonl", help="Pre-label JSONL path (verify-build / verify-score).")
-    parser.add_argument("--xlsx", help="Edited verify sheet path (verify-score).")
+    parser.add_argument("--xlsx", help="Edited/corrected verify sheet path.")
+    parser.add_argument(
+        "--build-xlsx",
+        help="Original build sheet (o3 prefills) — verify-finalize recovery path.",
+    )
     args = parser.parse_args(argv)
     if args.mode == "count":
         return _run_count(args.stamp)
@@ -259,6 +316,10 @@ def main(argv: list[str] | None = None) -> int:
         if not args.jsonl:
             parser.error("verify-build requires --jsonl")
         return _run_verify_build(args.stamp, args.jsonl)
+    if args.mode == "verify-finalize":
+        if not args.build_xlsx or not args.xlsx:
+            parser.error("verify-finalize requires --build-xlsx and --xlsx")
+        return _run_verify_finalize(args.stamp, args.build_xlsx, args.xlsx)
     # verify-score
     if not args.jsonl or not args.xlsx:
         parser.error("verify-score requires --jsonl and --xlsx")
