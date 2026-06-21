@@ -87,3 +87,15 @@ Job Assist.txt
 
 # Claude Code agent session artifacts.
 .claude/
+
+# Belt-and-suspenders privacy guard (PUBLIC repo): block stray copies of eval
+# verify sheets / corrected sheets — they hold real JD text + email
+# subjects/snippets — and Excel lock files, anywhere in the tree, on top of the
+# eval/ gitignores. So even `git add -A` can never stage real application data.
+verify_sheet*.xlsx
+*CORRECTED*.xlsx
+~$*
+# Any Excel workbook at the REPO ROOT (leading slash = root-only) — strays land
+# here when copied out of eval/datasets/. Intentional in-tree .xlsx live under
+# their own dirs, not root.
+/*.xlsx
