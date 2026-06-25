@@ -29,14 +29,14 @@ type Choice = {
 };
 
 export const REASON_CHOICES: readonly Choice[] = [
-  { reason: 'wrong_role', label: 'Wrong role', hotkey: '1' },
+  { reason: 'wrong_role', label: 'Wrong role type', hotkey: '1' },
   { reason: 'wrong_location', label: 'Wrong location', hotkey: '2' },
   { reason: 'comp_too_low', label: 'Comp too low', hotkey: '3' },
-  { reason: 'wrong_industry', label: 'Wrong industry', hotkey: '4' },
+  { reason: 'wrong_industry', label: 'Wrong domain / industry', hotkey: '4' },
   { reason: 'wrong_stage', label: 'Wrong stage', hotkey: '5' },
   { reason: 'already_rejected_here', label: 'Already rejected here', hotkey: '6' },
   { reason: 'just_not_feeling_it', label: 'Just not feeling it', hotkey: '7' },
-  { reason: 'too_senior', label: 'Too senior', hotkey: '8' },
+  { reason: 'too_senior', label: 'Too senior — level', hotkey: '8' },
   { reason: 'too_junior', label: 'Too junior', hotkey: '9' },
   // feat/company-app-awareness: a reluctant portfolio pass (not a fit signal).
   // Hotkey 0 — the last single digit left after PR #43 took 8/9.
