@@ -67,8 +67,8 @@ describe('PassedRow', () => {
       </ul>,
     );
     // Reason chip uses the same label vocabulary as ReasonPicker.
-    expect(screen.getByLabelText('Reason: Wrong role')).toBeInTheDocument();
-    expect(screen.getByText('Wrong role')).toBeInTheDocument();
+    expect(screen.getByLabelText('Reason: Wrong role type')).toBeInTheDocument();
+    expect(screen.getByText('Wrong role type')).toBeInTheDocument();
   });
 
   test('renders without a reason chip when state.reason is null', () => {

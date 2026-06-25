@@ -35,7 +35,7 @@ describe('ReasonPicker', () => {
     const user = userEvent.setup();
     const onSelect = vi.fn();
     render(<ReasonPicker onSelect={onSelect} onCancel={() => {}} />);
-    await user.click(screen.getByText('Too senior'));
+    await user.click(screen.getByText('Too senior — level'));
     expect(onSelect).toHaveBeenCalledWith('too_senior');
   });
 

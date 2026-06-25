@@ -23,14 +23,14 @@ import { cn } from '@/lib/utils';
  */
 
 const BULK_REASONS: readonly { value: ActionReason; label: string }[] = [
-  { value: 'wrong_role', label: 'Wrong role' },
+  { value: 'wrong_role', label: 'Wrong role type' },
   { value: 'wrong_location', label: 'Wrong location' },
   { value: 'comp_too_low', label: 'Comp too low' },
-  { value: 'wrong_industry', label: 'Wrong industry' },
+  { value: 'wrong_industry', label: 'Wrong domain / industry' },
   { value: 'wrong_stage', label: 'Wrong stage' },
-  { value: 'too_senior', label: 'Too senior' },
+  { value: 'too_senior', label: 'Too senior — level' },
   { value: 'too_junior', label: 'Too junior' },
-  { value: 'just_not_feeling_it', label: 'Just not it' },
+  { value: 'just_not_feeling_it', label: 'Just not feeling it' },
 ];
 
 const btn =

@@ -130,8 +130,8 @@ describe('TriageCard', () => {
     // Picker chrome.
     expect(screen.getByText(/why not\?/i)).toBeInTheDocument();
     // All 9 reason chips (PR #45 vocabulary).
-    expect(screen.getByText('Wrong role')).toBeInTheDocument();
-    expect(screen.getByText('Too senior')).toBeInTheDocument();
+    expect(screen.getByText('Wrong role type')).toBeInTheDocument();
+    expect(screen.getByText('Too senior — level')).toBeInTheDocument();
     expect(screen.getByText('Too junior')).toBeInTheDocument();
   });
 
@@ -295,7 +295,7 @@ describe('TriageCard quick-action dispatch mapping', () => {
     expect(screen.getByText(/why not\?/i)).toBeInTheDocument();
 
     // Picking a reason commits not_interested (with the reason) — not applied.
-    await user.click(screen.getByText('Wrong role'));
+    await user.click(screen.getByText('Wrong role type'));
     expect(onAction).toHaveBeenCalledTimes(1);
     expect(onAction).toHaveBeenCalledWith({ kind: 'not_interested', reason: 'wrong_role' });
   });
