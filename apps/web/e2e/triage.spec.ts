@@ -240,8 +240,8 @@ test("keyboard '2' opens the inline reason picker for the focused card", async (
   await page.keyboard.press('2');
   // Picker mounts within ~1s with the full 9-chip vocabulary.
   await expect(page.getByText(/why not\?/i)).toBeVisible();
-  await expect(page.getByRole('button', { name: /Wrong role 1/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Too senior 8/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Wrong role type 1/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Too senior — level 8/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /Too junior 9/ })).toBeVisible();
   // Esc closes without committing.
   await page.keyboard.press('Escape');

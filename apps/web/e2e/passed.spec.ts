@@ -52,7 +52,7 @@ test('renders passed rows from the API', async ({ page }) => {
   await expect(mainContent(page).getByText('PassedCo')).toBeVisible();
   await expect(mainContent(page).getByText('Senior PM, Platform')).toBeVisible();
   // Reason chip — label comes from REASON_CHOICES vocabulary.
-  await expect(mainContent(page).getByLabel('Reason: Too senior')).toBeVisible();
+  await expect(mainContent(page).getByLabel('Reason: Too senior — level')).toBeVisible();
 });
 
 test('renders empty state when no passed postings exist', async ({ page }) => {
