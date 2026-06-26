@@ -231,8 +231,8 @@ Title: "Triage". Subtitle: "22 pending · 5 applied". Layout: **main column + ri
   - **Default:** as above.
   - **Selected** (mirrored in right panel): tier strip becomes solid teal (`bg-primary`).
   - **Hover:** border-strong + slight `bg-accent/30` warmth.
-  - **Expanded with reason picker** (after clicking action 2/"Pass"): below meta row, labelled chip-grid appears titled `WHY NOT?` (uppercase 11px mono muted). 7 reason chips in 2–3 rows, each `outline button rounded border-border bg-surface px-2 py-1 text-xs`. Suffix mono hotkey:
-    - `Wrong role 1` · `Wrong location 2` · `Comp too low 3` · `Wrong industry 4` · `Wrong stage 5` · `Already rejected here 6` · `Just not feeling it 7`
+  - **Expanded with reason picker** (after clicking action 2/"Pass"): below meta row, labelled chip-grid appears titled `WHY NOT?` (uppercase 11px mono muted). 10 reason chips in 2–3 rows, each `outline button rounded border-border bg-surface px-2 py-1 text-xs`. Suffix mono hotkey:
+    - `Wrong role type 1` · `Wrong location 2` · `Comp too low 3` · `Wrong domain / industry 4` · `Wrong stage 5` · `Already rejected here 6` · `Just not feeling it 7` · `Too senior — level 8` · `Too junior 9` · `Too many open apps here 0`
     - Right-aligned `× esc` chip (24×24 ghost) to cancel.
     - Inline within card (no popover). Clicking a reason commits the pass with that reason.
 
