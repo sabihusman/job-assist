@@ -5,7 +5,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from job_assist.eval.gemini_score import _input_sha256, aggregate, collect
+from job_assist.eval.gemini_score import (
+    _input_sha256,
+    _is_transient_error,
+    aggregate,
+    collect,
+)
 
 
 def _jd_row(
@@ -149,3 +154,85 @@ def test_aggregate_skips_recorded() -> None:
     )
     assert summary["n_skipped"] == 1
     assert summary["profile_context_used"] is True
+
+
+async def test_collect_continues_when_a_row_raises() -> None:
+    """A classify call that raises (e.g. a row stuck on persistent 503s after
+    retries) must NOT abort the run: the row is recorded to ``skipped`` with the
+    error and the remaining rows still score, so output is still produced."""
+    r1 = _jd_row(
+        "j1",
+        title="PM",
+        jd="body",
+        v_rf="product_management",
+        v_sen="pm",
+        o3_rf="product_management",
+        o3_sen="pm",
+        eligible=True,
+    )
+    boom = _jd_row(
+        "j2",
+        title="PM",
+        jd="body",
+        v_rf="product_management",
+        v_sen="pm",
+        o3_rf="product_management",
+        o3_sen="pm",
+        eligible=True,
+    )
+    r3 = _jd_row(
+        "j3",
+        title="PM",
+        jd="body",
+        v_rf="product_management",
+        v_sen="pm",
+        o3_rf="product_management",
+        o3_sen="pm",
+        eligible=True,
+    )
+
+    async def cj(title: str, jd: str) -> tuple[str, str]:
+        # j2 carries no jd text in this stub's view; raise only for it.
+        if title == "PM" and jd == "":
+            raise RuntimeError("503 UNAVAILABLE: model is overloaded")
+        return ("product_management", "pm")
+
+    async def ce(subject: str, snip: str) -> str:
+        return "offer"
+
+    # Blank j2's input so the stub raises for it (and refresh its hash so it
+    # passes the input_sha256 lock and actually reaches the classifier).
+    boom["input"] = {"title": "PM", "jd_text": ""}
+    boom["input_sha256"] = _input_sha256(boom["input"])
+
+    scored, skipped = await collect([r1, boom, r3], classify_jd=cj, classify_email=ce)
+
+    # The good rows still scored; the raising row did not abort the run.
+    assert [s["id"] for s in scored] == ["j1", "j3"]
+    assert len(skipped) == 1
+    assert skipped[0]["id"] == "j2"
+    assert skipped[0]["kind"] == "jd"
+    assert skipped[0]["reason"].startswith("classify_error:")
+    assert "503" in skipped[0]["reason"]
+
+
+def test_is_transient_error_string_matching() -> None:
+    """The retry predicate fires on transient 503/overload + 429 markers and
+    leaves genuine errors (which should surface) alone."""
+    transient = [
+        Exception("503 Service Unavailable"),
+        Exception("UNAVAILABLE: The model is overloaded. Please try again later."),
+        Exception("Gemini is experiencing high demand"),
+        Exception("429 Too Many Requests"),
+        Exception("RESOURCE_EXHAUSTED: quota"),
+    ]
+    for exc in transient:
+        assert _is_transient_error(exc) is True
+
+    fatal = [
+        Exception("400 INVALID_ARGUMENT: bad request"),
+        Exception("401 unauthorized"),
+        ValueError("malformed JSON in classifier response"),
+    ]
+    for exc in fatal:
+        assert _is_transient_error(exc) is False
