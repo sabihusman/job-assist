@@ -301,8 +301,10 @@ def _run_gemini_score(stamp: str, labels: str, profile_context: str | None) -> i
     import asyncio
     from datetime import UTC, datetime
 
+    from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
+
     from job_assist.config import settings
-    from job_assist.eval.gemini_score import aggregate, collect
+    from job_assist.eval.gemini_score import _is_transient_error, aggregate, collect
     from job_assist.gmail.classifier import EmailClassifier
     from job_assist.gmail.models import RawEmail
     from job_assist.services.classifier import classify_posting
@@ -311,9 +313,23 @@ def _run_gemini_score(stamp: str, labels: str, profile_context: str | None) -> i
     gmail_clf = EmailClassifier(api_key=settings.gemini_api_key)
     fixed_ts = datetime(2026, 1, 1, tzinfo=UTC)
 
+    # Bounded exponential backoff on transient Gemini errors (503 "high demand"
+    # / overload, 429). Wraps ONLY the eval's injected callables — the production
+    # classify_posting / EmailClassifier are untouched. Without this a single
+    # 503 aborts the ~90-row run; here it retries (4->60s, up to 6 attempts)
+    # before collect()'s per-row guard would skip the row.
+    _transient_retry = retry(
+        retry=retry_if_exception(_is_transient_error),
+        wait=wait_exponential(multiplier=2, min=4, max=60),
+        stop=stop_after_attempt(6),
+        reraise=True,
+    )
+
+    @_transient_retry
     async def classify_jd(title: str, jd_text: str) -> tuple[Any, Any]:
         return await classify_posting(jd_text=jd_text, title=title, profile_context=profile_context)
 
+    @_transient_retry
     async def classify_email(subject: str, snippet: str) -> Any:
         # from_address/from_domain are required by the model but unused by the
         # classifier prompt (build_prompt reads subject + body_text only).

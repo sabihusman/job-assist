@@ -50,6 +50,29 @@ def _rank(s: str | None) -> int:
     return SENIORITY_LADDER.index(s) if s in SENIORITY_LADDER else -1
 
 
+# Substrings (lowercased) that mark a transient, retry-worthy Gemini error: the
+# 503 "high demand" overload that was aborting whole runs, plus 429 rate limits.
+# Matched on the stringified exception (robust to the genai SDK's varying
+# exception types — same posture as the gmail classifier's 429 string check).
+# run.py uses this as the tenacity retry predicate around the injected
+# classifiers so a transient blip self-heals instead of killing the run.
+_TRANSIENT_MARKERS: tuple[str, ...] = (
+    "503",
+    "unavailable",
+    "overloaded",
+    "high demand",
+    "429",
+    "resource_exhausted",
+)
+
+
+def _is_transient_error(exc: BaseException) -> bool:
+    """True if ``exc`` looks like a transient Gemini 503/overload or 429 — the
+    errors worth retrying with backoff rather than aborting the run."""
+    s = str(exc).lower()
+    return any(marker in s for marker in _TRANSIENT_MARKERS)
+
+
 async def collect(
     rows: list[dict[str, Any]],
     *,
@@ -70,29 +93,37 @@ async def collect(
             )
             continue
         kind = r.get("kind")
-        if kind == "jd":
-            g_rf, g_sen = await classify_jd(inp.get("title") or "", inp.get("jd_text") or "")
-            scored.append(
-                {
-                    "kind": "jd",
-                    "id": r.get("id"),
-                    "eligible": bool(r.get("seniority_eval_eligible")),
-                    "verified": r.get("verified_label") or {},
-                    "o3": r.get("o3_label") or {},
-                    "gemini": {"role_family": _norm(g_rf), "seniority_level": _norm(g_sen)},
-                }
-            )
-        elif kind == "email":
-            g_ot = await classify_email(inp.get("subject") or "", inp.get("raw_snippet") or "")
-            scored.append(
-                {
-                    "kind": "email",
-                    "id": r.get("id"),
-                    "verified": r.get("verified_label") or {},
-                    "o3": r.get("o3_label") or {},
-                    "gemini": {"outcome_type": _norm(g_ot)},
-                }
-            )
+        # Per-row fault tolerance: a classify call that still raises after the
+        # injected retry/backoff (e.g. a row stuck on persistent 503s, or any
+        # unexpected error) is recorded to ``skipped`` and the loop continues —
+        # so one bad row never discards the rows already scored, and the run
+        # still completes and writes its output.
+        try:
+            if kind == "jd":
+                g_rf, g_sen = await classify_jd(inp.get("title") or "", inp.get("jd_text") or "")
+                scored.append(
+                    {
+                        "kind": "jd",
+                        "id": r.get("id"),
+                        "eligible": bool(r.get("seniority_eval_eligible")),
+                        "verified": r.get("verified_label") or {},
+                        "o3": r.get("o3_label") or {},
+                        "gemini": {"role_family": _norm(g_rf), "seniority_level": _norm(g_sen)},
+                    }
+                )
+            elif kind == "email":
+                g_ot = await classify_email(inp.get("subject") or "", inp.get("raw_snippet") or "")
+                scored.append(
+                    {
+                        "kind": "email",
+                        "id": r.get("id"),
+                        "verified": r.get("verified_label") or {},
+                        "o3": r.get("o3_label") or {},
+                        "gemini": {"outcome_type": _norm(g_ot)},
+                    }
+                )
+        except Exception as exc:  # eval robustness: never abort the run on one row
+            skipped.append({"id": r.get("id"), "kind": kind, "reason": f"classify_error: {exc}"})
     return scored, skipped
 
 
