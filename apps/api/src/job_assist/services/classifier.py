@@ -68,7 +68,12 @@ logger = logging.getLogger(__name__)
 # the version makes the reclassify sweep revisit existing rows, so strategy
 # roles previously bucketed other/program_management self-heal into the new
 # family.
-CLASSIFIER_VERSION = "gemini-flash-lite-v5"
+# v6 (feat/jd-truncation-5000): raise the JD truncation 3000 -> 5000 chars in
+# build_classify_prompt. Measured: ~24% of PM-family postings carry their only
+# 5+-years seniority signal past char 3000, so they were under-leveled
+# (senior_pm read as pm); 5000 recovers most. The bump makes the version-guard
+# re-run already-classified rows so they re-level on the wider window.
+CLASSIFIER_VERSION = "gemini-flash-lite-v6"
 _MODEL_NAME = "gemini-2.5-flash-lite"
 
 # Valid enum values — kept in sync with db/enums.py. The defensive parser
@@ -288,9 +293,12 @@ def build_classify_prompt(
     (when present) the operator context appear in the prompt without needing a
     Gemini call.
     """
-    # Truncate JD to keep token cost bounded.  The first 3000 chars
-    # carry essentially all the signal needed for family + seniority.
-    jd_snippet = (jd_text or "").strip()[:3000]
+    # Truncate JD to keep token cost bounded. Raised 3000 -> 5000 (v6): late
+    # seniority requirements ("8+ years", "Senior" scope) often live in the back
+    # half of long JDs, past char 3000 — measured under-leveling on ~24% of
+    # PM-family postings. 5000 chars (~1.25k tokens) recovers most while staying
+    # a trivial fraction of the model's context window.
+    jd_snippet = (jd_text or "").strip()[:5000]
     base = f"Title: {title.strip()}\n\nJob description:\n{jd_snippet}"
     if not profile_context:
         return base

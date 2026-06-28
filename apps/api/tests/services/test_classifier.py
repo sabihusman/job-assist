@@ -5,7 +5,7 @@ top-level ``classify_posting`` function which is monkey-patched via
 ``monkeypatch.setattr``.
 
 Coverage:
-  * build_classify_prompt — title + JD text appear; JD truncated to 3000 chars
+  * build_classify_prompt — title + JD text appear; JD truncated to 5000 chars
   * _coerce_result — all 5 role_family values; all 6 PM seniority values;
     fallback on out-of-enum; case/dash normalisation
   * CLASSIFIER_VERSION — non-empty string, bumped from the regex era
@@ -48,11 +48,11 @@ def test_classifier_version_is_llm_era() -> None:
     assert "gemini" in CLASSIFIER_VERSION.lower()
 
 
-def test_classifier_version_is_v5_strategy_aware() -> None:
-    """v5 adds the strategy_ops family (feat/strategy-spine); tracking which
-    rows were classified under it is what lets the reclassify sweep revisit
-    pre-v5 rows so strategy roles self-heal out of other/program_management."""
-    assert "v5" in CLASSIFIER_VERSION
+def test_classifier_version_is_v6_wider_window() -> None:
+    """v6 raises the JD truncation 3000 -> 5000; the version bump lets the
+    reclassify sweep revisit pre-v6 rows so late-stated seniority signals (past
+    char 3000) get re-leveled on the wider window."""
+    assert "v6" in CLASSIFIER_VERSION
 
 
 # ── _SYSTEM_PROMPT precision criteria (regression guard, Bestiary 5.21) ───────
@@ -110,11 +110,11 @@ def test_build_prompt_includes_jd_text() -> None:
 
 
 def test_build_prompt_truncates_long_jd() -> None:
-    long_jd = "x" * 5000
+    long_jd = "x" * 7000
     prompt = build_classify_prompt("PM", long_jd)
-    # Should not contain the full 5000 chars — 3000-char cap
-    assert "x" * 3001 not in prompt
-    assert "x" * 3000 in prompt
+    # v6: 5000-char cap (raised from 3000).
+    assert "x" * 5001 not in prompt
+    assert "x" * 5000 in prompt
 
 
 def test_build_prompt_strips_title_whitespace() -> None:
