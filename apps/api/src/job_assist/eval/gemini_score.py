@@ -123,9 +123,7 @@ async def collect(
                     }
                 )
         except Exception as exc:  # eval robustness: never abort the run on one row
-            skipped.append(
-                {"id": r.get("id"), "kind": kind, "reason": f"classify_error: {exc}"}
-            )
+            skipped.append({"id": r.get("id"), "kind": kind, "reason": f"classify_error: {exc}"})
     return scored, skipped
 
 
