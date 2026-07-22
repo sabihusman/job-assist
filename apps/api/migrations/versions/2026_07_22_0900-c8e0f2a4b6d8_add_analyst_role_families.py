@@ -9,7 +9,7 @@ block — use the autocommit escape hatch (same pattern as the icims /
 handle_not_found / strategy_ops migrations).
 
 Revision ID: c8e0f2a4b6d8
-Revises: b6d8e0f2a4c6
+Revises: b3c4d5e6f7a8
 Create Date: 2026-07-22 09:00:00.000000
 
 """
@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "c8e0f2a4b6d8"
-down_revision: str | Sequence[str] | None = "b6d8e0f2a4c6"
+down_revision: str | Sequence[str] | None = "b3c4d5e6f7a8"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
