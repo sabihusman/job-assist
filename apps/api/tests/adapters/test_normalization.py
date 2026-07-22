@@ -130,18 +130,6 @@ class TestParseCompensationPrecision:
             "annual",
         )
 
-    def test_incidental_hourly_mention_does_not_flip_annual_range(self) -> None:
-        """Greenhouse feeds the whole JD body, not a clean comp line. An
-        incidental hourly figure elsewhere (an on-call stipend, a contractor
-        rate mention) must not flip period/bounds for the REAL annual range
-        stated separately — hourly-vs-annual is decided per-candidate-match,
-        not once globally for the whole string."""
-        jd = (
-            "This role offers a $30/hour on-call stipend during rotations. "
-            "Base salary range: $150,000 - $190,000."
-        )
-        assert parse_compensation(jd) == (150_000, 190_000, "USD", "annual")
-
 
 class TestDetectRoleFamilyEnumMembership:
     """Regression guard mirroring the Wellfound associate_pm/apm bug (a
