@@ -52,6 +52,10 @@ const VALID_FAMILY = new Set<RoleFamilyWire>([
   // fell back to the pm_only PM/PO list) and the xlsx export diverged from
   // the visible list. Keep in lockstep with FAMILY_CHIPS / RoleFamilyWire.
   'strategy_ops',
+  // business_analyst/financial_analyst expansion: same lockstep requirement —
+  // keep with FAMILY_CHIPS / RoleFamilyWire.
+  'business_analyst',
+  'financial_analyst',
   'other',
 ]);
 const VALID_STATE = new Set<StateFilter>([

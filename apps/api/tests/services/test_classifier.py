@@ -48,11 +48,11 @@ def test_classifier_version_is_llm_era() -> None:
     assert "gemini" in CLASSIFIER_VERSION.lower()
 
 
-def test_classifier_version_is_v6_wider_window() -> None:
-    """v6 raises the JD truncation 3000 -> 5000; the version bump lets the
-    reclassify sweep revisit pre-v6 rows so late-stated seniority signals (past
-    char 3000) get re-leveled on the wider window."""
-    assert "v6" in CLASSIFIER_VERSION
+def test_classifier_version_is_v7_analyst_families() -> None:
+    """v7 adds business_analyst/financial_analyst; the version bump lets the
+    reclassify sweep revisit pre-v7 rows so titles that should now route to
+    an analyst family get re-keyed instead of staying stuck at 'other'."""
+    assert "v7" in CLASSIFIER_VERSION
 
 
 # ── _SYSTEM_PROMPT precision criteria (regression guard, Bestiary 5.21) ───────
@@ -94,6 +94,40 @@ def test_prompt_lists_known_mislabels_as_negative_anchors(anchor: str) -> None:
     """Every role family the v2 prompt mislabeled as product_management must
     now appear as an explicit negative anchor in the prompt."""
     assert anchor in _SYSTEM_PROMPT
+
+
+# ── v7: business_analyst / financial_analyst (analyst-family expansion) ──────
+
+
+def test_prompt_has_eight_values_not_six() -> None:
+    assert "EIGHT values" in _SYSTEM_PROMPT
+    assert "SIX values" not in _SYSTEM_PROMPT
+
+
+@pytest.mark.parametrize(
+    "anchor",
+    [
+        "FP&A Analyst",
+        "Financial Analyst",
+        "Business Analyst",
+        "Data Analyst",
+    ],
+)
+def test_prompt_lists_analyst_family_anchors(anchor: str) -> None:
+    assert anchor in _SYSTEM_PROMPT
+
+
+def test_prompt_distinguishes_business_analyst_from_strategy_ops() -> None:
+    """The bizops overlap is the likely confusion (per the verification
+    report) — the prompt must explicitly call it out."""
+    assert "bizops overlap" in _SYSTEM_PROMPT.lower()
+
+
+def test_prompt_keeps_product_analyst_as_other_unchanged() -> None:
+    """Directive: Product Analyst must NOT move to business_analyst just
+    because analyst families now exist."""
+    assert '"Product Analyst"' in _SYSTEM_PROMPT or "Product Analyst" in _SYSTEM_PROMPT
+    assert "NOT business_analyst" in _SYSTEM_PROMPT
 
 
 # ── build_classify_prompt ─────────────────────────────────────────────────────
@@ -177,6 +211,9 @@ def test_build_prompt_injects_profile_context_as_disambiguation() -> None:
         "product_owner",
         "product_marketing",
         "program_management",
+        "strategy_ops",
+        "business_analyst",
+        "financial_analyst",
         "other",
     ],
 )
@@ -188,6 +225,20 @@ def test_coerce_all_valid_role_families(wire: str) -> None:
 def test_coerce_role_family_invalid_falls_back() -> None:
     family, _ = _coerce_result({"role_family": "engineering", "seniority_level": "pm"})
     assert family == _FALLBACK_ROLE_FAMILY
+
+
+@pytest.mark.parametrize(
+    "invented",
+    ["ba", "fa", "fpa_analyst", "financial_analyst_", "biz_analyst", "fpna"],
+)
+def test_coerce_role_family_rejects_invented_analyst_shorthand(invented: str) -> None:
+    """Regression guard (mirrors the Wellfound associate_pm/apm bug): an LLM
+    that emits a plausible-looking shorthand for the new analyst families
+    instead of the exact enum string must fall back, never write an
+    off-enum value to the DB."""
+    family, _ = _coerce_result({"role_family": invented, "seniority_level": "pm"})
+    assert family == _FALLBACK_ROLE_FAMILY
+    assert family in _VALID_ROLE_FAMILIES
 
 
 def test_coerce_role_family_empty_falls_back() -> None:

@@ -73,7 +73,7 @@ logger = logging.getLogger(__name__)
 # 5+-years seniority signal past char 3000, so they were under-leveled
 # (senior_pm read as pm); 5000 recovers most. The bump makes the version-guard
 # re-run already-classified rows so they re-level on the wider window.
-CLASSIFIER_VERSION = "gemini-flash-lite-v6"
+CLASSIFIER_VERSION = "gemini-flash-lite-v7"
 _MODEL_NAME = "gemini-2.5-flash-lite"
 
 # Valid enum values — kept in sync with db/enums.py. The defensive parser
@@ -85,6 +85,8 @@ _VALID_ROLE_FAMILIES = frozenset(
         "product_marketing",
         "program_management",
         "strategy_ops",
+        "business_analyst",
+        "financial_analyst",
         "other",
     }
 )
@@ -107,7 +109,7 @@ bucket — a precise ``other`` is far better than a wrong ``product_management``
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DIMENSION 1 — role_family
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Choose one of these SIX values. Do not invent a seventh.
+Choose one of these EIGHT values. Do not invent a ninth.
 
 THE DISCRIMINATOR: does the role OWN a product — its strategy, roadmap,
 discovery, and prioritization for a product or feature area — and decide
@@ -149,7 +151,25 @@ even when their title contains the word "Product".
                         execution or process coordination (that is
                         program_management). A bare "Operations" title with
                         no strategy scope is NOT strategy_ops.
-  other               — anything that is not one of the five above. This is
+  business_analyst    — analyzes business processes, data, or reporting to
+                        inform someone ELSE's decision; does not own a product
+                        roadmap (that is product_management) and does not
+                        itself decide business-level strategy (that is
+                        strategy_ops). Includes "Business Analyst", "Data
+                        Analyst", "BI Analyst", "Operations Analyst",
+                        "Business Systems Analyst", "Performance Analyst".
+                        THE ANALYST TEST: the role PRODUCES analysis (reports,
+                        models, dashboards, recommendations) rather than
+                        DECIDING what to build (product_management) or
+                        DECIDING business direction (strategy_ops).
+  financial_analyst   — analyzes financial data, budgets, forecasts, or
+                        corporate finance; does not decide business strategy
+                        (strategy_ops) or own a product roadmap
+                        (product_management). Includes "Financial Analyst",
+                        "FP&A Analyst", "Finance Analyst", "Corporate Finance
+                        Analyst", "Investment Analyst" (corporate, not
+                        client-facing sell-side).
+  other               — anything that is not one of the seven above. This is
                         the CORRECT answer for the majority of non-PM roles,
                         not a last resort.
 
@@ -166,7 +186,14 @@ NEGATIVE CRITERIA — these are NOT product_management. Classify as shown:
   • Customer Success / Account Management / Sales roles ("Customer Success
     Manager", "Account Executive") → other
   • Data / BI / performance ANALYSTS ("Performance Analyst", "Data
-    Analyst") → other
+    Analyst") → business_analyst (analysis role, not product ownership —
+    see DIMENSION 1's business_analyst bucket)
+  • "Product Analyst" specifically (analyzes a PRODUCT's own usage/metrics,
+    e.g. feature adoption, funnel data) → other, NOT business_analyst. This
+    is a deliberate exception: unlike a generic Business/Data/BI Analyst, a
+    Product Analyst's scope is a single product's metrics, which is neither
+    product ownership (product_management) nor the general-purpose analysis
+    the business_analyst bucket describes. Unchanged from the prior prompt.
   • Content / video / brand / creative roles → other (or product_marketing
     only if the JD is genuinely go-to-market / messaging)
   • Engineering MANAGERS (manage engineers, not a product roadmap) → other
@@ -185,6 +212,23 @@ NEGATIVE CRITERIA for strategy_ops — these are NOT strategy_ops:
 A title containing "Operations" is NOT automatically strategy_ops — apply
 THE STRATEGY TEST (business direction vs execution).
 
+NEGATIVE CRITERIA for business_analyst / financial_analyst — these are NOT
+business_analyst or financial_analyst:
+  • BizOps / Business Operations / "Business Analyst, Strategy & Operations"
+    roles whose JD is about ADVISING OR DECIDING business strategy (not just
+    producing analysis for someone else) → strategy_ops. THE bizops overlap:
+    a title mentioning "Business" + "Analyst" is NOT automatically
+    business_analyst — apply THE STRATEGY TEST first. If the role runs
+    strategy projects / operates the executive cadence, it is strategy_ops
+    even if titled "Business Analyst".
+  • A role that OWNS a product roadmap even if titled "...Analyst" (rare) →
+    product_management (apply THE DISCRIMINATOR).
+  • "Product Analyst" → other, NOT business_analyst (see the product_
+    management negative-criteria bullet above — deliberate, unchanged
+    exception).
+  • Sell-side / client-facing "Investment Analyst" or "Equity Research
+    Analyst" at a bank/fund (not corporate finance) → other.
+
 FEW-SHOT EXAMPLES (role_family):
   POSITIVE:
   "Senior PMM, Growth" + JD about messaging → product_marketing
@@ -197,11 +241,16 @@ FEW-SHOT EXAMPLES (role_family):
   "Business Operations Lead (BizOps)" + JD about cross-functional strategy projects → strategy_ops
   "Chief of Staff to the COO" + JD about operating cadence + strategic initiatives → strategy_ops
   "Strategy Consultant, Internal Strategy Group" + JD about corporate growth strategy → strategy_ops
+  "FP&A Analyst" + JD about budget/forecast modeling for the finance org → financial_analyst
+  "Senior Financial Analyst, Corporate FP&A" + JD about variance analysis and forecasting → financial_analyst
+  "Data Analyst, Growth" + JD about building dashboards and ad-hoc reporting → business_analyst
+  "Business Analyst, Operations" + JD about process documentation and requirements gathering → business_analyst
   NEGATIVE (do NOT mislabel these as product_management OR strategy_ops):
   "Operations Manager" + JD about day-to-day site operations → program_management
   "Plant Operations Manager" + JD about manufacturing lines / safety → other
   "IT Project Manager" + JD about infrastructure delivery timelines → other
-  "Sales Operations Analyst" + JD about CRM hygiene / reporting → other
+  "Sales Operations Analyst" + JD about CRM hygiene / reporting → business_analyst
+    (ops/BI-flavored analyst role, no business-strategy scope — NOT strategy_ops)
   "Senior Product Designer" + JD about design systems / Figma → other
   "Design Engineer, Brand" + JD about building UI → other
   "Software Engineer, AI Workflows" + JD about writing code → other
@@ -210,9 +259,17 @@ FEW-SHOT EXAMPLES (role_family):
   "Product Operations Specialist" + JD about process + tooling, no roadmap → program_management
   "Senior IT Engineer, Enterprise Systems" + JD about internal IT → other
   "Customer Success Manager, Strategic" + JD about account retention → other
-  "CX Automation Performance Analyst" + JD about dashboards / metrics → other
+  "CX Automation Performance Analyst" + JD about dashboards / metrics
+    → business_analyst (analysis/reporting role — see product_management's
+    negative-criteria bullet on Data/BI/performance analysts)
   "Engineering Manager" + JD about managing an eng team → other
   "Video Lead, Stories" + JD about producing video content → other
+  "Senior Product Analyst" + JD about product usage metrics and feature
+    adoption → other (unchanged from prior prompt — NOT business_analyst;
+    scope is a single product's own metrics, not general business analysis)
+  "Business Analyst, Strategy & Operations" + JD about running corporate
+    strategy initiatives → strategy_ops (NOT business_analyst — the role
+    DECIDES business direction, apply THE STRATEGY TEST)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DIMENSION 2 — seniority_level
@@ -233,7 +290,8 @@ not invent a level for a non-PM role.
   principal_pm  — "Principal PM", "Distinguished PM", "Fellow PM"
                   at the very top of the IC track
   unknown       — the JD contains NO level signal whatsoever, OR the role
-                  is not on the PM ladder (role_family = other)
+                  is not on the PM ladder (role_family = other, strategy_ops,
+                  business_analyst, or financial_analyst)
 
 FEW-SHOT EXAMPLES (seniority_level):
   "Senior PM" → senior_pm

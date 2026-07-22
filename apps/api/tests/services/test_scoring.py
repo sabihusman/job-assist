@@ -21,6 +21,8 @@ from job_assist.services.scoring import (
     _DISGUISED_SENIOR_CAP,
     _WEIGHTS,
     ADJACENT_FAMILIES,
+    ANALYST_FAMILIES,
+    ANALYST_GATE_CAP,
     ANNUAL_HOURS,
     MAX_APPLIED_BOOST,
     PREFERRED_FAMILIES,
@@ -61,6 +63,17 @@ def test_preferred_and_adjacent_families_are_disjoint() -> None:
     assert PREFERRED_FAMILIES.isdisjoint(ADJACENT_FAMILIES)
 
 
+def test_analyst_families_disjoint_from_preferred_and_adjacent() -> None:
+    """business_analyst/financial_analyst expansion: ANALYST_FAMILIES must
+    not overlap either existing set — it's a third, distinct bucket."""
+    assert ANALYST_FAMILIES.isdisjoint(PREFERRED_FAMILIES)
+    assert ANALYST_FAMILIES.isdisjoint(ADJACENT_FAMILIES)
+    assert {
+        RoleFamily.business_analyst.value,
+        RoleFamily.financial_analyst.value,
+    } == ANALYST_FAMILIES
+
+
 def test_annual_hours_is_us_full_time_constant() -> None:
     """Decision C reinforcement: 2080 = 40 hr/week * 52 weeks."""
     assert ANNUAL_HOURS == 2080
@@ -77,6 +90,13 @@ def test_score_role_family_preferred_returns_100() -> None:
 def test_score_role_family_adjacent_returns_60() -> None:
     assert score_role_family(RoleFamily.product_marketing.value) == 60
     assert score_role_family(RoleFamily.program_management.value) == 60
+
+
+def test_score_role_family_analyst_returns_75() -> None:
+    """business_analyst/financial_analyst are acceptable-but-discounted —
+    between ADJACENT's 60 and PREFERRED's 100."""
+    assert score_role_family(RoleFamily.business_analyst.value) == 75
+    assert score_role_family(RoleFamily.financial_analyst.value) == 75
 
 
 def test_score_role_family_other_returns_10() -> None:
@@ -775,6 +795,48 @@ def test_role_family_gate_still_caps_at_40_despite_high_semantic_fit() -> None:
     assert score_posting(non_pm, profile, tier=1) <= 40
 
 
+# ── business_analyst/financial_analyst three-way gate ────────────────────────
+
+
+@pytest.mark.parametrize(
+    "family",
+    [RoleFamily.business_analyst.value, RoleFamily.financial_analyst.value],
+)
+def test_analyst_family_gate_caps_at_85_not_40(family: str) -> None:
+    """Analyst families are acceptable-but-discounted: capped at
+    ANALYST_GATE_CAP (85), never dropped all the way to ROLE_GATE_CAP (40)
+    like a true non-PM family (program_management, other, ...)."""
+    profile = _make_profile()
+    posting = _make_posting(
+        role_family=family,
+        seniority_level=SeniorityLevel.senior_pm.value,
+        similarity_score=100,
+    )
+    score = score_posting(posting, profile, tier=1)
+    assert score <= ANALYST_GATE_CAP
+    assert score > ROLE_GATE_CAP
+
+
+def test_analyst_family_gate_does_not_fire_role_gate() -> None:
+    """The three-way split: analyst families must NOT set role_family_gate
+    (that's reserved for the true non-PM bucket / ROLE_GATE_CAP)."""
+    profile = _make_profile()
+    posting = _make_posting(role_family=RoleFamily.business_analyst.value, similarity_score=100)
+    d = score_posting_decomposed(posting, profile, tier=1)
+    assert d.caps["role_family_gate"]["fired"] is False
+    assert d.caps["analyst_family_gate"]["fired"] is True
+    assert d.caps["analyst_family_gate"]["cap"] == ANALYST_GATE_CAP
+
+
+def test_preferred_family_remains_uncapped_by_analyst_gate() -> None:
+    """PREFERRED_FAMILIES rows must not trip the new analyst gate."""
+    profile = _make_profile()
+    posting = _make_posting(role_family=RoleFamily.product_management.value, similarity_score=100)
+    d = score_posting_decomposed(posting, profile, tier=1)
+    assert d.caps["role_family_gate"]["fired"] is False
+    assert d.caps["analyst_family_gate"]["fired"] is False
+
+
 # ── Phase A1: score decomposition (expose, don't alter) ──────────────────────
 
 
@@ -787,6 +849,11 @@ def _decomp_cases() -> list[tuple[str, JobPosting, int]]:
         (
             "role_gate",
             _make_posting(role_family=RoleFamily.other.value, similarity_score=100),
+            1,
+        ),
+        (
+            "analyst_gate",
+            _make_posting(role_family=RoleFamily.business_analyst.value, similarity_score=100),
             1,
         ),
         (
@@ -826,6 +893,8 @@ def test_decomposition_reconciles_to_final(label: str, posting: JobPosting, tier
     expected = d.score_pre_caps
     if d.caps["role_family_gate"]["fired"]:
         expected = min(expected, ROLE_GATE_CAP)
+    if d.caps["analyst_family_gate"]["fired"]:
+        expected = min(expected, ANALYST_GATE_CAP)
     if d.caps["disguised_senior"]["fired"]:
         expected = min(expected, _DISGUISED_SENIOR_CAP)
     assert d.final == expected
@@ -853,6 +922,19 @@ def test_decomposition_role_gate_cap_fires() -> None:
     assert d.caps["role_family_gate"]["fired"] is True
     assert d.caps["role_family_gate"]["cap"] == 40
     assert d.final <= 40
+
+
+def test_decomposition_analyst_gate_cap_fires() -> None:
+    profile = _make_profile()
+    d = score_posting_decomposed(
+        _make_posting(role_family=RoleFamily.financial_analyst.value, similarity_score=100),
+        profile,
+        tier=1,
+    )
+    assert d.caps["analyst_family_gate"]["fired"] is True
+    assert d.caps["analyst_family_gate"]["cap"] == ANALYST_GATE_CAP
+    assert d.caps["role_family_gate"]["fired"] is False
+    assert d.final <= ANALYST_GATE_CAP
 
 
 def test_decomposition_disguised_senior_cap_fires() -> None:
@@ -945,6 +1027,26 @@ def test_a3_eligibility_gate_disguised_no_boost() -> None:
     assert d.applied_corpus_boost["eligibility"]["not_disguised"] is False
     assert d.applied_corpus_boost["boost_points"] == 0
     assert d.final <= _DISGUISED_SENIOR_CAP
+
+
+def test_a3_eligibility_gate_analyst_family_no_boost() -> None:
+    """An analyst-family (85-capped) row gets NO boost even at high weight +
+    perfect sim — the boost must never push it past ANALYST_GATE_CAP, same
+    shape as the role-gate and disguised-senior guards."""
+    profile = _a3_profile(weight=1.0)
+    posting = _make_posting(
+        role_family=RoleFamily.business_analyst.value,
+        seniority_level=SeniorityLevel.pm.value,
+        similarity_score=100,
+        jd_embedding=[1.0, 0.0, 0.0],
+    )
+    basis = _basis([1.0, 0.0, 0.0])  # sim = 1.0
+    d = score_posting_decomposed(posting, profile, tier=1, applied_basis=basis)
+    assert d.caps["analyst_family_gate"]["fired"] is True
+    assert d.applied_corpus_boost["eligible"] is False
+    assert d.applied_corpus_boost["eligibility"]["analyst_gate_ok"] is False
+    assert d.applied_corpus_boost["boost_points"] == 0
+    assert d.final <= ANALYST_GATE_CAP
 
 
 def test_a3_blindspot_senior_no_boost() -> None:

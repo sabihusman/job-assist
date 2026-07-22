@@ -178,6 +178,30 @@ _STRATEGY_ROLE_RE = re.compile(
 )
 
 
+# ── Analyst-family keep-list (business_analyst/financial_analyst expansion) ─
+#
+# Unlike the strategy keep-list, this one is NOT track-gated — it applies on
+# every track (pm and strategy) so business_analyst/financial_analyst titles
+# survive broad ingest regardless of which cron ingested them. The v7
+# classifier (services/classifier.py) is the precision pass that splits
+# survivors into business_analyst vs financial_analyst vs strategy_ops (the
+# bizops-overlap case) vs other (e.g. "Product Analyst" — deliberately NOT
+# matched here, see the exclusion list below).
+_ANALYST_ROLE_RE = re.compile(
+    r"(?:"
+    r"\bbusiness\s+(?:systems\s+)?analyst\b"
+    r"|\bfinancial\s+analyst\b"
+    r"|\bfinance\s+analyst\b"
+    r"|\bfp\s*&?\s*a\s+analyst\b"
+    r"|\bdata\s+analyst\b"
+    r"|\bbi\s+analyst\b"
+    r"|\bbusiness\s+intelligence\s+analyst\b"
+    r"|\b(?:operations|ops)\s+analyst\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
 def should_keep_title(raw_title: str | None, track: str = "pm") -> bool:
     """True iff *raw_title* is worth ingesting for the given track.
 
@@ -205,6 +229,13 @@ def should_keep_title(raw_title: str | None, track: str = "pm") -> bool:
     # any product-flavored carve-out, and the strategy family has no
     # exclusion list of its own (the classifier handles precision).
     if track == "strategy" and _STRATEGY_ROLE_RE.search(lowered):
+        return True
+
+    # business_analyst/financial_analyst expansion: NOT track-gated (unlike
+    # the strategy keep-list above) — checked before the PM exclusion list
+    # for the same reason the strategy check is: an analyst title must not
+    # be vulnerable to a product-flavored carve-out below.
+    if _ANALYST_ROLE_RE.search(lowered):
         return True
 
     # Exclusion comes first: even a positive match is dropped when the

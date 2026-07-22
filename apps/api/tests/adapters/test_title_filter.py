@@ -214,7 +214,6 @@ def test_strategy_track_also_keeps_pm_po(title: str) -> None:
         "IT Project Manager",
         "Software Engineer",
         "Network Operations Engineer",
-        "Sales Operations Analyst",
     ],
 )
 def test_strategy_track_still_drops_generic_ops(title: str) -> None:
@@ -226,3 +225,63 @@ def test_strategy_track_ignores_pm_exclusions_for_strategy_titles() -> None:
     """A strategy title is kept even if it brushes a product-flavored
     exclusion phrase (the strategy keep-list is checked first)."""
     assert should_keep_title("Strategy & Operations Manager, Product Marketing", track="strategy")
+
+
+# ── business_analyst/financial_analyst keep-list (not track-gated) ──────────
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # The four titles from the verification report.
+        "Business Analyst",
+        "Financial Analyst",
+        "FP&A Analyst",
+        "Data Analyst",
+        # Additional analyst-family variants the regex must also cover.
+        "Senior Financial Analyst, Corporate FP&A",
+        "BI Analyst",
+        "Business Intelligence Analyst",
+        "Business Systems Analyst",
+        "Operations Analyst",
+        "Ops Analyst, Growth",
+        "Finance Analyst",
+        # Was pinned as a strategy-track drop pre-expansion (it doesn't match
+        # _STRATEGY_ROLE_RE) — now correctly survives via the analyst
+        # keep-list instead, since the v7 classifier routes it to
+        # business_analyst (per the classifier boundary).
+        "Sales Operations Analyst",
+    ],
+)
+def test_analyst_titles_survive_pm_track(title: str) -> None:
+    """The analyst keep-list is NOT track-gated — it applies on the default
+    (pm) track too, so broad-ingest (which never passes track=) still keeps
+    these titles instead of dropping them pre-DB."""
+    assert should_keep_title(title) is True
+    assert should_keep_title(title, track="pm") is True
+
+
+@pytest.mark.parametrize(
+    "title",
+    ["Business Analyst", "Financial Analyst", "FP&A Analyst", "Data Analyst"],
+)
+def test_analyst_titles_also_survive_strategy_track(title: str) -> None:
+    assert should_keep_title(title, track="strategy") is True
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # Deliberate exception: "Product Analyst" must NOT be caught by the
+        # new analyst keep-list — it stays dropped, unchanged from v6.
+        "Product Analyst",
+        "Senior Product Analyst",
+        # Titles that share a word with the analyst regex but aren't analyst
+        # roles — must still drop.
+        "Business Development Representative",
+        "Data Engineer",
+        "Financial Advisor",
+    ],
+)
+def test_titles_still_dropped_despite_analyst_keep_list(title: str) -> None:
+    assert should_keep_title(title) is False
