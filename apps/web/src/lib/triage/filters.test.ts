@@ -61,6 +61,19 @@ describe('parseFilters', () => {
     expect(encodeFilters(f).getAll('role_family')).toEqual(['strategy_ops']);
   });
 
+  // business_analyst/financial_analyst expansion: same lockstep regression as
+  // strategy_ops — without VALID_FAMILY entries these chips would be no-ops.
+  test('preserves business_analyst and financial_analyst (VALID_FAMILY allowlist)', () => {
+    const f = parseFilters(
+      new URLSearchParams('role_family=business_analyst&role_family=financial_analyst'),
+    );
+    expect(f.role_family).toEqual(['business_analyst', 'financial_analyst']);
+    expect(encodeFilters(f).getAll('role_family')).toEqual([
+      'business_analyst',
+      'financial_analyst',
+    ]);
+  });
+
   // ── PR #49: sort ──────────────────────────────────────────────────────
 
   test('PR #49: default sort is newest when no param', () => {
@@ -160,6 +173,23 @@ describe('resolveRoleFamilies', () => {
   test('explicit strategy_ops chip resolves to the strategy view', () => {
     expect(resolveRoleFamilies({ role_family: ['strategy_ops'], pm_only: true })).toEqual([
       'strategy_ops',
+    ]);
+  });
+
+  // business_analyst/financial_analyst expansion: no-leak guarantee, same as
+  // strategy_ops — pm_only must never include the new analyst families.
+  test('pm_only default EXCLUDES business_analyst/financial_analyst (no leak into the PM queue)', () => {
+    const resolved = resolveRoleFamilies({ role_family: [], pm_only: true });
+    expect(resolved).not.toContain('business_analyst');
+    expect(resolved).not.toContain('financial_analyst');
+  });
+
+  test('explicit business_analyst / financial_analyst chips resolve to the analyst view', () => {
+    expect(resolveRoleFamilies({ role_family: ['business_analyst'], pm_only: true })).toEqual([
+      'business_analyst',
+    ]);
+    expect(resolveRoleFamilies({ role_family: ['financial_analyst'], pm_only: true })).toEqual([
+      'financial_analyst',
     ]);
   });
 

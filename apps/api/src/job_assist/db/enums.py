@@ -65,6 +65,11 @@ class RoleFamily(enum.StrEnum):
     # (pm_only) and OUT of the scorer's PREFERRED_FAMILIES (cap-40 stands until
     # the full strategy scoring track lands); surfaced via its own triage view.
     strategy_ops = "strategy_ops"
+    # business_analyst/financial_analyst expansion: analyst-track roles that
+    # are acceptable-but-discounted (PM/PO stay preferred). See scoring.py
+    # ANALYST_FAMILIES — capped at 85, not gated to ROLE_GATE_CAP (40).
+    business_analyst = "business_analyst"
+    financial_analyst = "financial_analyst"
     other = "other"
 
 

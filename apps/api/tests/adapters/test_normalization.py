@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from job_assist.adapters.normalization import parse_compensation
+from job_assist.adapters.normalization import detect_role_family, parse_compensation
+from job_assist.db.enums import RoleFamily
 
 
 class TestParseCompensation:
@@ -128,3 +129,50 @@ class TestParseCompensationPrecision:
             "USD",
             "annual",
         )
+
+    def test_incidental_hourly_mention_does_not_flip_annual_range(self) -> None:
+        """Greenhouse feeds the whole JD body, not a clean comp line. An
+        incidental hourly figure elsewhere (an on-call stipend, a contractor
+        rate mention) must not flip period/bounds for the REAL annual range
+        stated separately — hourly-vs-annual is decided per-candidate-match,
+        not once globally for the whole string."""
+        jd = (
+            "This role offers a $30/hour on-call stipend during rotations. "
+            "Base salary range: $150,000 - $190,000."
+        )
+        assert parse_compensation(jd) == (150_000, 190_000, "USD", "annual")
+
+
+class TestDetectRoleFamilyEnumMembership:
+    """Regression guard mirroring the Wellfound associate_pm/apm bug (a
+    non-enum value written pre-classification breaks the whole INSERT).
+
+    ``detect_role_family`` is the pure-regex, pre-LLM heuristic every adapter
+    calls at ingest time (before the classifier sweep ever runs). It does NOT
+    attempt analyst detection — business_analyst/financial_analyst is a
+    classifier-only distinction (see services/classifier.py) — but that means
+    it's also a place an invented shorthand ("ba", "fa", "fpa_analyst") could
+    accidentally leak in if someone "helpfully" extended the regex later.
+    Pin that every branch — including analyst-flavored titles — still returns
+    a real ``RoleFamily`` member today (``other``, unchanged)."""
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "business analyst",
+            "financial analyst",
+            "fp&a analyst",
+            "data analyst",
+            "senior financial analyst, corporate fp&a",
+            "bi analyst",
+            "operations analyst",
+        ],
+    )
+    def test_analyst_titles_land_on_a_real_enum_member(self, title: str) -> None:
+        result = detect_role_family(title)
+        assert result in {m.value for m in RoleFamily}
+        # Unchanged from pre-expansion behavior: the regex heuristic defers
+        # analyst detection entirely to the LLM classifier.
+        assert result == "other"
+        # The specific off-enum shorthands this guard exists to catch.
+        assert result not in {"ba", "fa", "fpa_analyst", "business_analyst_", "financial_analyst_"}

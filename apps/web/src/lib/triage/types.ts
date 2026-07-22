@@ -48,6 +48,11 @@ export type RoleFamilyWire =
   // Surfaced via its own FAMILY chip — pm_only (PM_PO_FAMILIES) deliberately
   // excludes it, so it never appears in the default PM queue.
   | 'strategy_ops'
+  // business_analyst/financial_analyst expansion: acceptable-but-discounted
+  // analyst families (scoring.py ANALYST_FAMILIES, cap 85). Same treatment as
+  // strategy_ops — own FAMILY chips, excluded from PM_PO_FAMILIES/pm_only.
+  | 'business_analyst'
+  | 'financial_analyst'
   | 'other';
 
 // PR #50: ``rejected`` joins the StateFilter union as a frontend-vocabulary

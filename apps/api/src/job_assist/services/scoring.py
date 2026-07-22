@@ -71,6 +71,12 @@ logger = logging.getLogger(__name__)
 # value is unchanged from the historical inline literal.
 ROLE_GATE_CAP = 40
 
+# business_analyst/financial_analyst expansion: analyst families are
+# acceptable-but-discounted — NOT hard-gated to ROLE_GATE_CAP like a true
+# non-PM family, but capped below the uncapped PREFERRED_FAMILIES ceiling so
+# they can't outrank a genuine PM/PO role at the same structured score.
+ANALYST_GATE_CAP = 85
+
 
 # ── Version constant ─────────────────────────────────────────────────────────
 
@@ -116,6 +122,18 @@ ADJACENT_FAMILIES: frozenset[str] = frozenset(
     {
         RoleFamily.product_marketing.value,
         RoleFamily.program_management.value,
+    }
+)
+
+# business_analyst/financial_analyst expansion: acceptable-but-discounted.
+# Distinct from ADJACENT_FAMILIES — analyst roles get their own sub-score
+# (75, between ADJACENT's 60 and PREFERRED's 100) AND their own composite
+# ceiling (ANALYST_GATE_CAP, not ROLE_GATE_CAP) in the hard-gate section
+# below, rather than riding the ADJACENT weighted contribution alone.
+ANALYST_FAMILIES: frozenset[str] = frozenset(
+    {
+        RoleFamily.business_analyst.value,
+        RoleFamily.financial_analyst.value,
     }
 )
 
@@ -170,6 +188,8 @@ def score_role_family(posting_family: str | None) -> int:
 
     Returns:
       100 — in PREFERRED_FAMILIES
+       75 — in ANALYST_FAMILIES (business_analyst / financial_analyst —
+            acceptable-but-discounted)
        60 — in ADJACENT_FAMILIES
        10 — ``other`` (hard penalty — likely a non-PM role mis-classified)
        40 — any other value (defensive — shouldn't happen given the enum)
@@ -180,6 +200,8 @@ def score_role_family(posting_family: str | None) -> int:
     value = str(posting_family)
     if value in PREFERRED_FAMILIES:
         return 100
+    if value in ANALYST_FAMILIES:
+        return 75
     if value in ADJACENT_FAMILIES:
         return 60
     if value == RoleFamily.other.value:
@@ -622,9 +644,21 @@ def score_posting_decomposed(
     # NULL on the model (defaults to ``other``), so this is a clean membership
     # test — no NULL case. ``other`` rows mis-bucketed by the ingest regex
     # self-heal: the classifier cron upgrades them to a PM family and re-scores.
-    role_gate_fired = str(posting.role_family) not in PREFERRED_FAMILIES
+    #
+    # business_analyst/financial_analyst expansion: three-way instead of
+    # binary. ANALYST_FAMILIES rows are acceptable-but-discounted — NOT
+    # hard-gated to ROLE_GATE_CAP like a true non-PM family, but capped at
+    # ANALYST_GATE_CAP so they can't outrank a genuine PM/PO role riding the
+    # same structured score.
+    family_value = str(posting.role_family)
+    role_gate_fired = (
+        family_value not in PREFERRED_FAMILIES and family_value not in ANALYST_FAMILIES
+    )
+    analyst_gate_fired = family_value in ANALYST_FAMILIES
     if role_gate_fired:
         score = min(score, ROLE_GATE_CAP)
+    elif analyst_gate_fired:
+        score = min(score, ANALYST_GATE_CAP)
 
     # Disguised-senior altitude cap (career-changer correction): a PM role
     # under-leveled to pm/unknown but posting a senior USD comp floor is capped
@@ -644,7 +678,15 @@ def score_posting_decomposed(
     sen = str(posting.seniority_level) if posting.seniority_level is not None else None
     # in-target iff a filter is set AND the level is in it (unknown/NULL → False).
     seniority_in_target = bool(included) and sen in included
-    eligible = (not role_gate_fired) and (not disguised) and seniority_in_target
+    # analyst_gate_fired excluded too: the applied-corpus boost must never push
+    # an analyst-family row past ANALYST_GATE_CAP any more than the role gate
+    # lets a gated row past ROLE_GATE_CAP — same "capped, not boosted" shape.
+    eligible = (
+        (not role_gate_fired)
+        and (not analyst_gate_fired)
+        and (not disguised)
+        and seniority_in_target
+    )
 
     sim: float | None = None
     applied_fit: int | None = None
@@ -680,6 +722,7 @@ def score_posting_decomposed(
         "eligible": eligible,
         "eligibility": {
             "role_gate_ok": not role_gate_fired,
+            "analyst_gate_ok": not analyst_gate_fired,
             "not_disguised": not disguised,
             "seniority_in_target": seniority_in_target,
             "included_set": included,
@@ -702,6 +745,7 @@ def score_posting_decomposed(
         score_pre_caps=score_pre_caps,
         caps={
             "role_family_gate": {"fired": role_gate_fired, "cap": ROLE_GATE_CAP},
+            "analyst_family_gate": {"fired": analyst_gate_fired, "cap": ANALYST_GATE_CAP},
             "disguised_senior": {"fired": disguised, "cap": _DISGUISED_SENIOR_CAP},
         },
         applied_corpus_boost=applied_corpus_boost,
