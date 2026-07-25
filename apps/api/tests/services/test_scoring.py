@@ -85,6 +85,8 @@ def test_annual_hours_is_us_full_time_constant() -> None:
 def test_score_role_family_preferred_returns_100() -> None:
     assert score_role_family(RoleFamily.product_management.value) == 100
     assert score_role_family(RoleFamily.product_owner.value) == 100
+    # implementation expansion: a PRIMARY track, equal to PM/PO.
+    assert score_role_family(RoleFamily.implementation.value) == 100
 
 
 def test_score_role_family_adjacent_returns_60() -> None:
@@ -92,11 +94,12 @@ def test_score_role_family_adjacent_returns_60() -> None:
     assert score_role_family(RoleFamily.program_management.value) == 60
 
 
-def test_score_role_family_analyst_returns_75() -> None:
-    """business_analyst/financial_analyst are acceptable-but-discounted —
-    between ADJACENT's 60 and PREFERRED's 100."""
-    assert score_role_family(RoleFamily.business_analyst.value) == 75
-    assert score_role_family(RoleFamily.financial_analyst.value) == 75
+def test_score_role_family_analyst_returns_90() -> None:
+    """business_analyst/financial_analyst are near-PM — recalibrated 75 → 90
+    (implementation expansion directive), between ADJACENT's 60 and
+    PREFERRED's 100."""
+    assert score_role_family(RoleFamily.business_analyst.value) == 90
+    assert score_role_family(RoleFamily.financial_analyst.value) == 90
 
 
 def test_score_role_family_other_returns_10() -> None:
@@ -408,7 +411,13 @@ def test_score_posting_gate_caps_non_preferred_at_40(family: str) -> None:
 
 @pytest.mark.parametrize(
     "family",
-    [RoleFamily.product_management.value, RoleFamily.product_owner.value],
+    [
+        RoleFamily.product_management.value,
+        RoleFamily.product_owner.value,
+        # implementation expansion: fourth gate case — a PRIMARY track,
+        # uncapped like PM/PO (NOT the analyst 95 cap, NOT the 40 gate).
+        RoleFamily.implementation.value,
+    ],
 )
 def test_score_posting_gate_leaves_preferred_uncapped(family: str) -> None:
     """PREFERRED families are NOT gated — a strong match scores well above 40."""
@@ -802,9 +811,9 @@ def test_role_family_gate_still_caps_at_40_despite_high_semantic_fit() -> None:
     "family",
     [RoleFamily.business_analyst.value, RoleFamily.financial_analyst.value],
 )
-def test_analyst_family_gate_caps_at_85_not_40(family: str) -> None:
-    """Analyst families are acceptable-but-discounted: capped at
-    ANALYST_GATE_CAP (85), never dropped all the way to ROLE_GATE_CAP (40)
+def test_analyst_family_gate_caps_at_95_not_40(family: str) -> None:
+    """Analyst families are near-PM: capped at ANALYST_GATE_CAP (95,
+    recalibrated from 85), never dropped all the way to ROLE_GATE_CAP (40)
     like a true non-PM family (program_management, other, ...)."""
     profile = _make_profile()
     posting = _make_posting(
@@ -832,6 +841,17 @@ def test_preferred_family_remains_uncapped_by_analyst_gate() -> None:
     """PREFERRED_FAMILIES rows must not trip the new analyst gate."""
     profile = _make_profile()
     posting = _make_posting(role_family=RoleFamily.product_management.value, similarity_score=100)
+    d = score_posting_decomposed(posting, profile, tier=1)
+    assert d.caps["role_family_gate"]["fired"] is False
+    assert d.caps["analyst_family_gate"]["fired"] is False
+
+
+def test_implementation_family_fires_neither_gate() -> None:
+    """implementation expansion, fourth gate branch: a PRIMARY track — must
+    trip neither the role gate (40) nor the analyst gate (95); composite is
+    fully uncapped like PM/PO."""
+    profile = _make_profile()
+    posting = _make_posting(role_family=RoleFamily.implementation.value, similarity_score=100)
     d = score_posting_decomposed(posting, profile, tier=1)
     assert d.caps["role_family_gate"]["fired"] is False
     assert d.caps["analyst_family_gate"]["fired"] is False
@@ -1030,7 +1050,7 @@ def test_a3_eligibility_gate_disguised_no_boost() -> None:
 
 
 def test_a3_eligibility_gate_analyst_family_no_boost() -> None:
-    """An analyst-family (85-capped) row gets NO boost even at high weight +
+    """An analyst-family (95-capped) row gets NO boost even at high weight +
     perfect sim — the boost must never push it past ANALYST_GATE_CAP, same
     shape as the role-gate and disguised-senior guards."""
     profile = _a3_profile(weight=1.0)

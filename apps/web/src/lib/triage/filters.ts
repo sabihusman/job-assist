@@ -56,6 +56,9 @@ const VALID_FAMILY = new Set<RoleFamilyWire>([
   // keep with FAMILY_CHIPS / RoleFamilyWire.
   'business_analyst',
   'financial_analyst',
+  // implementation expansion: same lockstep requirement — keep with
+  // FAMILY_CHIPS / RoleFamilyWire.
+  'implementation',
   'other',
 ]);
 const VALID_STATE = new Set<StateFilter>([

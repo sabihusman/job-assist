@@ -164,3 +164,26 @@ class TestDetectRoleFamilyEnumMembership:
         assert result == "other"
         # The specific off-enum shorthands this guard exists to catch.
         assert result not in {"ba", "fa", "fpa_analyst", "business_analyst_", "financial_analyst_"}
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "implementation consultant",
+            "implementation specialist",
+            "implementation project manager",
+            "solutions consultant",
+            "onboarding specialist",
+            "client solutions analyst",
+        ],
+    )
+    def test_implementation_titles_land_on_a_real_enum_member(self, title: str) -> None:
+        """implementation expansion: same guard for the new family — the
+        regex heuristic defers implementation detection entirely to the v8
+        classifier, and must never emit an invented shorthand."""
+        result = detect_role_family(title)
+        assert result in {m.value for m in RoleFamily}
+        # "implementation project manager" contains "program"-free "project
+        # manager" — detect_role_family has no branch for it, so every one of
+        # these lands on "other" (classifier-only distinction, like analysts).
+        assert result == "other"
+        assert result not in {"impl", "implementation_pm", "solutions_consultant"}

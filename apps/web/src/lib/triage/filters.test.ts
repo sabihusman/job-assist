@@ -74,6 +74,14 @@ describe('parseFilters', () => {
     ]);
   });
 
+  // implementation expansion: same lockstep regression — without the
+  // VALID_FAMILY entry the Implementation chip would be a no-op.
+  test('preserves implementation (VALID_FAMILY allowlist)', () => {
+    const f = parseFilters(new URLSearchParams('role_family=implementation'));
+    expect(f.role_family).toEqual(['implementation']);
+    expect(encodeFilters(f).getAll('role_family')).toEqual(['implementation']);
+  });
+
   // ── PR #49: sort ──────────────────────────────────────────────────────
 
   test('PR #49: default sort is newest when no param', () => {

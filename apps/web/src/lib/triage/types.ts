@@ -53,6 +53,11 @@ export type RoleFamilyWire =
   // strategy_ops — own FAMILY chips, excluded from PM_PO_FAMILIES/pm_only.
   | 'business_analyst'
   | 'financial_analyst'
+  // implementation expansion: customer-facing product-deployment roles
+  // (Implementation Consultant/PM, Solutions Consultant, Onboarding
+  // Specialist). A PRIMARY track server-side (scoring PREFERRED_FAMILIES,
+  // uncapped) — own FAMILY chip like the families above.
+  | 'implementation'
   | 'other';
 
 // PR #50: ``rejected`` joins the StateFilter union as a frontend-vocabulary

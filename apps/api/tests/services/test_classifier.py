@@ -48,11 +48,11 @@ def test_classifier_version_is_llm_era() -> None:
     assert "gemini" in CLASSIFIER_VERSION.lower()
 
 
-def test_classifier_version_is_v7_analyst_families() -> None:
-    """v7 adds business_analyst/financial_analyst; the version bump lets the
-    reclassify sweep revisit pre-v7 rows so titles that should now route to
-    an analyst family get re-keyed instead of staying stuck at 'other'."""
-    assert "v7" in CLASSIFIER_VERSION
+def test_classifier_version_is_v8_implementation_family() -> None:
+    """v8 adds the implementation family; the version bump lets the
+    reclassify sweep revisit pre-v8 rows so implementation titles previously
+    stuck in program_management/other self-heal into the new family."""
+    assert "v8" in CLASSIFIER_VERSION
 
 
 # ── _SYSTEM_PROMPT precision criteria (regression guard, Bestiary 5.21) ───────
@@ -99,8 +99,10 @@ def test_prompt_lists_known_mislabels_as_negative_anchors(anchor: str) -> None:
 # ── v7: business_analyst / financial_analyst (analyst-family expansion) ──────
 
 
-def test_prompt_has_eight_values_not_six() -> None:
-    assert "EIGHT values" in _SYSTEM_PROMPT
+def test_prompt_has_nine_values_not_eight() -> None:
+    # v8 (implementation expansion): the count line moved EIGHT → NINE.
+    assert "NINE values" in _SYSTEM_PROMPT
+    assert "EIGHT values" not in _SYSTEM_PROMPT
     assert "SIX values" not in _SYSTEM_PROMPT
 
 
@@ -128,6 +130,36 @@ def test_prompt_keeps_product_analyst_as_other_unchanged() -> None:
     because analyst families now exist."""
     assert '"Product Analyst"' in _SYSTEM_PROMPT or "Product Analyst" in _SYSTEM_PROMPT
     assert "NOT business_analyst" in _SYSTEM_PROMPT
+
+
+# ── v8: implementation (implementation expansion) ────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "anchor",
+    [
+        "Implementation Consultant",
+        "Implementation Project Manager",
+        "Solutions Consultant",
+        "Onboarding Specialist",
+        "Client Solutions Analyst",
+    ],
+)
+def test_prompt_lists_implementation_family_anchors(anchor: str) -> None:
+    assert anchor in _SYSTEM_PROMPT
+
+
+def test_prompt_disambiguates_implementation_pm_from_program_management() -> None:
+    """The directive's disambiguation rule: 'Implementation Project Manager'
+    → implementation, NOT program_management. The prompt must carry both the
+    test and the explicit negative anchor."""
+    assert "THE IMPLEMENTATION TEST" in _SYSTEM_PROMPT
+    # The bucket description carries the rule verbatim...
+    assert '"Implementation\n                        Project Manager" is implementation' in (
+        _SYSTEM_PROMPT
+    )
+    # ...and the few-shot section carries the internal-PM negative example.
+    assert "NEGATIVE CRITERIA for implementation" in _SYSTEM_PROMPT
 
 
 # ── build_classify_prompt ─────────────────────────────────────────────────────
@@ -214,6 +246,7 @@ def test_build_prompt_injects_profile_context_as_disambiguation() -> None:
         "strategy_ops",
         "business_analyst",
         "financial_analyst",
+        "implementation",
         "other",
     ],
 )
@@ -229,12 +262,27 @@ def test_coerce_role_family_invalid_falls_back() -> None:
 
 @pytest.mark.parametrize(
     "invented",
-    ["ba", "fa", "fpa_analyst", "financial_analyst_", "biz_analyst", "fpna"],
+    [
+        "ba",
+        "fa",
+        "fpa_analyst",
+        "financial_analyst_",
+        "biz_analyst",
+        "fpna",
+        # implementation expansion: plausible v8 shorthands/variants for the
+        # new family — must fall back, never reach the DB off-enum.
+        "impl",
+        "implementation_pm",
+        "implementation_consultant",
+        "solutions_consultant",
+        "onboarding",
+        "implementations",
+    ],
 )
 def test_coerce_role_family_rejects_invented_analyst_shorthand(invented: str) -> None:
     """Regression guard (mirrors the Wellfound associate_pm/apm bug): an LLM
-    that emits a plausible-looking shorthand for the new analyst families
-    instead of the exact enum string must fall back, never write an
+    that emits a plausible-looking shorthand for the analyst or implementation
+    families instead of the exact enum string must fall back, never write an
     off-enum value to the DB."""
     family, _ = _coerce_result({"role_family": invented, "seniority_level": "pm"})
     assert family == _FALLBACK_ROLE_FAMILY
