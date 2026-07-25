@@ -201,6 +201,25 @@ _ANALYST_ROLE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ── Implementation-family keep-list (implementation expansion) ──────────────
+#
+# Customer-facing product-deployment roles — a PRIMARY track (scoring.py
+# PREFERRED_FAMILIES, uncapped). Like the analyst keep-list, NOT track-gated:
+# applies on every track so these titles survive broad ingest regardless of
+# which cron ingested them. The v8 classifier is the precision pass that
+# separates true implementation (external-customer delivery) from internal
+# program coordination. Bare "Implementation" with no role noun (e.g.
+# "Intern, Implementation") deliberately does NOT match — no role signal.
+_IMPLEMENTATION_ROLE_RE = re.compile(
+    r"(?:"
+    r"\bimplementation\s+(?:specialist|consultant|analyst|project\s+manager)s?\b"
+    r"|\bsolutions?\s+consultant\b"
+    r"|\bonboarding\s+specialist\b"
+    r"|\bclient\s+solutions?\s+analyst\b"
+    r")",
+    re.IGNORECASE,
+)
+
 
 def should_keep_title(raw_title: str | None, track: str = "pm") -> bool:
     """True iff *raw_title* is worth ingesting for the given track.
@@ -236,6 +255,12 @@ def should_keep_title(raw_title: str | None, track: str = "pm") -> bool:
     # for the same reason the strategy check is: an analyst title must not
     # be vulnerable to a product-flavored carve-out below.
     if _ANALYST_ROLE_RE.search(lowered):
+        return True
+
+    # implementation expansion: same shape as the analyst keep-list — not
+    # track-gated, checked before the PM exclusions so an implementation
+    # title can't be dropped by a product-flavored carve-out.
+    if _IMPLEMENTATION_ROLE_RE.search(lowered):
         return True
 
     # Exclusion comes first: even a positive match is dropped when the

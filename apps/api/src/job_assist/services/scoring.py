@@ -75,7 +75,9 @@ ROLE_GATE_CAP = 40
 # acceptable-but-discounted — NOT hard-gated to ROLE_GATE_CAP like a true
 # non-PM family, but capped below the uncapped PREFERRED_FAMILIES ceiling so
 # they can't outrank a genuine PM/PO role at the same structured score.
-ANALYST_GATE_CAP = 85
+# Recalibrated 85 → 95 (implementation expansion directive): analyst roles
+# score near-PM now; the 5-point headroom below 100 preserves the tiebreak.
+ANALYST_GATE_CAP = 95
 
 
 # ── Version constant ─────────────────────────────────────────────────────────
@@ -116,6 +118,12 @@ PREFERRED_FAMILIES: frozenset[str] = frozenset(
     {
         RoleFamily.product_management.value,
         RoleFamily.product_owner.value,
+        # implementation expansion: a PRIMARY track, equal to PM/PO — full
+        # role_family sub-score (100) and NO composite cap. Customer-facing
+        # product-deployment roles (Implementation Consultant/PM, Solutions
+        # Consultant, Onboarding Specialist) the operator can land and wants
+        # ranked alongside genuine PM roles, not discounted below them.
+        RoleFamily.implementation.value,
     }
 )
 ADJACENT_FAMILIES: frozenset[str] = frozenset(
@@ -127,9 +135,10 @@ ADJACENT_FAMILIES: frozenset[str] = frozenset(
 
 # business_analyst/financial_analyst expansion: acceptable-but-discounted.
 # Distinct from ADJACENT_FAMILIES — analyst roles get their own sub-score
-# (75, between ADJACENT's 60 and PREFERRED's 100) AND their own composite
-# ceiling (ANALYST_GATE_CAP, not ROLE_GATE_CAP) in the hard-gate section
-# below, rather than riding the ADJACENT weighted contribution alone.
+# (90, between ADJACENT's 60 and PREFERRED's 100 — recalibrated from 75 by
+# the implementation expansion directive) AND their own composite ceiling
+# (ANALYST_GATE_CAP, not ROLE_GATE_CAP) in the hard-gate section below,
+# rather than riding the ADJACENT weighted contribution alone.
 ANALYST_FAMILIES: frozenset[str] = frozenset(
     {
         RoleFamily.business_analyst.value,
@@ -187,9 +196,10 @@ def score_role_family(posting_family: str | None) -> int:
     """Match posting's role_family against PREFERRED_FAMILIES.
 
     Returns:
-      100 — in PREFERRED_FAMILIES
-       75 — in ANALYST_FAMILIES (business_analyst / financial_analyst —
-            acceptable-but-discounted)
+      100 — in PREFERRED_FAMILIES (PM / PO / implementation)
+       90 — in ANALYST_FAMILIES (business_analyst / financial_analyst —
+            near-PM; recalibrated 75 → 90 by the implementation expansion
+            directive)
        60 — in ADJACENT_FAMILIES
        10 — ``other`` (hard penalty — likely a non-PM role mis-classified)
        40 — any other value (defensive — shouldn't happen given the enum)
@@ -201,7 +211,7 @@ def score_role_family(posting_family: str | None) -> int:
     if value in PREFERRED_FAMILIES:
         return 100
     if value in ANALYST_FAMILIES:
-        return 75
+        return 90
     if value in ADJACENT_FAMILIES:
         return 60
     if value == RoleFamily.other.value:

@@ -21,6 +21,8 @@ export const FAMILY_LABELS: Record<RoleFamilyWire, string> = {
   // analyst families — own chips, excluded from pm_only same as strategy_ops.
   business_analyst: 'Business Analyst',
   financial_analyst: 'Financial Analyst',
+  // implementation expansion: a PRIMARY track server-side — own chip.
+  implementation: 'Implementation',
   other: 'Other',
 };
 
@@ -39,6 +41,7 @@ export const FAMILY_CHIPS: readonly RoleFamilyWire[] = [
   'strategy_ops',
   'business_analyst',
   'financial_analyst',
+  'implementation',
   'other',
 ] as const;
 

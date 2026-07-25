@@ -73,7 +73,13 @@ logger = logging.getLogger(__name__)
 # 5+-years seniority signal past char 3000, so they were under-leveled
 # (senior_pm read as pm); 5000 recovers most. The bump makes the version-guard
 # re-run already-classified rows so they re-level on the wider window.
-CLASSIFIER_VERSION = "gemini-flash-lite-v7"
+# v8 (implementation expansion): adds the ``implementation`` family —
+# customer-facing product-deployment roles (Implementation Specialist /
+# Consultant / Analyst / Project Manager, Solutions Consultant, Onboarding
+# Specialist, Client Solutions Analyst) that v7 bucketed into
+# program_management or other. The bump makes the reclassify sweep revisit
+# existing rows so those roles self-heal into the new family.
+CLASSIFIER_VERSION = "gemini-flash-lite-v8"
 _MODEL_NAME = "gemini-2.5-flash-lite"
 
 # Valid enum values — kept in sync with db/enums.py. The defensive parser
@@ -87,6 +93,7 @@ _VALID_ROLE_FAMILIES = frozenset(
         "strategy_ops",
         "business_analyst",
         "financial_analyst",
+        "implementation",
         "other",
     }
 )
@@ -109,7 +116,7 @@ bucket — a precise ``other`` is far better than a wrong ``product_management``
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DIMENSION 1 — role_family
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Choose one of these EIGHT values. Do not invent a ninth.
+Choose one of these NINE values. Do not invent a tenth.
 
 THE DISCRIMINATOR: does the role OWN a product — its strategy, roadmap,
 discovery, and prioritization for a product or feature area — and decide
@@ -169,7 +176,22 @@ even when their title contains the word "Product".
                         "FP&A Analyst", "Finance Analyst", "Corporate Finance
                         Analyst", "Investment Analyst" (corporate, not
                         client-facing sell-side).
-  other               — anything that is not one of the seven above. This is
+  implementation      — deploys, configures, or onboards THE COMPANY'S OWN
+                        PRODUCT for customers: runs customer implementations,
+                        migrations, and go-lives. Includes "Implementation
+                        Specialist", "Implementation Consultant",
+                        "Implementation Analyst", "Implementation Project
+                        Manager", "Solutions Consultant", "Onboarding
+                        Specialist", "Client Solutions Analyst".
+                        THE IMPLEMENTATION TEST: the role's customer is
+                        EXTERNAL — it delivers the company's product INTO a
+                        client's environment/workflow. "Implementation
+                        Project Manager" is implementation, NOT
+                        program_management: the project being managed is a
+                        customer deployment of the product. Internal
+                        program / process coordination with no external
+                        customer delivery stays program_management.
+  other               — anything that is not one of the eight above. This is
                         the CORRECT answer for the majority of non-PM roles,
                         not a last resort.
 
@@ -229,6 +251,18 @@ business_analyst or financial_analyst:
   • Sell-side / client-facing "Investment Analyst" or "Equity Research
     Analyst" at a bank/fund (not corporate finance) → other.
 
+NEGATIVE CRITERIA for implementation — these are NOT implementation:
+  • Internal "Program Manager" / "Project Manager" roles coordinating the
+    company's OWN teams/processes with no external customer delivery →
+    program_management (apply THE IMPLEMENTATION TEST: no external customer,
+    no product deployment → not implementation).
+  • "Solutions Engineer" / "Sales Engineer" / pre-sales demo roles whose JD
+    is about SELLING (POCs, demos, RFPs) rather than post-sale delivery →
+    other.
+  • "Customer Success Manager" (relationship/retention after go-live, not
+    running the implementation itself) → other.
+  • IT / construction / facilities project managers → other (unchanged).
+
 FEW-SHOT EXAMPLES (role_family):
   POSITIVE:
   "Senior PMM, Growth" + JD about messaging → product_marketing
@@ -245,6 +279,16 @@ FEW-SHOT EXAMPLES (role_family):
   "Senior Financial Analyst, Corporate FP&A" + JD about variance analysis and forecasting → financial_analyst
   "Data Analyst, Growth" + JD about building dashboards and ad-hoc reporting → business_analyst
   "Business Analyst, Operations" + JD about process documentation and requirements gathering → business_analyst
+  "Implementation Consultant" + JD about configuring the platform for new
+    customers and running go-lives → implementation
+  "Implementation Project Manager" + JD about managing customer onboarding
+    projects and deployment timelines → implementation (NOT
+    program_management — the project IS a customer deployment of the
+    product; apply THE IMPLEMENTATION TEST)
+  "Solutions Consultant" + JD about post-sale solution design and customer
+    rollout → implementation
+  "Onboarding Specialist" + JD about getting new customers live on the
+    product → implementation
   NEGATIVE (do NOT mislabel these as product_management OR strategy_ops):
   "Operations Manager" + JD about day-to-day site operations → program_management
   "Plant Operations Manager" + JD about manufacturing lines / safety → other
@@ -270,6 +314,10 @@ FEW-SHOT EXAMPLES (role_family):
   "Business Analyst, Strategy & Operations" + JD about running corporate
     strategy initiatives → strategy_ops (NOT business_analyst — the role
     DECIDES business direction, apply THE STRATEGY TEST)
+  "Program Manager, Engineering Excellence" + JD about internal process
+    improvement and cross-team coordination → program_management (NOT
+    implementation — no external customer, nothing being deployed for a
+    client; apply THE IMPLEMENTATION TEST)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DIMENSION 2 — seniority_level
@@ -291,7 +339,7 @@ not invent a level for a non-PM role.
                   at the very top of the IC track
   unknown       — the JD contains NO level signal whatsoever, OR the role
                   is not on the PM ladder (role_family = other, strategy_ops,
-                  business_analyst, or financial_analyst)
+                  business_analyst, financial_analyst, or implementation)
 
 FEW-SHOT EXAMPLES (seniority_level):
   "Senior PM" → senior_pm

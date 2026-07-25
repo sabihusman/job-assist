@@ -285,3 +285,53 @@ def test_analyst_titles_also_survive_strategy_track(title: str) -> None:
 )
 def test_titles_still_dropped_despite_analyst_keep_list(title: str) -> None:
     assert should_keep_title(title) is False
+
+
+# ── implementation keep-list (implementation expansion, not track-gated) ────
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # The three titles from the directive's test list.
+        "Implementation Consultant I, Commercial",
+        "Solutions Consultant",
+        "Onboarding Specialist",
+        # The rest of the classifier boundary's title set.
+        "Implementation Specialist",
+        "Implementation Analyst",
+        "Implementation Project Manager",
+        "Client Solutions Analyst",
+        "Senior Implementation Consultant",
+    ],
+)
+def test_implementation_titles_survive_pm_track(title: str) -> None:
+    """The implementation keep-list is NOT track-gated — broad-ingest (which
+    never passes track=) keeps these titles instead of dropping them pre-DB.
+    The v8 classifier is the precision pass downstream."""
+    assert should_keep_title(title) is True
+    assert should_keep_title(title, track="pm") is True
+
+
+@pytest.mark.parametrize(
+    "title",
+    ["Implementation Consultant", "Solutions Consultant", "Onboarding Specialist"],
+)
+def test_implementation_titles_also_survive_strategy_track(title: str) -> None:
+    assert should_keep_title(title, track="strategy") is True
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # Bare "Implementation" with no role noun carries no signal — the
+        # directive pins this exact title as still-dropped.
+        "Intern, Implementation",
+        # Word-share lookalikes that must not ride the new keep-list.
+        "Implementation Engineer",  # engineering delivery, not in the boundary
+        "Solutions Architect",
+        "Onboarding Coordinator, HR",
+    ],
+)
+def test_titles_still_dropped_despite_implementation_keep_list(title: str) -> None:
+    assert should_keep_title(title) is False

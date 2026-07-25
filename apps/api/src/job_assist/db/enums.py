@@ -67,9 +67,17 @@ class RoleFamily(enum.StrEnum):
     strategy_ops = "strategy_ops"
     # business_analyst/financial_analyst expansion: analyst-track roles that
     # are acceptable-but-discounted (PM/PO stay preferred). See scoring.py
-    # ANALYST_FAMILIES — capped at 85, not gated to ROLE_GATE_CAP (40).
+    # ANALYST_FAMILIES — capped at 95 (recalibrated from 85), not gated to
+    # ROLE_GATE_CAP (40).
     business_analyst = "business_analyst"
     financial_analyst = "financial_analyst"
+    # implementation expansion: customer-facing product-deployment roles —
+    # Implementation Specialist/Consultant/Analyst/Project Manager, Solutions
+    # Consultant, Onboarding Specialist, Client Solutions Analyst. A PRIMARY
+    # track: joins scoring.py PREFERRED_FAMILIES (sub-score 100, NO composite
+    # cap), unlike the discounted analyst families above. Enum extended via
+    # the ``e0a2c4b6d8f0`` migration; the Python value must match the PG value.
+    implementation = "implementation"
     other = "other"
 
 
