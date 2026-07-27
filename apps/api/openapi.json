@@ -1635,7 +1635,7 @@
           "admin"
         ],
         "summary": "Reclassify Sweep Endpoint",
-        "description": "Reclassify up to ``limit`` postings using the Gemini LLM classifier.\n\nReplaces the ingest-time regex heuristic (``adapters/normalization.py``)\nfor existing rows.  Idempotent \u2014 re-running with the same LLM response\nproduces the same values; ``changed`` will be 0.\n\nSelection order: oldest ``classified_at`` first (NULLs first so\nnever-classified rows are processed before already-classified ones).\n\nOn per-row LLM failure: log + skip + continue.  The row's original\n``role_family`` / ``seniority_level`` is preserved.\n\n``distribution`` in the response is a full-table snapshot taken AFTER\nthe sweep so the operator can see the cumulative effect.\n\nTODO: add authentication before exposing publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
+        "description": "Queue an async reclassify sweep and return 202 immediately.\n\nD-ASYNC-RESWEEP: the old synchronous model classified up to ``limit``\nrows inside the request and died on the client's HTTP timeout ~23 rows\ninto a big resweep. Now the endpoint inserts a ``reclassify_job`` row\n(status='queued'), fires the in-process worker\n(``services/reclassify_sweep.run_reclassify_job``), and returns\n``{job_id, status}``. The worker processes server-side batches of 50,\nupdating the job row after each batch; poll\nGET /admin/reclassify/jobs/{job_id} for progress and the final verdict.\n\nPer-row classification, candidate selection, the same-version skip, and\nthe post-classification rescoring pass are unchanged \u2014 moved verbatim\ninto ``services/reclassify_sweep.process_reclassify_batch``.\n\nResumption: remaining work is derived from the candidate query on every\nbatch, so a mid-run process death is recoverable by POSTing again.",
         "operationId": "reclassify_sweep_endpoint_admin_reclassify_sweep_post",
         "requestBody": {
           "content": {
@@ -1648,12 +1648,56 @@
           "required": true
         },
         "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReclassifySweepAccepted"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/reclassify/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Get Reclassify Job",
+        "description": "Return one reclassify job row \u2014 the poll half of the 202 pattern.",
+        "operationId": "get_reclassify_job_admin_reclassify_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ReclassifySweepResponse"
+                  "$ref": "#/components/schemas/ReclassifyJobStatus"
                 }
               }
             }
@@ -5235,41 +5279,111 @@
         "title": "PostingStateRequest",
         "description": "Body for ``POST /postings/{id}/state``.\n\nThe full cross-field rule set (reason required iff not_interested,\nsnooze_until only with snoozed, no past timestamps) lives in the\nservice layer so the validation errors include posting context and\nso the DB CHECK constraints catch any drift."
       },
-      "ReclassifyDistribution": {
+      "ReclassifyJobStatus": {
         "properties": {
-          "role_family": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "type": "object",
-            "title": "Role Family",
-            "description": "role_family \u2192 count across ALL job_posting rows."
+          "job_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Job Id"
           },
-          "seniority": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "type": "object",
-            "title": "Seniority",
-            "description": "seniority_level \u2192 count across ALL job_posting rows."
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "queued | running | succeeded | failed."
+          },
+          "requested_limit": {
+            "type": "integer",
+            "title": "Requested Limit",
+            "description": "The job's processing budget (request's `limit`)."
+          },
+          "processed": {
+            "type": "integer",
+            "title": "Processed",
+            "description": "Rows attempted so far (updated after every batch)."
+          },
+          "changed": {
+            "type": "integer",
+            "title": "Changed",
+            "description": "Rows where at least one field changed so far."
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error",
+            "description": "Set when status='failed'."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
           }
         },
         "type": "object",
         "required": [
-          "role_family",
-          "seniority"
+          "job_id",
+          "status",
+          "requested_limit",
+          "processed",
+          "changed",
+          "created_at",
+          "updated_at"
         ],
-        "title": "ReclassifyDistribution",
-        "description": "Per-enum distribution counts taken after the sweep."
+        "title": "ReclassifyJobStatus",
+        "description": "Response for GET /admin/reclassify/jobs/{job_id} \u2014 the job row as JSON."
+      },
+      "ReclassifySweepAccepted": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Job Id",
+            "description": "reclassify_job row id \u2014 poll GET /admin/reclassify/jobs/{job_id}."
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Initial job status; always 'queued' at accept time."
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status"
+        ],
+        "title": "ReclassifySweepAccepted",
+        "description": "202 response for POST /admin/reclassify/sweep \u2014 poll the job for progress."
       },
       "ReclassifySweepRequest": {
         "properties": {
           "limit": {
             "type": "integer",
-            "maximum": 500.0,
+            "maximum": 5000.0,
             "minimum": 1.0,
             "title": "Limit",
-            "description": "Maximum number of postings to process in this call. Capped at 500 to keep the request within a reasonable timeout window.",
+            "description": "Maximum number of postings this job may process (its budget). The old 500 cap guarded the synchronous request's HTTP timeout window; the job now runs server-side in batches, so the cap only bounds the worst-case Gemini spend of a single job. 5000 covers a full-backlog resweep with headroom.",
             "default": 50
           },
           "only_unclassified": {
@@ -5282,38 +5396,6 @@
         "type": "object",
         "title": "ReclassifySweepRequest",
         "description": "Body for POST /admin/reclassify/sweep."
-      },
-      "ReclassifySweepResponse": {
-        "properties": {
-          "processed": {
-            "type": "integer",
-            "title": "Processed",
-            "description": "Number of postings the sweep attempted to classify."
-          },
-          "changed": {
-            "type": "integer",
-            "title": "Changed",
-            "description": "Postings where at least one field changed."
-          },
-          "skipped": {
-            "type": "integer",
-            "title": "Skipped",
-            "description": "Postings where the LLM call failed; original values preserved."
-          },
-          "distribution": {
-            "$ref": "#/components/schemas/ReclassifyDistribution",
-            "description": "Full-table distribution snapshot taken after the sweep."
-          }
-        },
-        "type": "object",
-        "required": [
-          "processed",
-          "changed",
-          "skipped",
-          "distribution"
-        ],
-        "title": "ReclassifySweepResponse",
-        "description": "Response body for POST /admin/reclassify/sweep."
       },
       "ResumeVersionCreate": {
         "properties": {

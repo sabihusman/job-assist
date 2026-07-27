@@ -1,17 +1,15 @@
-"""Tests for POST /admin/reclassify/sweep (PR #48).
+"""Tests for the async reclassify sweep (PR #48 → D-ASYNC-RESWEEP).
 
 DB-gated tests use the ``db_session`` fixture from conftest.py and
 monkey-patch ``classify_posting`` so no test ever calls the real Gemini API.
 
-Coverage:
-  1. limit=5 against 10 postings → processes exactly 5
-  2. Idempotency — sweep twice with deterministic mock → changed=0 on second run
-  3. only_unclassified=true → only touches 'other'/'unknown' rows
-  4. only_unclassified=false → touches all rows
-  5. LLM failure on 1 of 5 rows → 200, processed=5, skipped=1, changed=4
-  6. Response schema — distribution keys match valid enum values
-  7. classifier_version + classified_at written on success
-  8. Failed row preserves original values unchanged
+The per-batch sweep behavior (limit, only_unclassified filter, same-version
+skip, LLM-failure handling, metadata writes) is tested against
+``services/reclassify_sweep.process_reclassify_batch`` — the moved-verbatim
+sweep body. The job lifecycle (queued → running → succeeded/failed, batch
+counter updates, DB-derived resumption) is tested against
+``run_reclassify_job``. The two endpoints are tested for their HTTP
+contract: POST → 202 {job_id, status} + a persisted job row; GET → the row.
 """
 
 from __future__ import annotations
@@ -25,7 +23,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from job_assist.db.models import JobPosting, TargetCompany
+from job_assist.db.models import JobPosting, ReclassifyJob, TargetCompany
 from job_assist.services.classifier import CLASSIFIER_VERSION
 
 _NEEDS_DB = pytest.mark.skipif(
@@ -88,11 +86,11 @@ def _patch_classify(
     call_counter: list[int] | None = None,
     fail_on_call: int | None = None,
 ) -> None:
-    """Patch classify_posting in main.py's import namespace.
+    """Patch classify_posting in the classifier module.
 
-    ``result_or_exc``: a (family, seniority) tuple for success, or an
-    Exception instance to raise (on all calls, or only on ``fail_on_call``).
-    ``fail_on_call``: 1-based call index that should raise; all others succeed.
+    ``services/reclassify_sweep.process_reclassify_batch`` imports it lazily
+    via ``from job_assist.services.classifier import classify_posting``, so
+    patching the source module is sufficient.
     """
     calls: list[int] = call_counter if call_counter is not None else []
 
@@ -105,102 +103,64 @@ def _patch_classify(
             raise result_or_exc
         return result_or_exc  # type: ignore[return-value]
 
-    # Patch both the service module and main.py's lazy-import reference.
     monkeypatch.setattr("job_assist.services.classifier.classify_posting", _stub)
-    # main.py imports classify_posting inside the endpoint function via a
-    # lazy ``from job_assist.services.classifier import classify_posting``,
-    # so patching the source module is sufficient.
 
 
-# ── Endpoint helpers ──────────────────────────────────────────────────────────
-
-
-async def _post_sweep(client: AsyncClient, **body: Any) -> Any:
-    resp = await client.post("/admin/reclassify/sweep", json=body)
-    return resp
-
-
-# ── Tests ─────────────────────────────────────────────────────────────────────
-
-
-@_NEEDS_DB
-@pytest.mark.asyncio
-async def test_sweep_processes_exactly_limit_rows(
-    db_session: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """limit=5 with 10 eligible rows → processed=5."""
-    from job_assist.main import app
-
-    _patch_classify(monkeypatch, ("product_management", "senior_pm"))
-
+async def _seed_pool(db_session: Any, count: int, **posting_kwargs: Any) -> TargetCompany:
     tc = _company()
     db_session.add(tc)
     await db_session.flush()
-
-    postings = [_posting(target_company_id=tc.id) for _ in range(10)]
-    for p in postings:
-        db_session.add(p)
+    for _ in range(count):
+        db_session.add(_posting(target_company_id=tc.id, **posting_kwargs))
     await db_session.commit()
+    return tc
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await _post_sweep(client, limit=5, only_unclassified=True)
 
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["processed"] == 5
-    assert data["skipped"] == 0
-    assert data["changed"] == 5
+async def _make_job(db_session: Any, *, requested_limit: int) -> ReclassifyJob:
+    job = ReclassifyJob(status="queued", requested_limit=requested_limit)
+    db_session.add(job)
+    await db_session.commit()
+    await db_session.refresh(job)
+    return job
+
+
+async def _get_job(db_session: Any, job_id: uuid.UUID) -> ReclassifyJob:
+    return (
+        await db_session.execute(select(ReclassifyJob).where(ReclassifyJob.id == job_id))
+    ).scalar_one()
+
+
+# ── process_reclassify_batch — moved-verbatim sweep behavior ─────────────────
 
 
 @_NEEDS_DB
 @pytest.mark.asyncio
-async def test_sweep_idempotent_second_run(
+async def test_batch_processes_exactly_batch_size_rows(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Running sweep twice with same deterministic mock → changed=0 on second run."""
-    from job_assist.main import app
+    """batch_size=5 with 10 eligible rows → processed=5."""
+    from job_assist.services.reclassify_sweep import process_reclassify_batch
 
     _patch_classify(monkeypatch, ("product_management", "senior_pm"))
+    await _seed_pool(db_session, 10)
 
-    tc = _company()
-    db_session.add(tc)
-    await db_session.flush()
-
-    for _ in range(3):
-        db_session.add(_posting(target_company_id=tc.id))
-    await db_session.commit()
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        r1 = await _post_sweep(client, limit=10, only_unclassified=True)
-        assert r1.status_code == 200
-        assert r1.json()["changed"] == 3
-
-        # Second sweep: all rows now have role_family='product_management',
-        # seniority_level='senior_pm' — no longer 'other'/'unknown'.
-        # only_unclassified=True → nothing selected → processed=0, changed=0.
-        r2 = await _post_sweep(client, limit=10, only_unclassified=True)
-        assert r2.status_code == 200
-        d2 = r2.json()
-        assert d2["processed"] == 0
-        assert d2["changed"] == 0
+    processed, changed, skipped = await process_reclassify_batch(
+        db_session, batch_size=5, only_unclassified=True
+    )
+    assert (processed, changed, skipped) == (5, 5, 0)
 
 
 @_NEEDS_DB
 @pytest.mark.asyncio
-async def test_sweep_only_unclassified_filter(
+async def test_batch_only_unclassified_filter(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """only_unclassified=True only touches 'other'/'unknown' rows."""
-    from job_assist.main import app
+    from job_assist.services.reclassify_sweep import process_reclassify_batch
 
     _patch_classify(monkeypatch, ("product_management", "senior_pm"))
-
-    tc = _company()
-    db_session.add(tc)
-    await db_session.flush()
-
-    # 3 already-classified rows (should be skipped by the filter)
-    for _ in range(3):
+    tc = await _seed_pool(db_session, 4)  # 4 unclassified
+    for _ in range(3):  # 3 already-classified — skipped by the filter
         db_session.add(
             _posting(
                 target_company_id=tc.id,
@@ -210,290 +170,319 @@ async def test_sweep_only_unclassified_filter(
                 classified_at=datetime.now(tz=UTC),
             )
         )
-    # 4 unclassified rows
-    for _ in range(4):
-        db_session.add(_posting(target_company_id=tc.id))
     await db_session.commit()
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await _post_sweep(client, limit=50, only_unclassified=True)
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["processed"] == 4
-    assert data["changed"] == 4
+    processed, changed, _ = await process_reclassify_batch(
+        db_session, batch_size=50, only_unclassified=True
+    )
+    assert (processed, changed) == (4, 4)
 
 
 @_NEEDS_DB
 @pytest.mark.asyncio
-async def test_sweep_only_unclassified_false_touches_all(
+async def test_batch_does_not_rebuy_llm_confirmed_other(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """only_unclassified=False reclassifies all rows regardless of current values."""
-    from job_assist.main import app
-
-    _patch_classify(monkeypatch, ("product_management", "senior_pm"))
-
-    tc = _company()
-    db_session.add(tc)
-    await db_session.flush()
-
-    # 2 already-classified + 2 unclassified
-    for _ in range(2):
-        db_session.add(
-            _posting(
-                target_company_id=tc.id,
-                role_family="program_management",
-                seniority_level="lead_pm",
-                classifier_version=CLASSIFIER_VERSION,
-                classified_at=datetime.now(tz=UTC),
-            )
-        )
-    for _ in range(2):
-        db_session.add(_posting(target_company_id=tc.id))
-    await db_session.commit()
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await _post_sweep(client, limit=50, only_unclassified=False)
-
-    assert resp.status_code == 200
-    data = resp.json()
-    # All 4 rows processed; the 2 already-classified change family/seniority
-    assert data["processed"] == 4
-
-
-@_NEEDS_DB
-@pytest.mark.asyncio
-async def test_sweep_does_not_rebuy_llm_confirmed_other(
-    db_session: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """fix(audit): a row THIS classifier version already judged 'other' must
-    not be re-selected by only_unclassified — pre-fix it stayed in the bucket
-    forever and was re-sent to Gemini daily, producing the same answer at the
-    same CLASSIFIER_VERSION (pure wasted paid calls). A row classified by an
-    OLDER version stays re-keyable."""
-    from job_assist.main import app
+    """fix(audit) carried over: a row THIS version already judged 'other'
+    must not be re-selected; an older-version row stays re-keyable."""
+    from job_assist.services.reclassify_sweep import process_reclassify_batch
 
     _patch_classify(monkeypatch, ("other", "unknown"))
-
     tc = _company()
     db_session.add(tc)
     await db_session.flush()
-
-    # LLM-confirmed 'other' at the CURRENT version → must be skipped.
     db_session.add(
         _posting(
             target_company_id=tc.id,
-            role_family="other",
-            seniority_level="unknown",
             classifier_version=CLASSIFIER_VERSION,
             classified_at=datetime.now(tz=UTC),
         )
     )
-    # Same bucket, but classified by an OLDER version → re-keyable, selected.
     db_session.add(
         _posting(
             target_company_id=tc.id,
-            role_family="other",
-            seniority_level="unknown",
             classifier_version="gemini-flash-lite-v0-legacy",
             classified_at=datetime.now(tz=UTC),
         )
     )
-    # Never-classified regex 'other' → selected.
-    db_session.add(_posting(target_company_id=tc.id, role_family="other"))
-    await db_session.commit()
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await _post_sweep(client, limit=50, only_unclassified=True)
-
-    assert resp.status_code == 200
-    data = resp.json()
-    # Only the legacy-version row + the never-classified row are processed;
-    # the current-version 'other' is NOT re-bought.
-    assert data["processed"] == 2
-
-
-@_NEEDS_DB
-@pytest.mark.asyncio
-async def test_sweep_llm_failure_skips_one_row(
-    db_session: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """LLM failure on call #3 of 5 → processed=5, skipped=1, changed=4."""
-    from job_assist.main import app
-
-    calls: list[int] = []
-    _patch_classify(
-        monkeypatch,
-        ("product_management", "senior_pm"),
-        call_counter=calls,
-        fail_on_call=3,
-    )
-
-    tc = _company()
-    db_session.add(tc)
-    await db_session.flush()
-
-    for _ in range(5):
-        db_session.add(_posting(target_company_id=tc.id))
-    await db_session.commit()
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await _post_sweep(client, limit=5, only_unclassified=True)
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["processed"] == 5
-    assert data["skipped"] == 1
-    assert data["changed"] == 4
-
-
-@_NEEDS_DB
-@pytest.mark.asyncio
-async def test_sweep_failed_row_preserves_original_values(
-    db_session: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A row whose LLM call fails keeps its original role_family + seniority."""
-    from job_assist.main import app
-
-    # Single posting — LLM always fails
-    _patch_classify(monkeypatch, RuntimeError("always fails"))
-
-    tc = _company()
-    db_session.add(tc)
-    await db_session.flush()
-
-    posting = _posting(
-        target_company_id=tc.id,
-        role_family="other",
-        seniority_level="unknown",
-    )
-    db_session.add(posting)
-    await db_session.commit()
-    posting_id = posting.id
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await _post_sweep(client, limit=5, only_unclassified=True)
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["skipped"] == 1
-    assert data["changed"] == 0
-
-    # Verify the DB row was NOT changed
-    refreshed = (
-        await db_session.execute(select(JobPosting).where(JobPosting.id == posting_id))
-    ).scalar_one()
-    assert str(refreshed.role_family) == "other"
-    assert str(refreshed.seniority_level) == "unknown"
-    assert refreshed.classified_at is None
-    assert refreshed.classifier_version is None
-
-
-@_NEEDS_DB
-@pytest.mark.asyncio
-async def test_sweep_writes_classifier_metadata(
-    db_session: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Successful sweep writes classifier_version + classified_at to the row."""
-    from job_assist.main import app
-
-    _patch_classify(monkeypatch, ("product_management", "senior_pm"))
-
-    tc = _company()
-    db_session.add(tc)
-    await db_session.flush()
-
-    posting = _posting(target_company_id=tc.id)
-    db_session.add(posting)
-    await db_session.commit()
-    posting_id = posting.id
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await _post_sweep(client, limit=5, only_unclassified=True)
-
-    assert resp.status_code == 200
-
-    await db_session.refresh(posting)
-    refreshed = (
-        await db_session.execute(select(JobPosting).where(JobPosting.id == posting_id))
-    ).scalar_one()
-    assert refreshed.classifier_version == CLASSIFIER_VERSION
-    assert refreshed.classified_at is not None
-
-
-@_NEEDS_DB
-@pytest.mark.asyncio
-async def test_sweep_distribution_keys_are_valid_enum_values(
-    db_session: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Distribution keys in the response are valid enum strings."""
-    from job_assist.db.enums import RoleFamily, SeniorityLevel
-    from job_assist.main import app
-
-    _patch_classify(monkeypatch, ("product_management", "senior_pm"))
-
-    tc = _company()
-    db_session.add(tc)
-    await db_session.flush()
-
     db_session.add(_posting(target_company_id=tc.id))
     await db_session.commit()
 
-    valid_families = {e.value for e in RoleFamily}
-    valid_seniorities = {e.value for e in SeniorityLevel}
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await _post_sweep(client, limit=5, only_unclassified=True)
-
-    assert resp.status_code == 200
-    dist = resp.json()["distribution"]
-
-    for key in dist["role_family"]:
-        assert key in valid_families, f"unexpected role_family key: {key!r}"
-    for key in dist["seniority"]:
-        assert key in valid_seniorities, f"unexpected seniority key: {key!r}"
+    processed, _, _ = await process_reclassify_batch(
+        db_session, batch_size=50, only_unclassified=True
+    )
+    assert processed == 2
 
 
 @_NEEDS_DB
 @pytest.mark.asyncio
-async def test_sweep_empty_table_returns_zeros(
+async def test_batch_llm_failure_skips_row_and_preserves_values(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Sweeping an empty table returns processed=0, changed=0, skipped=0."""
-    from job_assist.main import app
+    """LLM failure on 1 of 5 → processed=5, skipped=1, changed=4; the failed
+    row keeps its original values."""
+    from job_assist.services.reclassify_sweep import process_reclassify_batch
+
+    calls: list[int] = []
+    _patch_classify(
+        monkeypatch, ("product_management", "senior_pm"), call_counter=calls, fail_on_call=3
+    )
+    await _seed_pool(db_session, 5)
+
+    processed, changed, skipped = await process_reclassify_batch(
+        db_session, batch_size=5, only_unclassified=True
+    )
+    assert (processed, changed, skipped) == (5, 4, 1)
+
+    untouched = (
+        (await db_session.execute(select(JobPosting).where(JobPosting.classified_at.is_(None))))
+        .scalars()
+        .all()
+    )
+    assert len(untouched) == 1
+    assert str(untouched[0].role_family) == "other"
+    assert str(untouched[0].seniority_level) == "unknown"
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_batch_writes_classifier_metadata(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from job_assist.services.reclassify_sweep import process_reclassify_batch
 
     _patch_classify(monkeypatch, ("product_management", "senior_pm"))
+    await _seed_pool(db_session, 1)
+
+    await process_reclassify_batch(db_session, batch_size=5, only_unclassified=True)
+
+    row = (await db_session.execute(select(JobPosting))).scalar_one()
+    assert row.classifier_version == CLASSIFIER_VERSION
+    assert row.classified_at is not None
+
+
+# ── run_reclassify_job — lifecycle, batching, resumption ─────────────────────
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_job_lifecycle_succeeds_with_counters(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A job over a 7-row pool with limit 10 → succeeded, processed=7,
+    changed=7, finished_at set (pool exhausted before budget)."""
+    from job_assist.services.reclassify_sweep import run_reclassify_job
+
+    _patch_classify(monkeypatch, ("product_management", "senior_pm"))
+    await _seed_pool(db_session, 7)
+    job = await _make_job(db_session, requested_limit=10)
+
+    await run_reclassify_job(job.id, only_unclassified=True)
+
+    refreshed = await _get_job(db_session, job.id)
+    assert refreshed.status == "succeeded"
+    assert refreshed.processed == 7
+    assert refreshed.changed == 7
+    assert refreshed.error is None
+    assert refreshed.finished_at is not None
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_job_runs_multiple_internal_batches(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A limit above the internal batch size (50) forces >1 batch; the job
+    row ends with the full total (counters accumulated across batches)."""
+    from job_assist.services.reclassify_sweep import run_reclassify_job
+
+    _patch_classify(monkeypatch, ("product_management", "senior_pm"))
+    await _seed_pool(db_session, 60)
+    job = await _make_job(db_session, requested_limit=60)
+
+    await run_reclassify_job(job.id, only_unclassified=True)
+
+    refreshed = await _get_job(db_session, job.id)
+    assert refreshed.status == "succeeded"
+    assert refreshed.processed == 60  # 50 + 10 across two internal batches
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_job_respects_requested_limit_budget(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from job_assist.services.reclassify_sweep import run_reclassify_job
+
+    _patch_classify(monkeypatch, ("product_management", "senior_pm"))
+    await _seed_pool(db_session, 10)
+    job = await _make_job(db_session, requested_limit=5)
+
+    await run_reclassify_job(job.id, only_unclassified=True)
+
+    refreshed = await _get_job(db_session, job.id)
+    assert refreshed.status == "succeeded"
+    assert refreshed.processed == 5
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_refired_job_resumes_remaining_work_from_db(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RESUMPTION contract: job A (limit 5) judges 5 of 10; a NEW job B on
+    the same pool derives the remaining 5 from the DB query — nothing is
+    double-bought, nothing is lost."""
+    from job_assist.services.reclassify_sweep import run_reclassify_job
+
+    calls: list[int] = []
+    _patch_classify(monkeypatch, ("product_management", "senior_pm"), call_counter=calls)
+    await _seed_pool(db_session, 10)
+
+    job_a = await _make_job(db_session, requested_limit=5)
+    await run_reclassify_job(job_a.id, only_unclassified=True)
+    assert (await _get_job(db_session, job_a.id)).processed == 5
+
+    job_b = await _make_job(db_session, requested_limit=50)
+    await run_reclassify_job(job_b.id, only_unclassified=True)
+
+    refreshed_b = await _get_job(db_session, job_b.id)
+    assert refreshed_b.status == "succeeded"
+    assert refreshed_b.processed == 5  # only the 5 still-unjudged rows
+    assert len(calls) == 10  # no row classified twice
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_job_failure_lands_on_row(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A batch-level exception marks the job failed with the error message."""
+    import job_assist.services.reclassify_sweep as sweep_mod
+
+    async def _boom(*_: Any, **__: Any) -> tuple[int, int, int]:
+        raise RuntimeError("simulated batch crash")
+
+    monkeypatch.setattr(sweep_mod, "process_reclassify_batch", _boom)
+    job = await _make_job(db_session, requested_limit=5)
+
+    await sweep_mod.run_reclassify_job(job.id, only_unclassified=True)
+
+    refreshed = await _get_job(db_session, job.id)
+    assert refreshed.status == "failed"
+    assert "simulated batch crash" in (refreshed.error or "")
+    assert refreshed.finished_at is not None
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_job_empty_pool_succeeds_with_zeros(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from job_assist.services.reclassify_sweep import run_reclassify_job
+
+    _patch_classify(monkeypatch, ("product_management", "senior_pm"))
+    job = await _make_job(db_session, requested_limit=50)
+
+    await run_reclassify_job(job.id, only_unclassified=True)
+
+    refreshed = await _get_job(db_session, job.id)
+    assert refreshed.status == "succeeded"
+    assert refreshed.processed == 0
+    assert refreshed.changed == 0
+
+
+# ── Endpoints — HTTP contract ─────────────────────────────────────────────────
+
+
+def _patch_spawn(monkeypatch: pytest.MonkeyPatch) -> list[tuple[uuid.UUID, bool]]:
+    """No-op the fire-and-forget spawn so endpoint tests stay deterministic
+    (the worker's own behavior is covered by the run_reclassify_job tests)."""
+    spawned: list[tuple[uuid.UUID, bool]] = []
+
+    def _record(job_id: uuid.UUID, *, only_unclassified: bool) -> None:
+        spawned.append((job_id, only_unclassified))
+
+    monkeypatch.setattr(
+        "job_assist.services.reclassify_sweep.spawn_reclassify_job",
+        _record,
+    )
+    return spawned
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_post_sweep_returns_202_with_job_row(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from job_assist.main import app
+
+    spawned = _patch_spawn(monkeypatch)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await _post_sweep(client, limit=50, only_unclassified=True)
+        resp = await client.post(
+            "/admin/reclassify/sweep",
+            json={"limit": 25, "only_unclassified": False},
+        )
+
+    assert resp.status_code == 202
+    data = resp.json()
+    assert data["status"] == "queued"
+    job_id = uuid.UUID(data["job_id"])
+
+    # The job row is persisted with the request's limit...
+    job = await _get_job(db_session, job_id)
+    assert job.status == "queued"
+    assert job.requested_limit == 25
+    assert job.processed == 0
+    # ...and the worker was kicked off with the request's only_unclassified.
+    assert spawned == [(job_id, False)]
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_get_job_returns_row(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from job_assist.main import app
+
+    job = await _make_job(db_session, requested_limit=100)
+    job.status = "running"
+    job.processed = 50
+    job.changed = 12
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(f"/admin/reclassify/jobs/{job.id}")
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["processed"] == 0
-    assert data["changed"] == 0
-    assert data["skipped"] == 0
-    assert data["distribution"]["role_family"] == {}
-    assert data["distribution"]["seniority"] == {}
+    assert data["job_id"] == str(job.id)
+    assert data["status"] == "running"
+    assert data["requested_limit"] == 100
+    assert data["processed"] == 50
+    assert data["changed"] == 12
+    assert data["error"] is None
+    assert data["finished_at"] is None
 
 
 @_NEEDS_DB
 @pytest.mark.asyncio
-async def test_sweep_invalid_limit_422(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """limit=0 is rejected by Pydantic validation → 422."""
+async def test_get_job_unknown_id_404(db_session: Any) -> None:
     from job_assist.main import app
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.post("/admin/reclassify/sweep", json={"limit": 0})
-    assert resp.status_code == 422
+        resp = await client.get(f"/admin/reclassify/jobs/{uuid.uuid4()}")
+    assert resp.status_code == 404
 
 
 @_NEEDS_DB
 @pytest.mark.asyncio
-async def test_sweep_limit_too_large_422(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """limit=501 exceeds the 500 cap → 422."""
+async def test_post_sweep_invalid_limit_422(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """limit=0 and limit above the 5000 cap are rejected by validation."""
     from job_assist.main import app
 
+    _patch_spawn(monkeypatch)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.post("/admin/reclassify/sweep", json={"limit": 501})
-    assert resp.status_code == 422
+        assert (await client.post("/admin/reclassify/sweep", json={"limit": 0})).status_code == 422
+        assert (
+            await client.post("/admin/reclassify/sweep", json={"limit": 5001})
+        ).status_code == 422

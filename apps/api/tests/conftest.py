@@ -101,7 +101,11 @@ async def db_session(_apply_migrations: None) -> AsyncGenerator[AsyncSession, No
                 # feat/gmail-health-check: gmail_sweep_run is written from an
                 # autonomous session (record_sweep), so it survives the request
                 # transaction and must be truncated here or it leaks across tests.
-                "gmail_sweep_run CASCADE"
+                "gmail_sweep_run, "
+                # D-ASYNC-RESWEEP: reclassify_job rows are written both by the
+                # request session and the worker's autonomous sessions — same
+                # leak profile as gmail_sweep_run.
+                "reclassify_job CASCADE"
             )
         )
         await session.commit()
