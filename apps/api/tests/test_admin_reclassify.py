@@ -125,6 +125,12 @@ async def _make_job(db_session: Any, *, requested_limit: int) -> ReclassifyJob:
 
 
 async def _get_job(db_session: Any, job_id: uuid.UUID) -> ReclassifyJob:
+    # The worker commits through its own autonomous sessions; this fixture
+    # session's identity map still holds the pre-run instance (the fixture
+    # uses expire_on_commit=False), and a re-SELECT by PK returns the CACHED
+    # object with stale attributes — same gotcha the old sync tests hit
+    # (see PR #48's refresh note). Expire everything so the SELECT reloads.
+    db_session.expire_all()
     return (
         await db_session.execute(select(ReclassifyJob).where(ReclassifyJob.id == job_id))
     ).scalar_one()
