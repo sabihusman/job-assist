@@ -38,7 +38,11 @@ from job_assist.schemas.public import (
     PostingStateRequest,
     SortKey,
 )
-from job_assist.schemas.reclassify import ReclassifySweepRequest, ReclassifySweepResponse
+from job_assist.schemas.reclassify import (
+    ReclassifyJobStatus,
+    ReclassifySweepAccepted,
+    ReclassifySweepRequest,
+)
 from job_assist.schemas.resume_version import ResumeVersionCreate
 from job_assist.schemas.score import ScoreSweepRequest, ScoreSweepResponse
 
@@ -2405,215 +2409,63 @@ async def update_operator_profile(
     return OperatorProfileRead.model_validate(row).model_dump(mode="json")
 
 
-# ── Admin — reclassify sweep (PR #48) ────────────────────────────────────────
+# ── Admin — reclassify sweep (PR #48; async job model D-ASYNC-RESWEEP) ───────
 
 
-@app.post("/admin/reclassify/sweep", tags=["admin"])
+@app.post("/admin/reclassify/sweep", tags=["admin"], status_code=202)
 async def reclassify_sweep_endpoint(
     payload: ReclassifySweepRequest,
     db: DbSession,
-) -> ReclassifySweepResponse:
-    """Reclassify up to ``limit`` postings using the Gemini LLM classifier.
+) -> ReclassifySweepAccepted:
+    """Queue an async reclassify sweep and return 202 immediately.
 
-    Replaces the ingest-time regex heuristic (``adapters/normalization.py``)
-    for existing rows.  Idempotent — re-running with the same LLM response
-    produces the same values; ``changed`` will be 0.
+    D-ASYNC-RESWEEP: the old synchronous model classified up to ``limit``
+    rows inside the request and died on the client's HTTP timeout ~23 rows
+    into a big resweep. Now the endpoint inserts a ``reclassify_job`` row
+    (status='queued'), fires the in-process worker
+    (``services/reclassify_sweep.run_reclassify_job``), and returns
+    ``{job_id, status}``. The worker processes server-side batches of 50,
+    updating the job row after each batch; poll
+    GET /admin/reclassify/jobs/{job_id} for progress and the final verdict.
 
-    Selection order: oldest ``classified_at`` first (NULLs first so
-    never-classified rows are processed before already-classified ones).
+    Per-row classification, candidate selection, the same-version skip, and
+    the post-classification rescoring pass are unchanged — moved verbatim
+    into ``services/reclassify_sweep.process_reclassify_batch``.
 
-    On per-row LLM failure: log + skip + continue.  The row's original
-    ``role_family`` / ``seniority_level`` is preserved.
-
-    ``distribution`` in the response is a full-table snapshot taken AFTER
-    the sweep so the operator can see the cumulative effect.
-
-    TODO: add authentication before exposing publicly.
-          Currently dev-mode only — single-user deployment.
+    Resumption: remaining work is derived from the candidate query on every
+    batch, so a mid-run process death is recoverable by POSTing again.
     """
-    from datetime import UTC, datetime
+    from job_assist.db.models import ReclassifyJob
+    from job_assist.services.reclassify_sweep import spawn_reclassify_job
 
-    from sqlalchemy import func, or_, select, text
+    job = ReclassifyJob(status="queued", requested_limit=payload.limit)
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
 
-    from job_assist.db.models import JobPosting
-    from job_assist.db.models.operator_profile import OperatorProfile
-    from job_assist.db.models.target_company import TargetCompany
-    from job_assist.schemas.reclassify import ReclassifyDistribution
-    from job_assist.services.classifier import (
-        CLASSIFIER_VERSION,
-        build_profile_context,
-        classify_posting,
-    )
-    from job_assist.services.scoring import SCORER_VERSION, score_posting_decomposed
+    spawn_reclassify_job(job.id, only_unclassified=payload.only_unclassified)
 
-    # ── 1. Select candidates ──────────────────────────────────────────────
-    # Skip stale/closed postings (Bestiary 5.18) — don't burn LLM calls
-    # reclassifying postings removed from their ATS board.
-    stmt = select(JobPosting).where(JobPosting.closed_at.is_(None))
-    if payload.only_unclassified:
-        stmt = stmt.where(
-            or_(
-                cast(JobPosting.role_family, Text) == "other",
-                cast(JobPosting.seniority_level, Text) == "unknown",
-            )
-        )
-        # fix(audit): skip rows THIS classifier version already judged — an
-        # LLM-confirmed 'other'/'unknown' stayed in the bucket forever and was
-        # re-sent to Gemini daily, producing the same answer at the same
-        # CLASSIFIER_VERSION (pure wasted paid calls, up to `limit` per day,
-        # contradicting the workflow's "sweeps regex-failures" intent). A
-        # version BUMP keeps them re-keyable — only same-version re-buys are
-        # blocked. The health check's reclassify_pending mirrors this clause.
-        stmt = stmt.where(
-            or_(
-                JobPosting.classified_at.is_(None),
-                JobPosting.classifier_version.is_(None),
-                JobPosting.classifier_version != CLASSIFIER_VERSION,
-            )
-        )
-    # Oldest classified_at first; NULLs sort first so never-LLM-classified
-    # rows are processed before rows the sweep has already touched.
-    #
-    # FOR UPDATE SKIP LOCKED (feat/sweep-skip-locked): this sweep commits ONCE at
-    # the end, so the locks taken here are held for the whole run — an overlapping
-    # sweep (delayed cron + manual trigger) skips these rows and works a disjoint
-    # set instead of double-calling Gemini on the same postings.
-    stmt = (
-        stmt.order_by(
-            JobPosting.classified_at.asc().nulls_first(),
-            JobPosting.first_seen_at.asc(),
-        )
-        .limit(payload.limit)
-        .with_for_update(skip_locked=True)
-    )
+    return ReclassifySweepAccepted(job_id=job.id, status=job.status)
 
-    rows = (await db.execute(stmt)).scalars().all()
 
-    # PR #56: load the operator profile once for the post-classification
-    # rescoring pass below. NULL profile means the table is unseeded —
-    # skip rescoring rather than fail the classifier sweep.
-    op_row = await db.execute(select(OperatorProfile).where(OperatorProfile.id == 1))
-    operator_profile = op_row.scalar_one_or_none()
+@app.get("/admin/reclassify/jobs/{job_id}", tags=["admin"])
+async def get_reclassify_job(job_id: uuid.UUID, db: DbSession) -> ReclassifyJobStatus:
+    """Return one reclassify job row — the poll half of the 202 pattern."""
+    from job_assist.db.models import ReclassifyJob
 
-    # A3: applied-corpus basis, loaded ONCE for the sweep (only when boost on).
-    from job_assist.services.applied_corpus import load_applied_basis
-
-    applied_basis = (
-        await load_applied_basis(db)
-        if operator_profile is not None and (operator_profile.applied_corpus_weight or 0) > 0
-        else None
-    )
-
-    # slice 2b: inject the operator's free-form targets + keywords into the
-    # classifier as DISAMBIGUATION context (None when unseeded → prompt
-    # unchanged). The LLM reclassifier is where the profile text matters; the
-    # title-regex ingest pass stays a fast, profile-agnostic first pass.
-    profile_context = (
-        build_profile_context(
-            operator_profile.looking_for_text,
-            operator_profile.role_keywords,
-        )
-        if operator_profile is not None
-        else None
-    )
-
-    processed = 0
-    changed = 0
-    skipped = 0
-
-    for posting in rows:
-        processed += 1
-        old_family = str(posting.role_family)
-        old_seniority = str(posting.seniority_level)
-
-        try:
-            new_family, new_seniority = await classify_posting(
-                posting.jd_text or "",
-                posting.normalized_title,
-                profile_context=profile_context,
-            )
-        except Exception as exc:
-            logger.warning(
-                "reclassify_sweep.row_failed",
-                extra={
-                    "posting_id": str(posting.id),
-                    "error": str(exc)[:300],
-                },
-            )
-            skipped += 1
-            continue
-
-        posting.role_family = new_family  # type: ignore[assignment]
-        posting.seniority_level = new_seniority  # type: ignore[assignment]
-        posting.classifier_version = CLASSIFIER_VERSION
-        posting.classified_at = datetime.now(tz=UTC)
-
-        # PR #56: rescore after each successful classification. role_family
-        # and seniority_level are 50% of the composite weight; a sweep that
-        # changes them must update fit_score to match. Defensive try/except
-        # mirrors the ingest path — a scoring bug must not cascade to fail
-        # the whole sweep.
-        if operator_profile is not None:
-            try:
-                tier_value: int | None = None
-                if posting.target_company_id is not None:
-                    tier_row = await db.execute(
-                        select(TargetCompany.tier).where(
-                            TargetCompany.id == posting.target_company_id
-                        )
-                    )
-                    tier_value = tier_row.scalar_one_or_none()
-                _decomp = score_posting_decomposed(
-                    posting,
-                    operator_profile,
-                    tier=tier_value,
-                    applied_basis=applied_basis,
-                )
-                posting.fit_score = _decomp.final
-                posting.score_components = _decomp.to_dict()
-                posting.scored_at = datetime.now(tz=UTC)
-                posting.scorer_version = SCORER_VERSION
-            except Exception as exc:
-                logger.warning(
-                    "reclassify_sweep.scoring_failed",
-                    extra={
-                        "posting_id": str(posting.id),
-                        "error": str(exc)[:300],
-                    },
-                )
-
-        if new_family != old_family or new_seniority != old_seniority:
-            changed += 1
-
-    if processed > skipped:
-        await db.commit()
-
-    # ── 2. Distribution snapshot (full table, two queries) ────────────────
-    rf_rows = (
-        await db.execute(
-            select(
-                func.lower(cast(JobPosting.role_family, Text)).label("val"),
-                func.count().label("cnt"),
-            ).group_by(text("val"))
-        )
-    ).all()
-    sn_rows = (
-        await db.execute(
-            select(
-                func.lower(cast(JobPosting.seniority_level, Text)).label("val"),
-                func.count().label("cnt"),
-            ).group_by(text("val"))
-        )
-    ).all()
-
-    return ReclassifySweepResponse(
-        processed=processed,
-        changed=changed,
-        skipped=skipped,
-        distribution=ReclassifyDistribution(
-            role_family={row.val: row.cnt for row in rf_rows},
-            seniority={row.val: row.cnt for row in sn_rows},
-        ),
+    job = await db.get(ReclassifyJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"No reclassify_job with id {job_id}")
+    return ReclassifyJobStatus(
+        job_id=job.id,
+        status=job.status,
+        requested_limit=job.requested_limit,
+        processed=job.processed,
+        changed=job.changed,
+        error=job.error,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+        finished_at=job.finished_at,
     )
 
 

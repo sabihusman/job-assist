@@ -14,6 +14,7 @@ from job_assist.db.models.outcome_event import OutcomeEvent
 from job_assist.db.models.outreach_message import OutreachMessage
 from job_assist.db.models.posting_action import PostingAction
 from job_assist.db.models.posting_source import PostingSource
+from job_assist.db.models.reclassify_job import ReclassifyJob
 from job_assist.db.models.resume_version import ResumeVersion
 from job_assist.db.models.target_company import TargetCompany
 from job_assist.db.models.triage_result import TriageResult
@@ -33,6 +34,7 @@ __all__ = [
     "OutreachMessage",
     "PostingAction",
     "PostingSource",
+    "ReclassifyJob",
     "ResumeVersion",
     "TargetCompany",
     "TriageResult",

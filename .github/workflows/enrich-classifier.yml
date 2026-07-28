@@ -73,18 +73,24 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"limit": 50, "only_unclassified": true}')
 
-          if [ "$status" != "200" ]; then
-            echo "Sweep failed with HTTP $status"
+          # D-ASYNC-RESWEEP: the endpoint is now async — it queues a
+          # reclassify_job row and returns 202 {job_id, status} immediately.
+          # The job runs server-side; progress is visible via
+          # GET /admin/reclassify/jobs/{job_id} and the llm_healthy check.
+          if [ "$status" != "202" ]; then
+            echo "Sweep enqueue failed with HTTP $status"
             cat /tmp/reclassify.json
             exit 1
           fi
 
-          echo "Sweep succeeded:"
+          echo "Sweep queued:"
           python3 -m json.tool < /tmp/reclassify.json
 
-      - name: Surface counters in the workflow summary
+      - name: Surface the queued job in the workflow summary
         if: always() && hashFiles('/tmp/reclassify.json') != ''
         run: |
+          # D-ASYNC-RESWEEP: the 202 body is {job_id, status}. Counters live on
+          # the job row now — poll GET /admin/reclassify/jobs/{job_id}.
           python3 <<'PYEOF' >> "$GITHUB_STEP_SUMMARY"
           import json, pathlib
           try:
@@ -92,18 +98,10 @@ jobs:
           except Exception as exc:
               print(f"## Classifier sweep\n\nCould not parse response: {exc}")
               raise SystemExit(0)
-          print("## Classifier sweep")
+          print("## Classifier sweep (async)")
           print()
-          print(f"- Processed: **{d.get('processed', 0)}**")
-          print(f"- Changed: **{d.get('changed', 0)}**")
-          print(f"- Skipped (LLM error, original preserved): {d.get('skipped', 0)}")
-          dist = d.get("distribution") or {}
-          if isinstance(dist, dict):
-              for field in ("role_family", "seniority"):
-                  counts = dist.get(field)
-                  if isinstance(counts, dict) and counts:
-                      print()
-                      print(f"### {field} (full-table snapshot, post-sweep)")
-                      for key, val in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
-                          print(f"- {key}: {val}")
+          print(f"- Job id: **{d.get('job_id', '?')}**")
+          print(f"- Status at enqueue: **{d.get('status', '?')}**")
+          print()
+          print("Poll `GET /admin/reclassify/jobs/{job_id}` for processed/changed.")
           PYEOF
