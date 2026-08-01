@@ -51,10 +51,12 @@ def test_scorer_version_is_non_empty() -> None:
     assert isinstance(SCORER_VERSION, str)
 
 
-def test_scorer_version_is_v2_semantic() -> None:
+def test_scorer_version_is_v3_salary_extract() -> None:
     """If the algorithm changes, bump the version string. This test fires
-    when someone forgets the bump."""
-    assert SCORER_VERSION == "v2_semantic"
+    when someone forgets the bump. (v3: D-SALARY-EXTRACT — unknown salary
+    renormalizes instead of scoring an invented 60; Comp-block bands feed
+    the salary sub-score.)"""
+    assert SCORER_VERSION == "v3_salary_extract"
 
 
 def test_preferred_and_adjacent_families_are_disjoint() -> None:
@@ -176,15 +178,107 @@ def test_score_salary_above_ceiling_returns_80() -> None:
     assert s == 80
 
 
-def test_score_salary_null_returns_neutral_60() -> None:
+def test_score_salary_null_returns_none_for_renormalization() -> None:
+    """D-SALARY-EXTRACT: NULL salary is no longer scored as an invented 60 —
+    the feature returns None so the composite drops the weight and
+    renormalizes, mirroring the semantic_fit-NULL treatment."""
     s = score_salary(None, None, None, None, 100_000, 200_000)
-    assert s == 60
+    assert s is None
 
 
 def test_score_salary_non_usd_returns_neutral_60() -> None:
-    """We don't FX-convert — non-USD postings get the neutral bucket."""
+    """We don't FX-convert — non-USD postings get the neutral bucket.
+    (Known-but-not-comparable keeps 60; only truly-unknown returns None.)"""
     s = score_salary(120_000, 180_000, "EUR", "annual", 100_000, 200_000)
     assert s == 60
+
+
+# ── D-SALARY-EXTRACT: summary fallback + renormalization ────────────────────
+
+
+def _summary_with_comp(comp: str) -> str:
+    return f"**Scope**: Own the roadmap.\n\n**Comp**: {comp}\n\n**Location**: Remote.\n"
+
+
+def test_unknown_salary_drops_weight_and_renormalizes() -> None:
+    """No structured band, no parseable Comp block → the salary feature is
+    dropped and the remaining weights renormalize — same shape as the
+    semantic_fit-NULL treatment. No invented 60."""
+    profile = _make_profile()
+    posting = _make_posting(
+        salary_min=None,
+        salary_max=None,
+        salary_currency=None,
+        salary_period=None,
+        jd_summary_markdown=_summary_with_comp("Not stated."),
+        similarity_score=100,
+    )
+    d = score_posting_decomposed(posting, profile, tier=1)
+    assert d.sub_scores["salary"] is None
+    assert "salary" in d.dropped
+    assert d.total_weight == 100 - _WEIGHTS["salary"]
+    assert d.final == score_posting(posting, profile, tier=1)
+
+
+def test_parsed_summary_band_feeds_salary_score() -> None:
+    """NULL structured columns + an in-band Comp block → the parsed band is
+    scored exactly like a structured one (here: inside the 100k-250k band)."""
+    profile = _make_profile()
+    posting = _make_posting(
+        salary_min=None,
+        salary_max=None,
+        salary_currency=None,
+        salary_period=None,
+        jd_summary_markdown=_summary_with_comp("$181,000 - $235,000 / year plus bonus."),
+    )
+    d = score_posting_decomposed(posting, profile, tier=1)
+    assert d.sub_scores["salary"] == 100
+    assert "salary" not in d.dropped
+
+
+def test_parsed_summary_band_below_floor_scores_30() -> None:
+    profile = _make_profile()  # floor 100k
+    posting = _make_posting(
+        salary_min=None,
+        salary_max=None,
+        salary_currency=None,
+        salary_period=None,
+        jd_summary_markdown=_summary_with_comp("$60,000 - $75,000 per year."),
+    )
+    d = score_posting_decomposed(posting, profile, tier=1)
+    assert d.sub_scores["salary"] == 30
+
+
+def test_structured_salary_wins_over_summary_parse() -> None:
+    """Non-NULL structured columns are never overwritten: a below-floor
+    structured band scores 30 even when the Comp block advertises an
+    in-band range."""
+    profile = _make_profile()
+    posting = _make_posting(
+        salary_min=60_000,
+        salary_max=80_000,
+        jd_summary_markdown=_summary_with_comp("$181,000 - $235,000 / year."),
+    )
+    d = score_posting_decomposed(posting, profile, tier=1)
+    assert d.sub_scores["salary"] == 30
+
+
+def test_unknown_salary_and_unknown_semantic_drop_both_weights() -> None:
+    """Both renormalizable features missing → composite runs on the four
+    structured features (weights 65) and still reconciles."""
+    profile = _make_profile()
+    posting = _make_posting(
+        salary_min=None,
+        salary_max=None,
+        salary_currency=None,
+        salary_period=None,
+        jd_summary_markdown=None,
+        similarity_score=None,
+    )
+    d = score_posting_decomposed(posting, profile, tier=1)
+    assert set(d.dropped) == {"salary", "semantic_fit"}
+    assert d.total_weight == 100 - _WEIGHTS["salary"] - _WEIGHTS["semantic_fit"]
+    assert d.final == score_posting(posting, profile, tier=1)
 
 
 def test_score_salary_hourly_annualized_via_2080() -> None:

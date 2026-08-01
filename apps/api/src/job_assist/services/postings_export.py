@@ -24,6 +24,7 @@ from openpyxl.utils import get_column_letter
 
 from job_assist.db.models import JobPosting, OperatorProfile, TargetCompany
 from job_assist.services.postings_query import PostingsViewSpec
+from job_assist.services.salary_extract import parse_salary_from_summary
 from job_assist.services.scoring import (
     _WEIGHTS,
     PREFERRED_FAMILIES,
@@ -149,7 +150,14 @@ def _build_context_sheet(
                     "Weighted mean of six 0-100 sub-scores: role_family, "
                     "seniority, salary, tier, geo, semantic_fit (weights above). "
                     "semantic_fit is dropped and the remaining weights "
-                    "renormalize when a posting has no similarity_score yet.",
+                    "renormalize when a posting has no similarity_score yet. "
+                    "salary gets the same treatment when no band exists: "
+                    "structured columns first, then the jd_summary Comp-block "
+                    "parser (salary_source='parsed_from_summary', lowest band "
+                    "on multi-location/tier lists, hourly annualized at "
+                    "2080h); if both miss (salary_source='unknown') the "
+                    "salary weight is dropped and renormalized — unknown pay "
+                    "is no longer scored as a fake 60.",
                 ),
                 (
                     "Role-family gate",
@@ -209,6 +217,14 @@ _JOB_COLUMNS: list[tuple[str, int, bool]] = [
     ("salary_min", 11, False),
     ("salary_max", 11, False),
     ("salary_currency", 8, False),
+    # D-SALARY-EXTRACT: export-DERIVED (no DB columns). salary_source says
+    # where score.salary's input came from; salary_parsed_min/max carry the
+    # Comp-block parser's band so a score is always traceable to a visible
+    # number even though salary_min/salary_max stay NULL in the DB.
+    ("salary_source", 20, False),
+    ("salary_known", 12, False),
+    ("salary_parsed_min", 15, False),
+    ("salary_parsed_max", 15, False),
     ("location", 28, True),
     ("remote_type", 10, False),
     ("tier", 6, False),
@@ -264,6 +280,17 @@ def _build_jobs_sheet(
         if jp.fit_score is not None:
             scores.append(int(jp.fit_score))
 
+        # D-SALARY-EXTRACT derived columns — the SAME parser the scorer's
+        # fallback uses (single definition), so score.salary and these
+        # columns can never disagree about what was parsed.
+        if jp.salary_min is not None or jp.salary_max is not None:
+            salary_source = "structured"
+            parsed = None
+        else:
+            parsed = parse_salary_from_summary(jp.jd_summary_markdown)
+            salary_source = "parsed_from_summary" if parsed is not None else "unknown"
+        salary_known = salary_source != "unknown"
+
         values: list[Any] = [
             rank,
             company_name,
@@ -279,6 +306,10 @@ def _build_jobs_sheet(
             jp.salary_min,
             jp.salary_max,
             jp.salary_currency,
+            salary_source,
+            salary_known,
+            parsed.salary_min if parsed is not None else None,
+            parsed.salary_max if parsed is not None else None,
             _flatten_locations(jp.locations_normalized) or (jp.location_raw or ""),
             _enum_value(jp.remote_type),
             tier_display,

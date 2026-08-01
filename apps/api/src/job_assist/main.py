@@ -2540,11 +2540,17 @@ async def score_sweep_endpoint(
     # Tier comes from target_company via OUTER JOIN — postings without a
     # matched company get NULL tier, which the scorer maps to 50 (neutral).
     #
-    # Defer the heavy columns the scorer never reads (full JD text + JD summary,
-    # and the 768-float JD vector UNLESS the A3 boost is on). Loading the JD
+    # Defer the heavy columns the scorer never reads (full JD text, and the
+    # 768-float JD vector UNLESS the A3 boost is on). Loading the JD
     # text/vector for every row ballooned memory and OOMed the worker; deferring
     # keeps the sweep light (everything else loads — no N+1).
-    _defers = [defer(JobPosting.jd_text), defer(JobPosting.jd_summary_markdown)]
+    # jd_summary_markdown is NO LONGER deferred (D-SALARY-EXTRACT): the salary
+    # fallback parses its Comp block for NULL-structured-salary rows, and a
+    # deferred-column access inside the sync scorer under AsyncSession raises
+    # MissingGreenlet (swallowed per-row → those rows would silently never
+    # re-score and would starve the scored_at-ordered queue head). Summaries
+    # are ~1KB — not the memory hazard jd_text was.
+    _defers = [defer(JobPosting.jd_text)]
     if applied_basis is None:
         _defers.append(defer(JobPosting.jd_embedding))
     stmt = (

@@ -82,7 +82,12 @@ ANALYST_GATE_CAP = 95
 
 # ── Version constant ─────────────────────────────────────────────────────────
 
-SCORER_VERSION = "v2_semantic"
+# v3 (D-SALARY-EXTRACT): unknown salary no longer scores an invented 60 —
+# the weight drops and renormalizes; NULL-structured rows with a parseable
+# jd_summary Comp band score on the parsed band. Bumped so re-scores under
+# the new math are attributable (and the score-components backfill's
+# drift-reconcile gate can tell old rows from new).
+SCORER_VERSION = "v3_salary_extract"
 
 
 # ── Composite weights (sum = 100) ────────────────────────────────────────────
@@ -271,21 +276,28 @@ def score_salary(
     salary_period: str | None,
     floor_usd: int,
     ceiling_usd: int | None,
-) -> int:
-    """Score the posting's salary against the operator's band.
+) -> int | None:
+    """Score a KNOWN salary against the operator's band.
 
     Returns:
-       60 — NULL salary OR non-USD currency (we don't FX-convert)
+     None — no salary value at all (D-SALARY-EXTRACT: the caller drops the
+            feature and renormalizes the remaining weights, mirroring the
+            semantic_fit-NULL treatment — the old hardcoded 60 invented a
+            mild-positive signal for data that didn't exist)
+       60 — non-USD currency (we don't FX-convert), or a value whose period
+            we can't annualize (known but not comparable)
       100 — annualized value lies inside the band
        80 — annualized value lies above the ceiling (over-paying is rarely a reason to skip)
        30 — annualized value lies below the floor
 
     Uses ``salary_max`` when available, falling back to ``salary_min``.
     """
-    # Non-USD: skip the comparison. Most postings will be USD or NULL.
+    raw = salary_max if salary_max is not None else salary_min
+    if raw is None:
+        return None
+    # Non-USD: skip the comparison (known but not comparable).
     if salary_currency and salary_currency.upper() != "USD":
         return 60
-    raw = salary_max if salary_max is not None else salary_min
     annual = _annualize_salary(raw, salary_period)
     if annual is None:
         return 60
@@ -294,6 +306,45 @@ def score_salary(
     if ceiling_usd is not None and annual > ceiling_usd:
         return 80
     return 100
+
+
+def _score_salary_feature(posting: JobPosting, profile: OperatorProfile) -> int | None:
+    """Salary sub-score with the D-SALARY-EXTRACT summary fallback.
+
+    Structured columns win when present (never overwritten). When they're
+    NULL, fall back to the ONE shared Comp-block parser
+    (``services/salary_extract.parse_salary_from_summary`` — the same
+    function the export's derived columns use, per the amendment's
+    single-definition constraint). Still nothing → ``None`` → the composite
+    drops the salary weight and renormalizes. Observe-only: no DB writes,
+    no hard-rule enforcement reads the parsed values.
+    """
+    structured = score_salary(
+        posting.salary_min,
+        posting.salary_max,
+        posting.salary_currency,
+        str(posting.salary_period) if posting.salary_period is not None else None,
+        profile.salary_floor_usd,
+        profile.salary_ceiling_usd,
+    )
+    if structured is not None:
+        return structured
+    # Lazy import — salary_extract imports ANNUAL_HOURS from this module, so
+    # a top-level import here would be circular.
+    from job_assist.services.salary_extract import parse_salary_from_summary
+
+    parsed = parse_salary_from_summary(posting.jd_summary_markdown)
+    if parsed is None:
+        return None
+    # Parsed bands are already annualized (hourly x2080 inside the parser).
+    return score_salary(
+        parsed.salary_min,
+        parsed.salary_max,
+        parsed.currency,
+        "annual",
+        profile.salary_floor_usd,
+        profile.salary_ceiling_usd,
+    )
 
 
 def score_tier(tier: int | None) -> int:
@@ -482,10 +533,12 @@ def score_breakdown(
     """Return the six sub-scores plus the ``disguised_senior`` flag.
 
     The integer sub-scores feed the weighted composite; ``semantic_fit`` is
-    ``None`` until the row is embedded + calibrated (then it's 0-100). The
-    boolean ``disguised_senior`` is a debug/surface flag (NOT a weighted
-    feature) — ``score_posting`` applies it as a post-composite cap, the
-    same shape as the role_family gate. Useful for a "why this score" UI.
+    ``None`` until the row is embedded + calibrated (then it's 0-100), and
+    ``salary`` is ``None`` when no band exists structured OR parseable from
+    the jd_summary Comp block (D-SALARY-EXTRACT). The boolean
+    ``disguised_senior`` is a debug/surface flag (NOT a weighted feature) —
+    ``score_posting`` applies it as a post-composite cap, the same shape as
+    the role_family gate. Useful for a "why this score" UI.
 
     ``tier`` is passed in explicitly because it lives on
     ``target_company``, not on ``job_posting`` — the caller resolves it
@@ -499,14 +552,9 @@ def score_breakdown(
             str(posting.seniority_level) if posting.seniority_level is not None else None,
             profile.seniority_levels_included,
         ),
-        "salary": score_salary(
-            posting.salary_min,
-            posting.salary_max,
-            posting.salary_currency,
-            str(posting.salary_period) if posting.salary_period is not None else None,
-            profile.salary_floor_usd,
-            profile.salary_ceiling_usd,
-        ),
+        # D-SALARY-EXTRACT: structured columns first, then the shared
+        # Comp-block parser; None (truly unknown) drops the weight below.
+        "salary": _score_salary_feature(posting, profile),
         "tier": score_tier(tier),
         "geo": score_geo(
             posting.locations_normalized,
@@ -620,12 +668,13 @@ def score_posting_decomposed(
     """
     parts = score_breakdown(posting, profile, tier=tier)
     # Weighted MEAN over the AVAILABLE weighted features (iterating ``_WEIGHTS``
-    # excludes the ``disguised_senior`` flag, a post-composite cap). Only
-    # ``semantic_fit`` can be None (row not yet embedded/calibrated): omit it
-    # and renormalize over the remaining weights, so a pre-embedding posting
-    # scores on the structured features alone — no fake signal — and gains the
-    # semantic blend once ``similarity_score`` lands (re-scored on the
-    # embedding-sweep tail / profile-save hook).
+    # excludes the ``disguised_senior`` flag, a post-composite cap). Two
+    # features can be None and get omitted + renormalized over the remaining
+    # weights: ``semantic_fit`` (row not yet embedded/calibrated) and — since
+    # D-SALARY-EXTRACT — ``salary`` (no structured band AND nothing parseable
+    # in the jd_summary Comp block). Either way the posting scores on the
+    # features that actually exist — no fake signal — and gains the missing
+    # blend once the data lands (embedding sweep / summary enrichment).
     sub_scores: dict[str, int | None] = {}
     contributions: dict[str, int] = {}
     present: list[str] = []
