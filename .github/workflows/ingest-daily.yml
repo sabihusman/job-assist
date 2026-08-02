@@ -109,3 +109,34 @@ jobs:
           # YAML→shell→python triple-escaping — python saw ``\"`` as a
           # line-continuation backslash and crashed at the f-string.
           echo "$resp" | python3 -c "import json, sys; d = json.load(sys.stdin); print(f\"::notice::marked {d['marked_stale']} postings stale\")"
+
+      # D-INGEST-CHAIN: enqueue a reclassify sweep AFTER every ingest step, so
+      # rows ingested THIS run get classified promptly regardless of GitHub's
+      # cron skew. 2026-08-02: the independent 07:30 reclassify cron fired
+      # 37 minutes into a delayed ingest run (08:54), its SELECT found zero
+      # eligible rows mid-ingest, and 5 rows sat unclassified for 10 hours.
+      # ``if: always()`` — a partial ingest still produces rows worth
+      # classifying; this step's own pass/fail reflects ONLY the enqueue (a
+      # failed earlier step already marks the run failed, so nothing is
+      # masked). The 07:30 enrich-classifier cron is deliberately unchanged
+      # as a backstop — its second enqueue finding zero candidates is the
+      # expected, harmless case (the async job just succeeds with
+      # processed=0).
+      - name: Enqueue reclassify sweep
+        if: always()
+        run: |
+          status=$(curl -sS --max-time 30 \
+            -o /tmp/reclassify_enqueue.json -w "%{http_code}" \
+            -H "Authorization: Bearer $API_AUTH_TOKEN" \
+            -X POST "$API_URL/admin/reclassify/sweep" \
+            -H "Content-Type: application/json" \
+            -d '{"limit": 50, "only_unclassified": true}')
+
+          if [ "$status" != "202" ]; then
+            echo "Reclassify enqueue failed with HTTP $status"
+            cat /tmp/reclassify_enqueue.json
+            exit 1
+          fi
+
+          echo "Reclassify sweep queued:"
+          python3 -m json.tool < /tmp/reclassify_enqueue.json
