@@ -83,10 +83,15 @@ async def rescore_open_postings(
     changed = 0
     for start in range(0, len(ids), batch_size):
         chunk_ids = ids[start : start + batch_size]
-        # Tier via OUTER JOIN (NULL → neutral 50 in the scorer). Heavy columns
-        # deferred — the scorer reads only small structured fields + the
-        # similarity_score int.
-        _defers = [defer(JobPosting.jd_text), defer(JobPosting.jd_summary_markdown)]
+        # Tier via OUTER JOIN (NULL → neutral 50 in the scorer). jd_text stays
+        # deferred (the scorer never reads it) — but jd_summary_markdown must
+        # LOAD since D-SALARY-EXTRACT: the salary fallback parses its Comp
+        # block for NULL-structured-salary rows, and touching a deferred
+        # column inside the sync scorer under AsyncSession raises
+        # MissingGreenlet (swallowed per-row → the exact rows the fallback
+        # targets would silently never re-score). Summaries are ~1KB, not the
+        # multi-KB jd_text that motivated the deferral.
+        _defers = [defer(JobPosting.jd_text)]
         if applied_basis is None:
             _defers.append(defer(JobPosting.jd_embedding))
         rows = (

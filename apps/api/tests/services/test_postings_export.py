@@ -325,3 +325,86 @@ def test_unmatched_posting_uses_canonical_company_name() -> None:
     ws = wb["Jobs"]
     company_col = [c.value for c in ws[1]].index("company") + 1
     assert ws.cell(row=2, column=company_col).value == "Solo Inc"
+
+
+# ── D-SALARY-EXTRACT: derived salary columns ─────────────────────────────────
+
+
+def _col(ws: Any, header: str) -> int:
+    return [c.value for c in ws[1]].index(header) + 1
+
+
+def _salary_cells(buf: bytes) -> tuple[Any, Any, Any, Any]:
+    wb = _open(buf)
+    ws = wb["Jobs"]
+    return (
+        ws.cell(row=2, column=_col(ws, "salary_source")).value,
+        ws.cell(row=2, column=_col(ws, "salary_known")).value,
+        ws.cell(row=2, column=_col(ws, "salary_parsed_min")).value,
+        ws.cell(row=2, column=_col(ws, "salary_parsed_max")).value,
+    )
+
+
+def _export_one(posting: JobPosting) -> bytes:
+    return build_workbook_bytes(
+        spec=PostingsViewSpec(),
+        profile=_profile(),
+        rows=[(posting, _target_company(), "greenhouse", None)],
+        corpus_size=1,
+        matched_before_cap=1,
+    )
+
+
+def test_salary_source_structured() -> None:
+    """Structured columns present → 'structured', parsed columns empty."""
+    source, known, pmin, pmax = _salary_cells(_export_one(_posting()))
+    assert source == "structured"
+    assert known is True
+    assert pmin is None
+    assert pmax is None
+
+
+def test_salary_source_parsed_from_summary_carries_band() -> None:
+    """NULL structured + parseable Comp block → parsed values are visible,
+    so score.salary is traceable even though salary_min/max stay NULL."""
+    posting = _posting(
+        salary_min=None,
+        salary_max=None,
+        salary_currency=None,
+        salary_period=None,
+        jd_summary_markdown="**Comp**: $181,000 - $235,000 / year.\n\n**Location**: Remote.",
+    )
+    buf = _export_one(posting)
+    source, known, pmin, pmax = _salary_cells(buf)
+    assert source == "parsed_from_summary"
+    assert known is True
+    assert (pmin, pmax) == (181_000, 235_000)
+    # The DB-backed columns remain NULL in the export — never overwritten.
+    wb = _open(buf)
+    ws = wb["Jobs"]
+    assert ws.cell(row=2, column=_col(ws, "salary_min")).value is None
+    assert ws.cell(row=2, column=_col(ws, "salary_max")).value is None
+    # And the score.salary the sheet shows came from the SAME parser (100 =
+    # in-band for the 100k-250k test profile) — single-definition contract.
+    assert ws.cell(row=2, column=_col(ws, "score.salary")).value == 100
+
+
+def test_salary_source_unknown_drops_score_cell() -> None:
+    """No structured band, no parseable Comp block → 'unknown', not known,
+    and score.salary is EMPTY (the weight was dropped, not faked at 60)."""
+    posting = _posting(
+        salary_min=None,
+        salary_max=None,
+        salary_currency=None,
+        salary_period=None,
+        jd_summary_markdown="**Comp**: Not stated.\n\n**Location**: Remote.",
+    )
+    buf = _export_one(posting)
+    source, known, pmin, pmax = _salary_cells(buf)
+    assert source == "unknown"
+    assert known is False
+    assert pmin is None
+    assert pmax is None
+    wb = _open(buf)
+    ws = wb["Jobs"]
+    assert ws.cell(row=2, column=_col(ws, "score.salary")).value is None
