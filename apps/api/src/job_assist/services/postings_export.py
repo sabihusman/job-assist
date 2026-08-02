@@ -32,6 +32,7 @@ from job_assist.services.scoring import (
     display_tier,
     score_breakdown,
 )
+from job_assist.services.years_extract import parse_years_requirement
 from job_assist.triage.config import hard_rule_config_from_profile
 
 _HEADER_FILL = PatternFill("solid", start_color="1F2937")  # slate-800
@@ -225,6 +226,13 @@ _JOB_COLUMNS: list[tuple[str, int, bool]] = [
     ("salary_known", 12, False),
     ("salary_parsed_min", 15, False),
     ("salary_parsed_max", 15, False),
+    # D5-OBSERVE: export-DERIVED years-bar columns (no DB columns). Detector
+    # only — nothing consumes these in scoring yet; years_domain is verbatim
+    # so the real qualifier distribution is visible before any cap policy.
+    ("min_years_required", 14, False),
+    ("years_domain", 40, True),
+    ("education_substitution_available", 16, False),
+    ("years_source_clause", 60, True),
     ("location", 28, True),
     ("remote_type", 10, False),
     ("tier", 6, False),
@@ -291,6 +299,9 @@ def _build_jobs_sheet(
             salary_source = "parsed_from_summary" if parsed is not None else "unknown"
         salary_known = salary_source != "unknown"
 
+        # D5-OBSERVE: years-bar detector (observe-only, no score changes).
+        years = parse_years_requirement(jp.jd_summary_markdown)
+
         values: list[Any] = [
             rank,
             company_name,
@@ -310,6 +321,10 @@ def _build_jobs_sheet(
             salary_known,
             parsed.salary_min if parsed is not None else None,
             parsed.salary_max if parsed is not None else None,
+            years["min_years_required"] if years is not None else None,
+            years["years_domain"] if years is not None else None,
+            years["education_substitution_available"] if years is not None else None,
+            years["source_clause"] if years is not None else None,
             _flatten_locations(jp.locations_normalized) or (jp.location_raw or ""),
             _enum_value(jp.remote_type),
             tier_display,
