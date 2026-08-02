@@ -408,3 +408,41 @@ def test_salary_source_unknown_drops_score_cell() -> None:
     wb = _open(buf)
     ws = wb["Jobs"]
     assert ws.cell(row=2, column=_col(ws, "score.salary")).value is None
+
+
+# ── D5-OBSERVE: derived years-bar columns ────────────────────────────────────
+
+
+def test_years_columns_populated_from_hard_requirements() -> None:
+    posting = _posting(
+        jd_summary_markdown=(
+            "**Hard requirements**:\n"
+            "*   Bachelor's degree in any field, OR at least 3 years of Product Management experience.\n\n"
+            "**Comp**: Not stated.\n"
+        )
+    )
+    buf = _export_one(posting)
+    wb = _open(buf)
+    ws = wb["Jobs"]
+    assert ws.cell(row=2, column=_col(ws, "min_years_required")).value == 3
+    assert (
+        ws.cell(row=2, column=_col(ws, "years_domain")).value == "of Product Management experience"
+    )
+    assert ws.cell(row=2, column=_col(ws, "education_substitution_available")).value is True
+    assert "at least 3 years" in ws.cell(row=2, column=_col(ws, "years_source_clause")).value
+
+
+def test_years_columns_empty_when_no_clause() -> None:
+    posting = _posting(
+        jd_summary_markdown="**Hard requirements**:\n*   Strong SQL.\n\n**Comp**: Not stated.\n"
+    )
+    buf = _export_one(posting)
+    wb = _open(buf)
+    ws = wb["Jobs"]
+    for header in (
+        "min_years_required",
+        "years_domain",
+        "education_substitution_available",
+        "years_source_clause",
+    ):
+        assert ws.cell(row=2, column=_col(ws, header)).value is None
