@@ -436,7 +436,8 @@ def is_disguised_senior(posting: JobPosting) -> bool:
     seniority = str(posting.seniority_level) if posting.seniority_level is not None else "unknown"
     if seniority not in _DISGUISED_SENIOR_SENIORITY:
         return False
-    if posting.salary_currency != "USD":
+    cur = posting.salary_currency
+    if cur is not None and cur.upper() != "USD":
         return False
     return (
         posting.salary_min is not None and posting.salary_min >= _DISGUISED_SENIOR_SALARY_FLOOR_USD

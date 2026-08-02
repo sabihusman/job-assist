@@ -10,6 +10,7 @@ import { ExportCsvButton } from '@/components/shared/ExportCsvButton';
 import { useAllOutcomes, useAppliedPostings } from '@/lib/api/applied';
 import { buildUnifiedCsv } from '@/lib/applied/exportCsv';
 import type { AppliedSort } from '@/lib/applied/types';
+import { VALID_APPLIED_SORT } from '@/lib/applied/types';
 import { sortUnified, unifyApplied } from '@/lib/applied/unify';
 
 /**
@@ -45,7 +46,11 @@ export default function AppliedPage() {
 
 function AppliedPageInner() {
   const searchParams = useSearchParams();
-  const sort = (searchParams.get('sort') as AppliedSort | null) ?? 'applied';
+  const sortRaw = searchParams.get('sort');
+  const sort: AppliedSort =
+    sortRaw && VALID_APPLIED_SORT.has(sortRaw as AppliedSort)
+      ? (sortRaw as AppliedSort)
+      : 'applied';
 
   // feat/applied-unified: the manual Applied funnel is now an OVERLAY, not the
   // membership source. Manual is tiny (~4) so a single page suffices — Load

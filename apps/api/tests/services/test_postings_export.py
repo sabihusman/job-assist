@@ -73,6 +73,7 @@ def _profile() -> OperatorProfile:
         applicant_cap=500,
         seniority_levels_included=["senior_pm", "lead_pm"],
         staffing_firm_blocklist=[],
+        company_blocklist=[],
         created_at=now,
         updated_at=now,
     )

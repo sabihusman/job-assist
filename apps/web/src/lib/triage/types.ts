@@ -28,7 +28,13 @@ export type ActionReason =
   // the role, the operator just already has too many open applications at this
   // company. Deliberately excluded from calibration's fit-learning aggregates
   // server-side (services/stats.py), so it never reads as a fit signal.
-  | 'too_many_open_apps';
+  | 'too_many_open_apps'
+  // business_analyst/financial_analyst geo expansion: mirrors the hard-rule
+  // reason 'analyst_geo' (triage/hard_rules.py). Display-only for now — NOT
+  // added to ReasonPicker's REASON_CHOICES (no free hotkey slot, and it's a
+  // system-generated hard-gate verdict, not an operator-picked reason); see
+  // PassedRow.tsx's supplemental label entry.
+  | 'analyst_geo';
 
 export type RemoteType = 'remote' | 'hybrid' | 'onsite';
 

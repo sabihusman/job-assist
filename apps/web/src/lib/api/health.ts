@@ -42,6 +42,11 @@ export type IngestHealth = {
     // days (sustained-failure window — the variable actor's single bad runs
     // don't trip it; trivially true while no wellfound companies exist).
     wellfound_fresh: boolean;
+    // directive-B: the dedicated Microsoft Careers canary (one lightweight
+    // live call, separate from the real paginated ingest) ran within 26h AND
+    // its last status was 'ok' — collapses endpoint_failure/schema_drift/
+    // zero_results to this one bool; see metrics for which mode fired.
+    msft_canary_healthy: boolean;
   };
   metrics: {
     last_success_at: string | null;
@@ -78,6 +83,14 @@ export type IngestHealth = {
     wellfound_companies: number;
     wellfound_last_swept_at: string | null;
     wellfound_stale_days: number;
+    // directive-B: last Microsoft Careers canary check — status distinguishes
+    // endpoint_failure / schema_drift / zero_results even though the checks
+    // bool is a single pass/fail.
+    msft_canary_last_checked_at: string | null;
+    msft_canary_last_status: string | null;
+    msft_canary_last_detail: string | null;
+    msft_canary_matched_count: number | null;
+    msft_canary_stale_hours: number;
   };
 };
 

@@ -9,6 +9,7 @@ from job_assist.db.models.division import Division
 from job_assist.db.models.gmail_sweep_run import GmailSweepRun
 from job_assist.db.models.ingest_run import IngestRun
 from job_assist.db.models.job_posting import JobPosting
+from job_assist.db.models.microsoft_canary_run import MicrosoftCanaryRun
 from job_assist.db.models.operator_profile import OperatorProfile
 from job_assist.db.models.outcome_event import OutcomeEvent
 from job_assist.db.models.outreach_message import OutreachMessage
@@ -28,6 +29,7 @@ __all__ = [
     "GmailSweepRun",
     "IngestRun",
     "JobPosting",
+    "MicrosoftCanaryRun",
     "OperatorProfile",
     "OutcomeEvent",
     "OutreachMessage",

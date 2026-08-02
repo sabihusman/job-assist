@@ -166,6 +166,10 @@ Defaults (the values that seed `HardRuleConfig`):
 
 **Migration path:** thresholds will move to an `operator_profile` table in PR #29 so the operator can tune them from the web UI without redeploying. The current dataclass becomes the seed values for that row.
 
+**Later addition:** a parallel **`company_blocklist`** rule (employers, not staffing
+firms) was added after this ADR as priority #4, between `staffing_firm` and
+`geo_whitelist` — see [ADR-013](#adr-013--employer-company_blocklist-hard-rule).
+
 ---
 
 ## ADR-009 · Gmail poll watermark derives from data, not a state row
@@ -259,3 +263,48 @@ membership flips the posting back to triage; the audit trail reads
 **Rationale:** preserves the append-only history and the firewall/resolved-status
 logic; needs no new action_type, endpoint, or response-shape change. The same
 `reset` primitive already powers bulk-undo.
+
+---
+
+## ADR-013 · Employer `company_blocklist` hard rule
+
+**Status:** Accepted
+
+**Context:** ADR-008 shipped a `staffing_firm` blocklist that drops postings whose
+company name matches a substring list of recruiting/staffing agencies. A parallel
+need emerged for **direct employers** the operator never wants to see (e.g. large
+banks). Reusing `staffing_firm_blocklist` would conflate two distinct concepts
+(agency vs. employer) and muddy the operator's mental model and the export sheet.
+
+**Decision:** Add a separate **`company_blocklist`** rule as priority **#4** in
+`apply_hard_rules` (between `staffing_firm` and `geo_whitelist`), backed by a new
+`operator_profile.company_blocklist` JSONB column tunable via `PUT /operator/profile`,
+mirroring the staffing-firm mechanism end-to-end. Initial seed: JPMorgan Chase,
+J.P. Morgan, JPMorgan, Bank of America, BofA, Capital One.
+
+Unlike `staffing_firm` (case-insensitive substring on the raw name), the match is
+on a **normalized** form (lowercased, non-alphanumeric collapsed) so employer
+name variants collapse: "J.P. Morgan", "JPMorgan - XML", and "JPMorgan Chase & Co."
+all match a "JPMorgan" entry. The match must additionally start and end on a
+**word boundary** of the posting's name — a plain collapsed-substring test would
+let short entries bleed across words (entry "BofA" → "bofa" substring-matching
+"Lab of America" → "labofamerica"); boundary alignment rejects that while keeping
+"BofA Securities" a hit. A failing posting is stamped
+`hard_rule_failed='company_blocklist'` (hidden by default, recoverable via
+`?include_filtered=true`); **no rows are deleted**.
+
+**Rationale:**
+- **Normalized match over raw substring:** employer names arrive with punctuation,
+  suffixes, and ATS decorations ("- XML", "& Co.") that a raw substring test would
+  miss; normalizing collapses them. Entries are always **full names** (never bare
+  tokens like "Chase") to avoid over-matching unrelated companies.
+- **Separate list, not an extension of staffing:** keeps "staffing agency" and
+  "dead-end employer" as distinct, independently editable concepts — clearer in the
+  Settings UI and the export context sheet.
+- **Reversible, same as every hard rule:** sets `hard_rule_failed` rather than
+  deleting, so the corpus stays intact and the decision is auditable/recoverable.
+
+**Operational note:** the seeding migration adds the column and seeds the singleton
+`operator_profile` row, but **already-ingested postings** only pick up the new rule
+on the next ingest or via a manual `POST /admin/postings/reeval-hard-rules`
+(the `reeval-hard-rules` workflow).

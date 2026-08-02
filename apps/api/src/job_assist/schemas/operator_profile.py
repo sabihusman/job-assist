@@ -61,6 +61,8 @@ class OperatorProfileRead(BaseModel):
     # Phase A3: applied-corpus boost weight 0..1; 0 = off (no-op).
     applied_corpus_weight: float
     staffing_firm_blocklist: list[str]
+    # feat/company-blocklist: dead-end EMPLOYER names (distinct from staffing).
+    company_blocklist: list[str]
     # PR #43: list of SeniorityLevel enum values to include. NULL or empty
     # means "include all levels".
     seniority_levels_included: list[str] | None
@@ -96,11 +98,16 @@ class OperatorProfileUpdate(BaseModel):
     # Phase A3: applied-corpus boost weight 0..1; 0 = off. None = leave unchanged.
     applied_corpus_weight: float | None = None
     staffing_firm_blocklist: list[str] | None = None
+    # feat/company-blocklist: dead-end EMPLOYER names. None = leave column
+    # unchanged; empty list = clear the blocklist.
+    company_blocklist: list[str] | None = None
     # PR #43: list of SeniorityLevel enum values. None = "leave column
     # unchanged"; empty list = "clear filter" (include all levels).
     seniority_levels_included: list[str] | None = None
 
-    @field_validator("role_keywords", "geo_whitelist", "staffing_firm_blocklist")
+    @field_validator(
+        "role_keywords", "geo_whitelist", "staffing_firm_blocklist", "company_blocklist"
+    )
     @classmethod
     def _validate_list(cls, value: list[str] | None) -> list[str] | None:
         return _clean_str_list(value)
@@ -162,7 +169,7 @@ class OperatorProfileUpdate(BaseModel):
                 raise ValueError(f"every item must be a string; got {type(item).__name__}")
             normalised = item.strip().lower()
             if not normalised:
-                continue
+                raise ValueError("empty strings are not allowed in the list")
             if normalised not in _VALID_SENIORITY_LEVELS:
                 raise ValueError(
                     f"unknown seniority level {item!r}; "

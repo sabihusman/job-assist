@@ -60,9 +60,14 @@ export function StatusButtons({
       toast.success(`✓ Marked ${status}`);
       // Detail + every list query: the Applied/Rejected tabs re-filter on
       // resolved_status, so a terminal status drops the card out of Applied.
+      // The unified Applied/Rejected views also resolve manual_status off the
+      // separate ``outcomes`` query cache (lib/applied/unify.ts) — without
+      // this invalidation a Gmail-linked posting's status change wouldn't
+      // show up there until that cache's own staleTime expired.
       await Promise.all([
         qc.invalidateQueries({ queryKey: queryKeys.posting(postingId) }),
         qc.invalidateQueries({ queryKey: ['postings'] }),
+        qc.invalidateQueries({ queryKey: ['outcomes'] }),
       ]);
     } catch (err) {
       showErrorToast(err, "Couldn't update status");

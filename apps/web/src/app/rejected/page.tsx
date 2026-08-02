@@ -11,6 +11,7 @@ import { useAllOutcomes } from '@/lib/api/applied';
 import { useRejectedPostings } from '@/lib/api/state-views';
 import { buildUnifiedCsv } from '@/lib/applied/exportCsv';
 import type { AppliedSort } from '@/lib/applied/types';
+import { VALID_APPLIED_SORT } from '@/lib/applied/types';
 import { entryStage, sortUnified, unifyApplied } from '@/lib/applied/unify';
 
 /**
@@ -36,7 +37,11 @@ export default function RejectedPage() {
 
 function RejectedPageInner() {
   const searchParams = useSearchParams();
-  const sort = (searchParams.get('sort') as AppliedSort | null) ?? 'applied';
+  const sortRaw = searchParams.get('sort');
+  const sort: AppliedSort =
+    sortRaw && VALID_APPLIED_SORT.has(sortRaw as AppliedSort)
+      ? (sortRaw as AppliedSort)
+      : 'applied';
 
   const manual = useRejectedPostings();
   const outcomes = useAllOutcomes(true);

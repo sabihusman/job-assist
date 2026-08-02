@@ -9,7 +9,8 @@ import { KPICard } from '@/components/stats/KPICard';
 import { type FunnelRow, OutcomeFunnel } from '@/components/stats/OutcomeFunnel';
 import { useAllOutcomes, useAppliedPostings } from '@/lib/api/applied';
 import { useCalibration } from '@/lib/api/hooks';
-import { stageOf } from '@/lib/applied/stages';
+import { unifyApplied } from '@/lib/applied/unify';
+import { bucketOutcomes } from '@/lib/pipeline/bucket';
 import { buildStatsCsv } from '@/lib/stats/exportCsv';
 
 /**
@@ -23,55 +24,51 @@ import { buildStatsCsv } from '@/lib/stats/exportCsv';
  *     backend support yet.
  *   - SOURCE EFFECTIVENESS panel — stripped per spec.
  *
- * The funnel's deeper interview stages aren't in `/stats/funnel`,
- * so we compute recruiter → phone → video → onsite → offer counts
- * client-side from the `/outcomes` dataset (already cached if the
- * user navigated through Applied / Pipeline first).
+ * The funnel's deeper interview stages aren't in `/stats/funnel`, so we
+ * compute Applied → recruiter → phone → video → onsite → offer counts
+ * client-side from the `/outcomes` dataset (already cached if the user
+ * navigated through Applied / Pipeline first) via the same
+ * `bucketOutcomes` / `unifyApplied` helpers those pages use — thread-group
+ * bucketing rather than filtering on `posting_id` (mostly NULL; see
+ * lib/pipeline/bucket.ts's "drop bug" note).
  */
 export default function StatsPage() {
   const calibrationQ = useCalibration();
   const appliedQ = useAppliedPostings();
-  const outcomesQ = useAllOutcomes();
+  // job_related=true matches the Pipeline (lib/api/pipeline.ts) and the
+  // Applied page (app/applied/page.tsx) — same dataset ``bucketOutcomes``
+  // and ``unifyApplied`` are fed elsewhere, so the funnel's counts agree
+  // with what those pages show.
+  const outcomesQ = useAllOutcomes(true);
 
   const funnelRows = useMemo<FunnelRow[]>(() => {
-    const applied = appliedQ.data?.items ?? [];
+    const manualPostings = appliedQ.data?.items ?? [];
     const outcomes = outcomesQ.data?.items ?? [];
 
-    // Per-stage distinct posting counts. The deeper-stage rows count
-    // each posting at most once even if it has multiple events.
-    //
-    // Use a strict object type rather than ``Record<string, Set<string>>``
-    // so TS knows every key is present — avoids the non-null assertions
-    // that biome's noNonNullAssertion rule flags.
-    type StageKey = 'recruiter' | 'phone' | 'video' | 'onsite' | 'offer';
-    const seen: Record<StageKey, Set<string>> = {
-      recruiter: new Set(),
-      phone: new Set(),
-      video: new Set(),
-      onsite: new Set(),
-      offer: new Set(),
-    };
-    const isStageKey = (s: string | null): s is StageKey =>
-      s === 'recruiter' || s === 'phone' || s === 'video' || s === 'onsite' || s === 'offer';
-
-    for (const o of outcomes) {
-      if (!o.posting_id) continue;
-      const s = stageOf(o.stage);
-      if (isStageKey(s)) seen[s].add(o.posting_id);
-    }
+    // `outcome_event.posting_id` is NULL for the vast majority of
+    // Gmail-derived rows (see lib/applied/types.ts) — only a small
+    // linked subset carries it. Filtering on it here used to be "the
+    // drop bug" (lib/pipeline/bucket.ts), reading near-zero funnel
+    // counts. `bucketOutcomes` groups by email thread instead (no
+    // posting_id required) — reuse it, same as the Pipeline board.
+    const buckets = bucketOutcomes(outcomes);
+    // "Applied" mirrors the Applied page's own count: the unified
+    // Gmail + manual fusion (lib/applied/unify.ts), not the narrow
+    // manual-only ``useAppliedPostings`` list.
+    const appliedEntries = unifyApplied(outcomes, manualPostings);
 
     return [
-      { stage: 'Applied', count: applied.length },
-      { stage: 'Recruiter screen', count: seen.recruiter.size },
-      { stage: 'Phone interview', count: seen.phone.size },
-      { stage: 'Video interview', count: seen.video.size },
-      { stage: 'Onsite', count: seen.onsite.size },
-      { stage: 'Offer', count: seen.offer.size },
+      { stage: 'Applied', count: appliedEntries.length },
+      { stage: 'Recruiter screen', count: buckets.recruiter.length },
+      { stage: 'Phone interview', count: buckets.phone.length },
+      { stage: 'Video interview', count: buckets.video.length },
+      { stage: 'Onsite', count: buckets.onsite.length },
+      { stage: 'Offer', count: buckets.offer.length },
     ];
   }, [appliedQ.data, outcomesQ.data]);
 
   const calib = calibrationQ.data;
-  const appliedCount = appliedQ.data?.items.length ?? 0;
+  const appliedCount = funnelRows[0]?.count ?? 0;
   const offerCount = funnelRows[5]?.count ?? 0;
   const recruiterPlusCount = funnelRows.slice(1, 5).reduce((sum, row) => sum + row.count, 0);
 

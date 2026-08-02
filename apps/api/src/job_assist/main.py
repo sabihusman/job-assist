@@ -274,7 +274,7 @@ async def auth_status() -> dict[str, bool]:
 
 
 # ATS sources the daily cron knows how to ingest. Workday joined the
-# set in PR #33; iCIMS in PR #55.
+# set in PR #33; iCIMS in PR #55; Microsoft (directive B) is native/direct.
 #
 # TODO(adapter-dispatch-drift): The ATS vocabulary is currently
 # duplicated across three sites — this constant, ``_SUPPORTED`` in the
@@ -284,7 +284,7 @@ async def auth_status() -> dict[str, bool]:
 # e.g. ``adapters/__init__.py::ADAPTERS = {"greenhouse": Greenhouse, …}``
 # — that all three sites read from. Out of scope for PR #55 per the
 # strip-philosophy "no base-class refactor" rule.
-_INGESTABLE_ATS = ("greenhouse", "lever", "ashby", "workday", "icims")
+_INGESTABLE_ATS = ("greenhouse", "lever", "ashby", "workday", "icims", "microsoft")
 
 # chore/drop-workday-icims-direct-plan: the DAILY PLAN's adapter set. Workday and
 # iCIMS are deliberately EXCLUDED from the direct daily fetch: their boards block
@@ -294,9 +294,17 @@ _INGESTABLE_ATS = ("greenhouse", "lever", "ashby", "workday", "icims")
 # = workday/icims, targeting by domain), which runs as its own daily cron step.
 # _INGESTABLE_ATS stays the FULL set so the /postings ats filter
 # (_ALLOWED_ATS_VALUES) can still surface the Apify-sourced workday/icims
-# postings; only the direct PLAN query narrows to the three free boards that
+# postings; only the direct PLAN query narrows to the free boards that
 # actually fetch from Railway.
-_DIRECT_PLAN_ATS = ("greenhouse", "lever", "ashby")
+#
+# directive-B: Microsoft joins this set on the ASSUMPTION (Phase 1 live trace,
+# not a Railway-verified prod call) that apply.careers.microsoft.com has no
+# Workday/iCIMS-style egress block — no auth, no cookies, and a normal CSP
+# were observed from a plain fetch(). If the first prod run returns 0 where
+# the browser trace found hundreds, that assumption is wrong; drop
+# "microsoft" from this tuple and route it through the Apify side-channel
+# instead, same as Workday/iCIMS.
+_DIRECT_PLAN_ATS = ("greenhouse", "lever", "ashby", "microsoft")
 
 
 @app.get("/admin/ingest/plan")
@@ -405,13 +413,14 @@ async def trigger_ingest(
     from job_assist.adapters.greenhouse import GreenhouseAdapter
     from job_assist.adapters.icims import ICIMSAdapter
     from job_assist.adapters.lever import LeverAdapter
+    from job_assist.adapters.microsoft import MicrosoftCareersAdapter
     from job_assist.adapters.workday import WorkdayAdapter
     from job_assist.db.models.target_company import TargetCompany
     from job_assist.services.ingestion import IngestionService
 
     # Keep in sync with ``_INGESTABLE_ATS`` above and ``_SUPPORTED_ATS`` in
     # cli.py — see the TODO(adapter-dispatch-drift) tag.
-    _SUPPORTED = {"greenhouse", "lever", "ashby", "workday", "icims"}
+    _SUPPORTED = {"greenhouse", "lever", "ashby", "workday", "icims", "microsoft"}
     if ats not in _SUPPORTED:
         raise HTTPException(
             status_code=400,
@@ -477,6 +486,12 @@ async def trigger_ingest(
             )
         icims_cfg = tc_row.adapter_config if isinstance(tc_row.adapter_config, dict) else None
         adapter = ICIMSAdapter(adapter_config=icims_cfg)
+    elif ats == "microsoft":
+        # directive-B: single-tenant, query-driven — no per-company handle
+        # lookup needed (unlike Workday/iCIMS). *handle* is accepted only to
+        # satisfy the Adapter protocol / plan machinery; the adapter ignores
+        # its value and always searches domain=microsoft.com.
+        adapter = MicrosoftCareersAdapter()
     else:
         # Unreachable given the guard above, but keeps mypy happy.
         raise HTTPException(status_code=400, detail=f"ATS {ats!r} not yet implemented")
@@ -491,6 +506,27 @@ async def trigger_ingest(
         "postings_fetched": run.postings_fetched,
         "postings_new": run.postings_new,
         "postings_updated": run.postings_updated,
+    }
+
+
+@app.post("/admin/ingest/microsoft/canary", tags=["admin"])
+async def run_microsoft_canary_endpoint(db: DbSession) -> dict[str, Any]:
+    """Directive B, Phase 3: one lightweight live canary call for the
+    Microsoft Careers adapter, deliberately separate from the real paginated
+    ingest run. A dedicated daily cron step calls this (see
+    ``.github/workflows/ingest-daily.yml``) so ``ingest_health`` below can
+    stay a pure SELECT — this is the one place in the pipeline that makes a
+    live outbound call on the health monitor's behalf, and it happens once a
+    day, not on every 60s frontend poll.
+    """
+    from job_assist.services.microsoft_canary import run_microsoft_canary
+
+    run = await run_microsoft_canary(db)
+    return {
+        "canary_run_id": str(run.id),
+        "status": run.status,
+        "detail": run.detail,
+        "matched_count": run.matched_count,
     }
 
 
@@ -2350,8 +2386,26 @@ async def update_operator_profile(
     # can tell whether a weight-only change occurred (the save-hook below fires a
     # rescore on a real applied_corpus_weight change — including a change to 0).
     old_applied_corpus_weight = row.applied_corpus_weight or 0.0
+    # Only these two columns are nullable in the DB. Every other field is
+    # NOT NULL, so an explicit `null` sent for one of them would otherwise
+    # setattr(..., None) + commit into a NOT NULL violation (opaque 500).
+    # Treat that as a no-op, matching the schema's "None = leave column
+    # unchanged" partial-update semantics.
+    NULLABLE_FIELDS = {"salary_ceiling_usd", "seniority_levels_included"}
     for key, value in fields.items():
+        if value is None and key not in NULLABLE_FIELDS:
+            continue
         setattr(row, key, value)
+
+    # Cross-field validation on OperatorProfileUpdate only fires when both
+    # salary_floor_usd and salary_ceiling_usd are present in the same body.
+    # Re-check against the merged row so a single-field PUT can't persist an
+    # inverted range against the other field's existing DB value.
+    if row.salary_ceiling_usd is not None and row.salary_ceiling_usd < row.salary_floor_usd:
+        raise HTTPException(
+            status_code=422,
+            detail="salary_ceiling_usd must be greater than or equal to salary_floor_usd",
+        )
 
     await db.commit()
     await db.refresh(row)
@@ -2435,7 +2489,7 @@ async def reclassify_sweep_endpoint(
 
     from sqlalchemy import func, or_, select, text
 
-    from job_assist.db.models import JobPosting
+    from job_assist.db.models import ClosedChannel, JobPosting
     from job_assist.db.models.operator_profile import OperatorProfile
     from job_assist.db.models.target_company import TargetCompany
     from job_assist.schemas.reclassify import ReclassifyDistribution
@@ -2445,6 +2499,8 @@ async def reclassify_sweep_endpoint(
         classify_posting,
     )
     from job_assist.services.scoring import SCORER_VERSION, score_posting_decomposed
+    from job_assist.triage.config import hard_rule_config_from_profile
+    from job_assist.triage.hard_rules import apply_hard_rules
 
     # ── 1. Select candidates ──────────────────────────────────────────────
     # Skip stale/closed postings (Bestiary 5.18) — don't burn LLM calls
@@ -2553,16 +2609,16 @@ async def reclassify_sweep_endpoint(
         # changes them must update fit_score to match. Defensive try/except
         # mirrors the ingest path — a scoring bug must not cascade to fail
         # the whole sweep.
+        target_company_row: TargetCompany | None = None
         if operator_profile is not None:
             try:
                 tier_value: int | None = None
                 if posting.target_company_id is not None:
-                    tier_row = await db.execute(
-                        select(TargetCompany.tier).where(
-                            TargetCompany.id == posting.target_company_id
-                        )
+                    tc_row = await db.execute(
+                        select(TargetCompany).where(TargetCompany.id == posting.target_company_id)
                     )
-                    tier_value = tier_row.scalar_one_or_none()
+                    target_company_row = tc_row.scalar_one_or_none()
+                    tier_value = target_company_row.tier if target_company_row is not None else None
                 _decomp = score_posting_decomposed(
                     posting,
                     operator_profile,
@@ -2576,6 +2632,38 @@ async def reclassify_sweep_endpoint(
             except Exception as exc:
                 logger.warning(
                     "reclassify_sweep.scoring_failed",
+                    extra={
+                        "posting_id": str(posting.id),
+                        "error": str(exc)[:300],
+                    },
+                )
+
+        # CRITICAL (family-conditional geo directive): a reclassify that
+        # changes role_family can flip which hard rule applies (e.g. 'other'
+        # -> 'business_analyst' swaps geo_whitelist for the analyst geo rule).
+        # Re-evaluate hard rules for that row so it doesn't keep a stale
+        # verdict computed under the OLD family. Gated on role_family actually
+        # changing (not seniority) — the classifier confirming the same
+        # family on a re-run must not churn hard_rule_failed/evaluated_at.
+        if new_family != old_family and operator_profile is not None:
+            try:
+                closed_channel_row: ClosedChannel | None = None
+                if posting.target_company_id is not None:
+                    cc_row = await db.execute(
+                        select(ClosedChannel)
+                        .where(ClosedChannel.target_company_id == posting.target_company_id)
+                        .where(ClosedChannel.unsealed_at.is_(None))
+                    )
+                    closed_channel_row = cc_row.scalar_one_or_none()
+                hard_cfg = hard_rule_config_from_profile(operator_profile)
+                verdict = apply_hard_rules(
+                    posting, target_company_row, closed_channel_row, hard_cfg
+                )
+                posting.hard_rule_failed = None if verdict.passed else verdict.failed_rule
+                posting.hard_rules_evaluated_at = datetime.now(tz=UTC)
+            except Exception as exc:
+                logger.warning(
+                    "reclassify_sweep.hard_rule_reeval_failed",
                     extra={
                         "posting_id": str(posting.id),
                         "error": str(exc)[:300],
@@ -4384,6 +4472,16 @@ _HEALTH_WARM_PATH_STALE_DAYS = 9
 # (yellow), and trivially healthy while no wellfound companies exist.
 _HEALTH_WELLFOUND_STALE_DAYS = 3
 
+# Microsoft Careers canary health (directive B, Phase 3). The canary is a
+# DEDICATED daily cron step (ingest-daily.yml → POST
+# /admin/ingest/microsoft/canary), separate from the real paginated ingest —
+# 26h matches the daily cadence + grace, same shape as _HEALTH_RECENT_HOURS.
+# Soft (yellow): one native adapter's canary must not red the whole dot, same
+# precedent as Wellfound/warm-path/Gmail. Trivially healthy before the first
+# canary has ever run (fresh deploy, migration applied but cron hasn't
+# ticked yet) — mirrors the "cohort empty" carve-out on the other checks.
+_HEALTH_MSFT_CANARY_STALE_HOURS = 26
+
 
 @app.get("/admin/ingest/health", tags=["admin"])
 async def ingest_health(db: DbSession) -> dict[str, Any]:
@@ -4413,6 +4511,10 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
         pending and nothing ran), AND embeddings aren't piling up errors.
       * ``gmail_healthy`` — a Gmail sweep started within ``_HEALTH_GMAIL_STALE_HOURS``
         and the last one didn't fail (metrics carry its runtime).
+      * ``msft_canary_healthy`` — directive B, Phase 3: the dedicated Microsoft
+        Careers canary (a separate lightweight live call, NOT the real ingest)
+        ran within ``_HEALTH_MSFT_CANARY_STALE_HOURS`` AND its last status was
+        ``ok`` (not ``endpoint_failure`` / ``schema_drift`` / ``zero_results``).
     """
     from datetime import timedelta
 
@@ -4423,6 +4525,7 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
         GmailSweepRun,
         IngestRun,
         JobPosting,
+        MicrosoftCanaryRun,
         TargetCompany,
     )
 
@@ -4617,6 +4720,37 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
         wellfound_last_swept is not None and wellfound_last_swept >= wellfound_cutoff
     )
 
+    # ── Microsoft Careers canary health (directive B, Phase 3) ────────────
+    # The single most-recent microsoft_canary_run row is the source of truth
+    # — a DEDICATED lightweight live call, separate from the real paginated
+    # ingest, so this stays a pure SELECT on the health endpoint's own hot
+    # path (60s frontend poll) even though the underlying signal came from a
+    # live outbound HTTP call once a day.
+    msft_canary_cutoff = now - timedelta(hours=_HEALTH_MSFT_CANARY_STALE_HOURS)
+    last_msft_canary = (
+        await db.execute(
+            select(
+                MicrosoftCanaryRun.started_at,
+                MicrosoftCanaryRun.status,
+                MicrosoftCanaryRun.detail,
+                MicrosoftCanaryRun.matched_count,
+            )
+            .order_by(MicrosoftCanaryRun.started_at.desc())
+            .limit(1)
+        )
+    ).first()
+    msft_canary_last_checked_at = last_msft_canary.started_at if last_msft_canary else None
+    msft_canary_last_status = last_msft_canary.status if last_msft_canary else None
+    msft_canary_last_detail = last_msft_canary.detail if last_msft_canary else None
+    msft_canary_matched_count = last_msft_canary.matched_count if last_msft_canary else None
+    # Trivially healthy before the first canary has ever run (fresh deploy /
+    # migration applied but the daily cron hasn't ticked yet) — same
+    # "unseeded cohort" carve-out as warm_path_fresh / wellfound_fresh.
+    msft_canary_fresh = msft_canary_last_checked_at is None or (
+        msft_canary_last_checked_at >= msft_canary_cutoff
+    )
+    msft_canary_ok = msft_canary_last_status is None or msft_canary_last_status == "ok"
+
     checks = {
         # fix(audit health split): per-pipeline freshness — the curated cron's
         # own check (HARD). Pre-split, any broad/warm-path success satisfied
@@ -4644,6 +4778,12 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
         # ~3 days (SUSTAINED-failure window — the variable actor's single bad
         # runs don't trip it; trivially true while the cohort is empty). Soft.
         "wellfound_fresh": wellfound_fresh,
+        # directive-B: the dedicated Microsoft Careers canary ran within the
+        # last 26h AND its last status was 'ok'. Soft (yellow) — one native
+        # adapter's canary must not red the whole dot, same precedent as
+        # Wellfound/warm-path/Gmail. Trivially true before the first canary
+        # run (fresh deploy / cron hasn't ticked yet).
+        "msft_canary_healthy": msft_canary_fresh and msft_canary_ok,
     }
     messages = {
         "curated_fresh": f"curated cron has not swept in the last {_HEALTH_RECENT_HOURS}h "
@@ -4676,6 +4816,16 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
             f"Wellfound sweep has not succeeded in the last {_HEALTH_WELLFOUND_STALE_DAYS} days "
             f"({wellfound_count} wellfound companies; last swept: {wellfound_last_swept})"
         ),
+        # directive-B: the message text distinguishes the three failure modes
+        # (endpoint_failure / schema_drift / zero_results) even though the
+        # boolean check collapses them to one dot, per the Phase 3 spec.
+        "msft_canary_healthy": (
+            f"Microsoft Careers canary has not run in the last "
+            f"{_HEALTH_MSFT_CANARY_STALE_HOURS}h (last checked: {msft_canary_last_checked_at})"
+            if not msft_canary_fresh
+            else f"Microsoft Careers canary last status was "
+            f"{msft_canary_last_status!r}: {msft_canary_last_detail}"
+        ),
     }
     problems = [messages[name] for name, passed in checks.items() if not passed]
 
@@ -4701,6 +4851,9 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
         # feat/wellfound-cron-health: a SUSTAINED Wellfound failure is soft —
         # the variable actor must never red the dot on a single bad run.
         or not checks["wellfound_fresh"]
+        # directive-B: a stale/failing Microsoft Careers canary is soft — same
+        # precedent as every other native-adapter/secondary-feed check above.
+        or not checks["msft_canary_healthy"]
     )
     severity = "down" if hard_down else ("degraded" if soft_degraded else "ok")
 
@@ -4751,6 +4904,16 @@ async def ingest_health(db: DbSession) -> dict[str, Any]:
                 wellfound_last_swept.isoformat() if wellfound_last_swept else None
             ),
             "wellfound_stale_days": _HEALTH_WELLFOUND_STALE_DAYS,
+            # directive-B: dedicated Microsoft Careers canary — last check's
+            # status/detail distinguishes endpoint_failure/schema_drift/
+            # zero_results even though msft_canary_healthy is a single bool.
+            "msft_canary_last_checked_at": (
+                msft_canary_last_checked_at.isoformat() if msft_canary_last_checked_at else None
+            ),
+            "msft_canary_last_status": msft_canary_last_status,
+            "msft_canary_last_detail": msft_canary_last_detail,
+            "msft_canary_matched_count": msft_canary_matched_count,
+            "msft_canary_stale_hours": _HEALTH_MSFT_CANARY_STALE_HOURS,
         },
     }
 
@@ -6096,6 +6259,8 @@ async def applied_similarity_diagnostic(db: DbSession) -> dict[str, Any]:
         .all()
     )
     vecs = [[float(x) for x in v] for v in emb_rows if v is not None]
+    if not vecs:
+        return {"n": 0, "reference_band": None, "top": [], "bottom": [], "note": "empty basis"}
     m = len(vecs)  # == n (basis was filtered to jd_embedding NOT NULL), guard anyway
     dim = len(vecs[0])
     centroid = [sum(v[i] for v in vecs) / m for i in range(dim)]

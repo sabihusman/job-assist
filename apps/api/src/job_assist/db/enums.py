@@ -28,6 +28,12 @@ class ATS(enum.StrEnum):
     # company row; ats='wellfound' lives on the PostingSource. Enum extended via
     # the ``a9f1b2wellf6`` migration; the Python value must match the PG value.
     wellfound = "wellfound"
+    # Directive B: Microsoft's native careers API (apply.careers.microsoft.com),
+    # a single-tenant query-driven board (see adapters/microsoft.py). Unlike
+    # Wellfound this DOES carry a target_company row (ats_handle='microsoft')
+    # since it's one company, not a discovery feed. Enum extended via the
+    # ``a4b6c8d0e2f4`` migration; the Python value must match the PG value.
+    microsoft = "microsoft"
     other = "other"
     unknown = "unknown"
 
@@ -155,6 +161,12 @@ class ActionReason(enum.StrEnum):
     # EXCLUDED from calibration's fit-learning aggregates (services/stats.py) so
     # it never reads as a fit signal or feeds any scorer rank-down.
     too_many_open_apps = "too_many_open_apps"
+    # business_analyst/financial_analyst geo expansion: mirrors the hard-rule
+    # RuleName "analyst_geo" (triage/hard_rules.py) so the vocabulary is ready
+    # once a hard-gate failure can auto-populate this reason. Display-only for
+    # now — the pass-reason feedback pipeline that would auto-write it is
+    # inert; see docs/DECISIONS.md.
+    analyst_geo = "analyst_geo"
 
 
 class MessageDirection(enum.StrEnum):

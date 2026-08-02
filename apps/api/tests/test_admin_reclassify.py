@@ -61,6 +61,10 @@ def _posting(
     classifier_version: str | None = None,
     title: str = "Senior Product Manager",
     jd_text: str = _SAMPLE_JD,
+    location_raw: str | None = None,
+    remote_type: str = "onsite",
+    hard_rule_failed: str | None = None,
+    hard_rules_evaluated_at: datetime | None = None,
 ) -> JobPosting:
     now = datetime.now(tz=UTC)
     suffix = uuid.uuid4().hex[:8]
@@ -78,6 +82,10 @@ def _posting(
         seniority_level=seniority_level,  # type: ignore[arg-type]
         classified_at=classified_at,
         classifier_version=classifier_version,
+        location_raw=location_raw,
+        remote_type=remote_type,  # type: ignore[arg-type]
+        hard_rule_failed=hard_rule_failed,
+        hard_rules_evaluated_at=hard_rules_evaluated_at,
     )
 
 
@@ -497,3 +505,121 @@ async def test_sweep_limit_too_large_422(db_session: Any, monkeypatch: pytest.Mo
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.post("/admin/reclassify/sweep", json={"limit": 501})
     assert resp.status_code == 422
+
+
+# ── Family-conditional geo directive: hard-rule re-eval on family change ─────
+
+
+async def _seed_operator_profile(db_session: Any) -> None:
+    from job_assist.db.models.operator_profile import OperatorProfile
+
+    db_session.add(
+        OperatorProfile(
+            id=1,
+            looking_for_text="",
+            role_keywords=[],
+            geo_whitelist=[],
+            salary_floor_usd=85_000,
+            applicant_cap=500,
+            staffing_firm_blocklist=[],
+        )
+    )
+    await db_session.commit()
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_reclassify_other_to_business_analyst_triggers_hard_rule_reeval(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CRITICAL (family-conditional geo directive): a reclassify that flips
+    role_family from 'other' to 'business_analyst' must re-evaluate hard
+    rules for that row — otherwise it keeps a stale verdict computed under
+    the old family. An onsite NYC posting (outside the Des Moines metro,
+    not remote) must land on hard_rule_failed='analyst_geo' post-sweep."""
+    from job_assist.main import app
+
+    await _seed_operator_profile(db_session)
+    _patch_classify(monkeypatch, ("business_analyst", "unknown"))
+
+    tc = _company()
+    db_session.add(tc)
+    await db_session.flush()
+
+    posting = _posting(
+        target_company_id=tc.id,
+        role_family="other",
+        seniority_level="unknown",
+        location_raw="New York, NY",
+        remote_type="onsite",
+        # Pre-sweep: not yet hard-rule-evaluated (mirrors a freshly-ingested
+        # row) — proves the sweep is what populates these, not a stale value.
+        hard_rule_failed=None,
+        hard_rules_evaluated_at=None,
+    )
+    db_session.add(posting)
+    await db_session.commit()
+    posting_id = posting.id
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await _post_sweep(client, limit=5, only_unclassified=True)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["changed"] == 1
+
+    refreshed = (
+        await db_session.execute(select(JobPosting).where(JobPosting.id == posting_id))
+    ).scalar_one()
+    assert str(refreshed.role_family) == "business_analyst"
+    assert refreshed.hard_rule_failed == "analyst_geo"
+    assert refreshed.hard_rules_evaluated_at is not None
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_reclassify_confirming_same_family_does_not_churn_hard_rules(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reclassify that CONFIRMS the same role_family (classifier re-run
+    agrees) must NOT touch hard_rule_failed / hard_rules_evaluated_at — the
+    directive's 'avoid unnecessary hard-rule churn' guard. Seed the row
+    already gated with a stale-looking verdict and prove it survives."""
+    from job_assist.main import app
+
+    await _seed_operator_profile(db_session)
+    # only_unclassified selects on role_family='other' OR seniority='unknown'
+    # — use an 'other' row whose seniority is already known so it's still
+    # selected (unknown-seniority) while role_family stays 'other' pre/post.
+    _patch_classify(monkeypatch, ("other", "senior_pm"))
+
+    tc = _company()
+    db_session.add(tc)
+    await db_session.flush()
+
+    stale_marker = datetime(2020, 1, 1, tzinfo=UTC)
+    posting = _posting(
+        target_company_id=tc.id,
+        role_family="other",
+        seniority_level="unknown",
+        location_raw="New York, NY",
+        remote_type="onsite",
+        hard_rule_failed="salary_floor",
+        hard_rules_evaluated_at=stale_marker,
+    )
+    db_session.add(posting)
+    await db_session.commit()
+    posting_id = posting.id
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await _post_sweep(client, limit=5, only_unclassified=True)
+
+    assert resp.status_code == 200
+
+    refreshed = (
+        await db_session.execute(select(JobPosting).where(JobPosting.id == posting_id))
+    ).scalar_one()
+    # role_family unchanged ('other' -> 'other') → no hard-rule re-eval fired;
+    # the stale-looking sentinel values are left exactly as seeded.
+    assert refreshed.hard_rule_failed == "salary_floor"
+    assert refreshed.hard_rules_evaluated_at == stale_marker

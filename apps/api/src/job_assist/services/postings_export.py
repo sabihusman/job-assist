@@ -139,6 +139,10 @@ def _build_context_sheet(
                     "staffing_firm_blocklist",
                     ", ".join(hard.staffing_firm_blocklist) or "(empty)",
                 ),
+                (
+                    "company_blocklist",
+                    ", ".join(hard.company_blocklist) or "(empty)",
+                ),
             ],
         ),
         (

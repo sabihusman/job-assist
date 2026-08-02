@@ -694,3 +694,156 @@ async def test_wellfound_seeded_never_swept_flags_degraded(db_session: Any) -> N
 
     assert h["checks"]["wellfound_fresh"] is False
     assert h["severity"] == "degraded"
+
+
+# ── directive-B: Microsoft Careers canary health ────────────────────────────
+
+
+def _msft_canary_run(
+    *,
+    started_hours_ago: float,
+    status: str,
+    detail: str | None = None,
+    matched_count: int | None = None,
+) -> Any:
+    from job_assist.db.models import MicrosoftCanaryRun
+
+    now = datetime.now(tz=UTC)
+    started = now - timedelta(hours=started_hours_ago)
+    return MicrosoftCanaryRun(
+        started_at=started,
+        finished_at=started + timedelta(seconds=1),
+        status=status,
+        detail=detail,
+        matched_count=matched_count,
+    )
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_msft_canary_trivially_true_before_first_run(db_session: Any) -> None:
+    """No canary run yet (fresh deploy / cron hasn't ticked) → the check
+    passes; healthy world stays fully green, mirroring wellfound_fresh's
+    empty-cohort contract."""
+    from job_assist.main import app
+
+    db_session.add_all(_healthy_fixtures())
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["checks"]["msft_canary_healthy"] is True
+    assert h["metrics"]["msft_canary_last_checked_at"] is None
+    assert h["metrics"]["msft_canary_last_status"] is None
+    assert h["metrics"]["msft_canary_stale_hours"] == 26
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_msft_canary_ok_status_stays_green(db_session: Any) -> None:
+    from job_assist.main import app
+
+    db_session.add_all(_healthy_fixtures())
+    db_session.add(_msft_canary_run(started_hours_ago=2, status="ok", matched_count=6))
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["checks"]["msft_canary_healthy"] is True
+    assert h["severity"] == "ok"
+    assert h["metrics"]["msft_canary_last_status"] == "ok"
+    assert h["metrics"]["msft_canary_matched_count"] == 6
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_msft_canary_endpoint_failure_flags_degraded(db_session: Any) -> None:
+    """Acceptance criterion #6, mode 1/3: the live canary request failed or
+    returned non-200."""
+    from job_assist.main import app
+
+    db_session.add_all(_healthy_fixtures())
+    db_session.add(
+        _msft_canary_run(started_hours_ago=1, status="endpoint_failure", detail="HTTP 503")
+    )
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["ok"] is False
+    assert h["severity"] == "degraded"
+    assert h["checks"]["msft_canary_healthy"] is False
+    assert any("endpoint_failure" in p for p in h["problems"])
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_msft_canary_schema_drift_flags_degraded(db_session: Any) -> None:
+    """Acceptance criterion #6, mode 2/3: 200 received but the pinned
+    ``data.positions[].{id,name}`` shape didn't match."""
+    from job_assist.main import app
+
+    db_session.add_all(_healthy_fixtures())
+    db_session.add(
+        _msft_canary_run(
+            started_hours_ago=1,
+            status="schema_drift",
+            detail="response.data.positions is missing or not a list",
+        )
+    )
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["severity"] == "degraded"
+    assert h["checks"]["msft_canary_healthy"] is False
+    assert any("schema_drift" in p for p in h["problems"])
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_msft_canary_zero_results_flags_degraded(db_session: Any) -> None:
+    """Acceptance criterion #6, mode 3/3: schema valid but zero target-title
+    rows on a query that normally returns many."""
+    from job_assist.main import app
+
+    db_session.add_all(_healthy_fixtures())
+    db_session.add(
+        _msft_canary_run(
+            started_hours_ago=1,
+            status="zero_results",
+            detail="0 of 10 rows on the canary page matched the title filter",
+            matched_count=0,
+        )
+    )
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["severity"] == "degraded"
+    assert h["checks"]["msft_canary_healthy"] is False
+    assert any("zero_results" in p for p in h["problems"])
+
+
+@_NEEDS_DB
+@pytest.mark.asyncio
+async def test_msft_canary_stale_flags_degraded(db_session: Any) -> None:
+    """Dead-man's-switch: last canary succeeded, but > 26h ago (cron
+    stopped ticking) → degraded even though the last known status was ok."""
+    from job_assist.main import app
+
+    db_session.add_all(_healthy_fixtures())
+    db_session.add(_msft_canary_run(started_hours_ago=30, status="ok", matched_count=6))
+    await db_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        h = await _health(client)
+
+    assert h["checks"]["msft_canary_healthy"] is False
+    assert h["severity"] == "degraded"
+    assert any("Microsoft Careers canary has not run" in p for p in h["problems"])

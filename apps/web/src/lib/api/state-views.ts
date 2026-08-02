@@ -1,6 +1,6 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 
 import { api } from '@/lib/api/client';
 import type { PostingsListResponse } from '@/lib/triage/types';
@@ -64,6 +64,43 @@ export function usePassedPostings(offset = 0, enabled = true) {
     refetchOnWindowFocus: false,
     staleTime: 30_000,
   });
+}
+
+/**
+ * Passed postings as an accumulating ``useInfiniteQuery`` (mirrors
+ * ``useTriagePostingsInfinite`` in ``lib/api/hooks.ts``, fix/audit #5).
+ *
+ * The Load More pattern above (``usePassedPostings`` with a moving
+ * ``extraOffset`` slot) re-keys the SAME query on every click, so the
+ * second Load More REPLACES the first extra window instead of appending
+ * — rows from the middle of the list silently vanish while ``hasMore``
+ * keeps offering more. This pages by offset and renders the flattened
+ * accumulation instead, same fix as the triage list.
+ */
+export function usePassedPostingsInfinite() {
+  const query = useInfiniteQuery({
+    queryKey: [POSTINGS_KEY, { state: ['not_interested'] }] as const,
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) => {
+      const { data, error } = await api.GET('/postings', {
+        params: {
+          query: { state: ['not_interested'], limit: PAGE_SIZE, offset: pageParam } as never,
+        },
+      });
+      if (error) throw error;
+      return data as unknown as PostingsListResponse;
+    },
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((n, page) => n + page.items.length, 0);
+      return loaded < lastPage.total ? loaded : undefined;
+    },
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+  });
+
+  const items = query.data?.pages.flatMap((page) => page.items) ?? [];
+  const total = query.data?.pages[0]?.total ?? 0;
+  return { ...query, items, total };
 }
 
 /**

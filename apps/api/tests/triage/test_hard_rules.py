@@ -34,6 +34,7 @@ def _posting(
     location_raw: str | None = "New York, NY",
     locations_normalized: list[dict[str, Any]] | None = None,
     role_family: RoleFamily = RoleFamily.product_management,
+    remote_type: RemoteType = RemoteType.onsite,
     salary_max: int | None = 200_000,
     salary_currency: str | None = "USD",
     salary_period: SalaryPeriod = SalaryPeriod.annual,
@@ -48,7 +49,7 @@ def _posting(
         raw_title=title,
         location_raw=location_raw,
         locations_normalized=locations_normalized,  # type: ignore[arg-type]
-        remote_type=RemoteType.onsite,
+        remote_type=remote_type,
         salary_min=None,
         salary_max=salary_max,
         salary_currency=salary_currency,
@@ -173,6 +174,95 @@ class TestStaffingFirm:
             _target(name="FreshCorp"),
         )
         assert result.passed is True
+
+
+class TestCompanyBlocklist:
+    """Parallel to the staffing rule, but matched on a NORMALIZED
+    (lowercased, non-alphanumeric stripped) substring so name variants collapse.
+    """
+
+    @pytest.mark.parametrize(
+        "company_name",
+        [
+            "JPMorgan Chase",
+            "J.P. Morgan",
+            "JPMorgan",
+            "JPMorgan - XML",  # the real variant the operator hit
+            "JPMORGAN CHASE & CO.",
+            "Bank of America",
+            "BofA",
+            "BofA Securities",
+            "Capital One",
+            "Capital One Financial Corp",
+        ],
+    )
+    def test_blocklist_matches_normalized_variants(self, company_name: str) -> None:
+        result = apply_hard_rules(
+            _posting(canonical_company_name=company_name),
+            target_company=None,
+        )
+        assert result.failed_rule == "company_blocklist"
+
+    def test_blocklist_against_target_company_name(self) -> None:
+        """Match via target_company.name when the canonical name is innocuous."""
+        result = apply_hard_rules(
+            _posting(canonical_company_name="Unrelated"),
+            _target(name="J.P. Morgan Securities"),
+        )
+        assert result.failed_rule == "company_blocklist"
+
+    def test_clean_company_name_does_not_match(self) -> None:
+        result = apply_hard_rules(
+            _posting(canonical_company_name="FreshCorp"),
+            _target(name="FreshCorp"),
+        )
+        assert result.passed is True
+
+    def test_bare_token_does_not_overmatch(self) -> None:
+        """A posting under the bare retail brand "Chase" must NOT be caught —
+        the blocklist deliberately uses full names to avoid over-matching."""
+        result = apply_hard_rules(
+            _posting(canonical_company_name="Chase Field Services"),
+            target_company=None,
+        )
+        assert result.passed is True
+
+    @pytest.mark.parametrize(
+        "company_name",
+        [
+            # "bofa" appears inside the collapsed form of all three, but never
+            # aligned to word boundaries — the match must not bleed across words.
+            "Lab of America",
+            "Club of America Holdings",
+            "Hub of Africa",
+        ],
+    )
+    def test_short_entry_does_not_match_across_word_boundaries(self, company_name: str) -> None:
+        """Entry "BofA" collapses to "bofa"; without boundary alignment it
+        would substring-match "Lab of America" → "labofamerica". The match
+        must start AND end on a word boundary of the posting's name."""
+        result = apply_hard_rules(
+            _posting(canonical_company_name=company_name),
+            target_company=None,
+        )
+        assert result.passed is True
+
+    def test_custom_company_blocklist_overrides_default(self) -> None:
+        cfg = HardRuleConfig(company_blocklist=("Globex",))
+        # A default-blocklisted employer now passes (custom list replaced it)...
+        assert (
+            apply_hard_rules(
+                _posting(canonical_company_name="JPMorgan"), _target(), None, cfg
+            ).passed
+            is True
+        )
+        # ...and the custom entry is caught (normalized match).
+        assert (
+            apply_hard_rules(
+                _posting(canonical_company_name="Globex - APAC"), _target(), None, cfg
+            ).failed_rule
+            == "company_blocklist"
+        )
 
 
 class TestGeo:
@@ -313,6 +403,120 @@ class TestRemoteKind:
         assert _remote_kind(location) == "not_remote", location
 
 
+class TestAnalystGeo:
+    """business_analyst/financial_analyst geo expansion — the analyst geo
+    rule REPLACES geo_whitelist for these two families (does not stack)."""
+
+    @pytest.mark.parametrize("family", [RoleFamily.business_analyst, RoleFamily.financial_analyst])
+    def test_analyst_remote_us_passes(self, family: RoleFamily) -> None:
+        # (a) analyst + remote US → pass.
+        posting = _posting(
+            role_family=family,
+            remote_type=RemoteType.remote,
+            location_raw="Remote - US",
+            locations_normalized=None,
+        )
+        result = apply_hard_rules(posting, _target())
+        assert result.passed is True
+
+    def test_analyst_remote_non_us_fails(self) -> None:
+        # (b) analyst + remote non-US → fail.
+        posting = _posting(
+            role_family=RoleFamily.business_analyst,
+            remote_type=RemoteType.remote,
+            location_raw="Remote - India",
+            locations_normalized=None,
+        )
+        result = apply_hard_rules(posting, _target())
+        assert result.passed is False
+        assert result.failed_rule == "analyst_geo"
+
+    def test_analyst_hybrid_des_moines_passes(self) -> None:
+        # (c) analyst + hybrid Des Moines → pass.
+        posting = _posting(
+            role_family=RoleFamily.financial_analyst,
+            remote_type=RemoteType.hybrid,
+            location_raw="Des Moines, IA",
+            locations_normalized=None,
+        )
+        result = apply_hard_rules(posting, _target())
+        assert result.passed is True
+
+    def test_analyst_hybrid_west_des_moines_passes(self) -> None:
+        # (d) analyst + hybrid West Des Moines → pass.
+        posting = _posting(
+            role_family=RoleFamily.business_analyst,
+            remote_type=RemoteType.hybrid,
+            location_raw="West Des Moines, IA",
+            locations_normalized=None,
+        )
+        result = apply_hard_rules(posting, _target())
+        assert result.passed is True
+
+    def test_analyst_onsite_nyc_fails_with_analyst_geo_reason(self) -> None:
+        # (e) analyst + onsite NYC → fail with reason 'analyst_geo'.
+        posting = _posting(
+            role_family=RoleFamily.business_analyst,
+            remote_type=RemoteType.onsite,
+            location_raw="New York, NY",
+            locations_normalized=None,
+        )
+        result = apply_hard_rules(posting, _target())
+        assert result.passed is False
+        assert result.failed_rule == "analyst_geo"
+
+    def test_pm_onsite_nyc_still_passes_via_existing_whitelist(self) -> None:
+        # (f) PM + onsite NYC → still passes (existing whitelist unchanged).
+        posting = _posting(
+            role_family=RoleFamily.product_management,
+            remote_type=RemoteType.onsite,
+            location_raw="New York, NY",
+            locations_normalized=None,
+        )
+        result = apply_hard_rules(posting, _target())
+        assert result.passed is True
+
+    def test_analyst_onsite_des_moines_mixed_with_sf_passes_any_match(self) -> None:
+        # (g) analyst + onsite Des Moines mixed with SF → pass (any-match).
+        posting = _posting(
+            role_family=RoleFamily.financial_analyst,
+            remote_type=RemoteType.onsite,
+            location_raw="San Francisco, CA",
+            locations_normalized=[
+                {"city": "San Francisco", "region": "CA"},
+                {"city": "Des Moines", "region": "IA"},
+            ],
+        )
+        result = apply_hard_rules(posting, _target())
+        assert result.passed is True
+
+    def test_analyst_geo_reads_locations_normalized_when_location_raw_absent(self) -> None:
+        """The location_raw fallback: an adapter that only populates
+        locations_normalized (no location_raw) still matches Des Moines."""
+        posting = _posting(
+            role_family=RoleFamily.business_analyst,
+            remote_type=RemoteType.onsite,
+            location_raw=None,
+            locations_normalized=[{"city": "Ankeny", "region": "IA"}],
+        )
+        result = apply_hard_rules(posting, _target())
+        assert result.passed is True
+
+    def test_pm_family_never_hits_analyst_branch(self) -> None:
+        """A PM posting with an otherwise-analyst-passing location (Des
+        Moines) but outside the PM whitelist still fails geo_whitelist —
+        proves the family branch, not the location, decides the path."""
+        posting = _posting(
+            role_family=RoleFamily.product_management,
+            remote_type=RemoteType.onsite,
+            location_raw="Ankeny, IA",
+            locations_normalized=None,
+        )
+        result = apply_hard_rules(posting, _target())
+        assert result.passed is False
+        assert result.failed_rule == "geo_whitelist"
+
+
 class TestSalaryFloor:
     def test_under_floor_blocks(self) -> None:
         posting = _posting(salary_max=70_000)
@@ -439,6 +643,16 @@ class TestDefaults:
             "Randstad",
         ):
             assert expected_firm in cfg.staffing_firm_blocklist
+        # Company blocklist carries the initial dead-end employers.
+        for expected_company in (
+            "JPMorgan Chase",
+            "J.P. Morgan",
+            "JPMorgan",
+            "Bank of America",
+            "BofA",
+            "Capital One",
+        ):
+            assert expected_company in cfg.company_blocklist
 
 
 # ── Config tunability ─────────────────────────────────────────────────────────
@@ -554,6 +768,7 @@ class TestHardRuleConfigFromProfile:
             "applicant_cap": 400,
             "seniority_levels_included": ["senior_pm", "lead_pm"],
             "staffing_firm_blocklist": ["Robert Half"],
+            "company_blocklist": ["JPMorgan"],
             "created_at": now,
             "updated_at": now,
         }
@@ -570,6 +785,7 @@ class TestHardRuleConfigFromProfile:
         assert cfg.geo_whitelist == ("Remote", "NYC")
         assert cfg.seniority_levels_included == ("senior_pm", "lead_pm")
         assert cfg.staffing_firm_blocklist == ("Robert Half",)
+        assert cfg.company_blocklist == ("JPMorgan",)
 
     def test_null_ceiling_and_seniority_map_to_none_and_empty(self) -> None:
         from job_assist.triage.config import hard_rule_config_from_profile

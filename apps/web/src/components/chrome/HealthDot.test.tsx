@@ -19,6 +19,7 @@ function makeHealth(over: Partial<IngestHealth> = {}): IngestHealth {
       gmail_healthy: true,
       warm_path_fresh: true,
       wellfound_fresh: true,
+      msft_canary_healthy: true,
     },
     metrics: {
       last_success_at: '2026-06-07T22:00:00Z',
@@ -49,6 +50,11 @@ function makeHealth(over: Partial<IngestHealth> = {}): IngestHealth {
       wellfound_companies: 0,
       wellfound_last_swept_at: null,
       wellfound_stale_days: 3,
+      msft_canary_last_checked_at: '2026-06-07T21:00:00Z',
+      msft_canary_last_status: 'ok',
+      msft_canary_last_detail: null,
+      msft_canary_matched_count: 6,
+      msft_canary_stale_hours: 26,
     },
     ...over,
   };
@@ -82,6 +88,7 @@ describe('HealthDotView', () => {
         gmail_healthy: true,
         warm_path_fresh: true,
         wellfound_fresh: true,
+        msft_canary_healthy: true,
       },
     });
     render(<HealthDotView state="degraded" health={health} isError={false} />);
@@ -108,6 +115,7 @@ describe('HealthDotView', () => {
         gmail_healthy: true,
         warm_path_fresh: true,
         wellfound_fresh: true,
+        msft_canary_healthy: true,
       },
     });
     render(<HealthDotView state="down" health={health} isError={false} />);
@@ -136,6 +144,7 @@ describe('HealthDotView', () => {
         gmail_healthy: false,
         warm_path_fresh: true,
         wellfound_fresh: true,
+        msft_canary_healthy: true,
       },
     });
     render(<HealthDotView state="degraded" health={health} isError={false} />);
@@ -157,6 +166,7 @@ describe('HealthDotView', () => {
         gmail_healthy: true,
         warm_path_fresh: true,
         wellfound_fresh: false,
+        msft_canary_healthy: true,
       },
     });
     render(<HealthDotView state="degraded" health={health} isError={false} />);
@@ -219,6 +229,7 @@ describe('HealthDotView', () => {
         gmail_healthy: true,
         warm_path_fresh: true,
         wellfound_fresh: true,
+        msft_canary_healthy: true,
       },
     });
     render(<HealthDotView state="degraded" health={health} isError={false} />);

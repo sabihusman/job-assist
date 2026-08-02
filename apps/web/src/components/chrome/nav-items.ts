@@ -12,6 +12,8 @@ import {
   XCircle,
 } from 'lucide-react';
 
+import { resolveRoleFamilies } from '@/lib/triage/filters';
+
 /**
  * Primary nav inventory. Outreach is intentionally absent — stripped
  * for v1 per the spec. The Triage badge count was a placeholder in
@@ -87,7 +89,16 @@ export const SAVED_FILTERS: readonly SavedFilter[] = [
     slug: 't1-remote-not-reviewed',
     label: 'T1 · Remote · Not reviewed',
     href: '/?tier=1&remote_type=remote&state=triage',
-    filterParams: { tier: [1], remote_type: ['remote'], state: ['triage'] },
+    // Bug fix: the Triage page this row links to has no explicit
+    // ?role_family= param, so parseFilters defaults pm_only=true and the
+    // page narrows to PM/PO. Resolve the same default here so the badge
+    // count matches what the opened view actually shows.
+    filterParams: {
+      tier: [1],
+      remote_type: ['remote'],
+      state: ['triage'],
+      role_family: resolveRoleFamilies({}),
+    },
   },
   {
     slug: 't1-t2-pm',
@@ -103,9 +114,12 @@ export const SAVED_FILTERS: readonly SavedFilter[] = [
     slug: 'snoozed-7d',
     label: 'Snoozed > 7d',
     href: '/?state=snoozed&include_snoozed_past_only=true',
+    // Bug fix: same PM/PO-default mismatch as the row above — no explicit
+    // role_family in the URL means the Triage page narrows to PM/PO.
     filterParams: {
       state: ['snoozed'],
       include_snoozed_past_only: true,
+      role_family: resolveRoleFamilies({}),
     },
   },
 ] as const;

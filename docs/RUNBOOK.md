@@ -524,3 +524,25 @@ Hit the endpoint manually with `curl` first. Most likely causes:
 - Company not on this ATS — verify board URL in browser
 - Company changed their board slug — update `target_company.source_handle`
 - ATS rate limit — backoff and retry
+
+### Microsoft Careers canary
+
+`adapters/microsoft.py` is a native, single-tenant, query-driven adapter for
+`apply.careers.microsoft.com` (not a standard company-keyed ATS board — see
+the module docstring for the full API contract). It needs a seeded
+`target_company` row (`ats='microsoft'`, `ats_handle='microsoft'` — the
+handle is a constant, not a real per-tenant key) to ride the daily curated
+plan like Greenhouse/Lever/Ashby.
+
+Separately from the real ingest, a dedicated lightweight canary (one
+"product manager" search call) runs as its own step in `ingest-daily.yml` and
+feeds `GET /admin/ingest/health`'s `msft_canary_healthy` check (26h staleness
+window). Trigger it manually:
+
+```bash
+curl -X POST -H "Authorization: Bearer $API_AUTH_TOKEN" \
+     "$API_URL/admin/ingest/microsoft/canary"
+```
+
+The response's `status` is one of `ok` / `endpoint_failure` / `schema_drift` /
+`zero_results` — see `services/microsoft_canary.py` for what each means.

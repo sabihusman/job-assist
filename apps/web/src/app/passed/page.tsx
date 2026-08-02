@@ -1,11 +1,9 @@
 'use client';
 
-import { useState } from 'react';
-
 import { AppShell } from '@/components/chrome/AppShell';
 import { PassedRow } from '@/components/passed/PassedRow';
 import { API_BASE_URL } from '@/lib/api/client';
-import { usePassedPostings } from '@/lib/api/state-views';
+import { usePassedPostingsInfinite } from '@/lib/api/state-views';
 
 /**
  * /passed (PR #50).
@@ -15,11 +13,11 @@ import { usePassedPostings } from '@/lib/api/state-views';
  * not_interested, newest first (the endpoint's default sort).
  * No filter chips, no sort dropdown — strip per the PR brief.
  *
- * Pagination (PR #66 / Bestiary 5.11): page 1 (100 rows) renders
- * unconditionally; a second hook instance fires only when the operator
- * clicks Load More, and its items concatenate onto page 1. Mirrors
- * ``OutreachTimeline.tsx``. No URL persistence — refresh resets to
- * page 1 (decision (a) per the PR brief).
+ * Pagination (PR #66 / Bestiary 5.11, migrated fix/audit #5): backed by
+ * ``usePassedPostingsInfinite`` (a ``useInfiniteQuery`` accumulator, same
+ * pattern as the main Triage list) so a second Load More click appends
+ * rather than replacing the first extra page. No URL persistence —
+ * refresh resets to page 1 (decision (a) per the PR brief).
  */
 export default function PassedPage() {
   return (
@@ -30,31 +28,21 @@ export default function PassedPage() {
 }
 
 function PassedPageInner() {
-  const page1 = usePassedPostings();
+  const query = usePassedPostingsInfinite();
 
-  // Operator-driven extra pages. ``extraOffset`` is the offset of the
-  // most recently requested additional page. Clicking Load More
-  // advances it to the current ``items.length``. The query is gated
-  // by ``enabled`` so it only fires after the first click.
-  const [extraOffset, setExtraOffset] = useState<number | null>(null);
-  const extra = usePassedPostings(extraOffset ?? 0, extraOffset !== null);
-
-  const page1Items = page1.data?.items ?? [];
-  const items =
-    extraOffset !== null && extra.data ? [...page1Items, ...extra.data.items] : page1Items;
-  const total = page1.data?.total ?? 0;
-  const hasMore = total > items.length;
+  const items = query.items;
+  const total = query.total;
+  const hasMore = query.hasNextPage ?? total > items.length;
 
   // Any non-2xx surfaces a deliberate error card. Bestiary 5.11.
-  const isError = page1.isError || extra.isError;
-  const errorMsg =
-    (page1.error as Error)?.message ?? (extra.error as Error)?.message ?? 'Unknown error';
+  const isError = query.isError;
+  const errorMsg = (query.error as Error)?.message ?? 'Unknown error';
 
   return (
     <div className="flex min-w-0 flex-col gap-4 px-4 py-4 md:px-6">
       <div className="flex items-center justify-between">
         <p className="text-[13px] text-muted-foreground">
-          {page1.data ? `${items.length} of ${total} passed` : '…'}
+          {query.data ? `${items.length} of ${total} passed` : '…'}
         </p>
         {/* feat/view-exports: server-side export, Triage-style. The list is
             server-paginated, so the endpoint (same shared query builder as
@@ -74,8 +62,8 @@ function PassedPageInner() {
       </div>
 
       {isError ? (
-        <ErrorCard message={errorMsg} onRetry={() => page1.refetch()} />
-      ) : page1.isLoading ? (
+        <ErrorCard message={errorMsg} onRetry={() => query.refetch()} />
+      ) : query.isLoading ? (
         <LoadingSkeleton />
       ) : items.length === 0 ? (
         <EmptyState />
@@ -89,11 +77,13 @@ function PassedPageInner() {
           {hasMore && (
             <button
               type="button"
-              onClick={() => setExtraOffset(items.length)}
-              disabled={extra.isLoading}
+              onClick={() => query.fetchNextPage()}
+              disabled={query.isFetchingNextPage}
               className="self-center rounded-md border border-border bg-surface px-3 py-1 text-[12px] hover:bg-accent disabled:opacity-50"
             >
-              {extra.isLoading ? 'Loading…' : `Load more (${total - items.length} remaining)`}
+              {query.isFetchingNextPage
+                ? 'Loading…'
+                : `Load more (${total - items.length} remaining)`}
             </button>
           )}
         </>

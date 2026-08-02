@@ -92,6 +92,21 @@ jobs:
             "$API_URL/admin/ingest/wellfound?role=product-manager&page_limit=1") || true
           echo "$resp" | python3 -m json.tool || echo "$resp"
 
+      # directive-B, Phase 3: ONE lightweight live call (the "product manager"
+      # search page), deliberately separate from the real paginated Microsoft
+      # ingest above (which is folded into the curated plan loop via
+      # _DIRECT_PLAN_ATS). This is what GET /admin/ingest/health's
+      # msft_canary_healthy check reads — see main.py::ingest_health. ``||
+      # true`` matches the Wellfound step: a single HTTP hiccup here shouldn't
+      # fail the whole daily run; the canary's own 26h staleness window is the
+      # real alarm.
+      - name: Microsoft Careers canary
+        run: |
+          resp=$(curl -sS --max-time 30 -X POST \
+            -H "Authorization: Bearer $API_AUTH_TOKEN" \
+            "$API_URL/admin/ingest/microsoft/canary") || true
+          echo "$resp" | python3 -m json.tool || echo "$resp"
+
       # Mark postings stale AFTER the board loop, so every still-live posting
       # has had its last_seen_at refreshed this run first. Postings not seen
       # in 7+ days get closed_at set and drop out of the default Triage view

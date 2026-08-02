@@ -32,6 +32,7 @@ full handle volume needs it.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel
@@ -41,10 +42,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from job_assist.adapters.base import Adapter, HandleNotFoundError
 from job_assist.db.enums import ATS
 from job_assist.db.models import DiscoveredHandle, JobPosting, TargetCompany
-from job_assist.gmail.backfill import _normalize_company
 from job_assist.services.ingestion import IngestionService
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_company_strict(name: str) -> str:
+    """Lowercase + punctuation/whitespace folding only — NO corporate/
+    recruiting-suffix stripping.
+
+    Used for authoritative handle -> ``target_company`` linking in
+    ``_ensure_shell_company``. ``gmail.backfill._normalize_company`` also
+    strips suffixes like "group"/"co"/"team"/"talent" for fuzzy-matching
+    noisy email-subject text to a company, which is too aggressive here:
+    two genuinely distinct employers whose names differ only by such a
+    suffix (e.g. "Acme" vs "Acme Group") would otherwise collapse to the
+    same key and a newly-discovered handle could get silently attached to
+    the wrong existing ``target_company`` row.
+    """
+    return re.sub(r"[^\w]+", "", name).lower()
+
 
 # Only these ATSes are swept in the broad trial. Workday + iCIMS need
 # per-tenant adapter_config (wd_number/site, or careers_url) that a
@@ -222,12 +239,12 @@ async def _ensure_shell_company(session: AsyncSession, *, ats: str, handle: str)
     # misses it, and a fresh insert would collide on UNIQUE(name). Resolve to a
     # LINK: attach this handle/ats to the existing row (promoting it so its
     # postings join) and skip the insert.
-    norm = _normalize_company(candidate_name)
+    norm = _normalize_company_strict(candidate_name)
     if norm:
         same_name = [
             r
             for r in (await session.execute(select(TargetCompany))).scalars().all()
-            if _normalize_company(r.name) == norm
+            if _normalize_company_strict(r.name) == norm
         ]
         if same_name:
             row = same_name[0]

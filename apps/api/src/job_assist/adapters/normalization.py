@@ -310,14 +310,21 @@ def parse_compensation(
         return None, None, None, None
 
     s = summary.strip()
-    hourly = bool(_COMP_HOURLY_RE.search(s))
-    period = "hourly" if hourly else "annual"
-    lo_bound, hi_bound = (_HOURLY_MIN, _HOURLY_MAX) if hourly else (_ANNUAL_MIN, _ANNUAL_MAX)
 
-    # Candidate = (lo, hi, currency, is_range, order). Collect every parseable
-    # range/value, then pick the best one (a real range, USD, earliest).
-    candidates: list[tuple[int, int, str, bool, int]] = []
+    # Candidate = (lo, hi, currency, is_range, order, period). Collect every
+    # parseable range/value, then pick the best one (a real range, USD,
+    # earliest). Greenhouse feeds the WHOLE JD body here (not just a comp
+    # line), so a single whole-string hourly/annual determination is wrong
+    # when the JD ALSO mentions an incidental hourly figure elsewhere (e.g.
+    # an on-call stipend) alongside a real annual band. Hourly-vs-annual (and
+    # its magnitude bounds) must therefore be decided PER CANDIDATE MATCH,
+    # from that match's own trailing unit, not once globally.
+    candidates: list[tuple[int, int, str, bool, int, str]] = []
     for order, m in enumerate(_COMP_RANGE_RE.finditer(s)):
+        match_text = m.group(0)
+        hourly = bool(_COMP_HOURLY_RE.search(match_text))
+        period = "hourly" if hourly else "annual"
+        lo_bound, hi_bound = (_HOURLY_MIN, _HOURLY_MAX) if hourly else (_ANNUAL_MIN, _ANNUAL_MAX)
         try:
             floor = int(float(m.group("floor").replace(",", "")) * _suffix_mult(m.group("fsuf")))
         except ValueError:
@@ -348,7 +355,7 @@ def parse_compensation(
             continue
         if lo > 0 and hi / lo > _MAX_RANGE_RATIO:
             continue
-        candidates.append((lo, hi, currency, is_range, order))
+        candidates.append((lo, hi, currency, is_range, order, period))
 
     if not candidates:
         return None, None, None, None
@@ -356,5 +363,5 @@ def parse_compensation(
     # Prefer a real range over a lone number; then USD over other currencies;
     # then the earliest occurrence (the comp range usually leads the JD).
     candidates.sort(key=lambda c: (not c[3], c[2] != "USD", c[4]))
-    lo, hi, currency, _is_range, _order = candidates[0]
+    lo, hi, currency, _is_range, _order, period = candidates[0]
     return lo, hi, currency, period

@@ -29,7 +29,14 @@ const REASON_LABEL: Record<ActionReason, string> = REASON_CHOICES.reduce(
     acc[c.reason] = c.label;
     return acc;
   },
-  {} as Record<ActionReason, string>,
+  {
+    // business_analyst/financial_analyst geo expansion: a system-generated
+    // hard-gate verdict (triage/hard_rules.py 'analyst_geo'), not an
+    // operator-picked reason — display-only, deliberately NOT added to
+    // ReasonPicker's REASON_CHOICES (no free hotkey slot; the pass-reason
+    // feedback pipeline that would auto-write it is inert).
+    analyst_geo: 'Analyst geo',
+  } as Record<ActionReason, string>,
 );
 
 export function PassedRow({ posting }: { posting: PostingListItem }) {

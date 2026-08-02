@@ -50,3 +50,8 @@ export type OutcomesListResponse = {
 };
 
 export type AppliedSort = 'applied' | 'stage' | 'tier';
+
+// Bug fix: validate ?sort= from the URL against this set before casting
+// (mirrors lib/triage/filters.ts's VALID_SORT pattern) — an unrecognized
+// value must fall back to the default, not silently degrade to unsorted.
+export const VALID_APPLIED_SORT = new Set<AppliedSort>(['applied', 'stage', 'tier']);

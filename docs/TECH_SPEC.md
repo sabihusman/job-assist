@@ -1,6 +1,6 @@
 # Job Assist — Technical Specification
 
-_Last updated: 2026-06-10 · Reflects `main` through #184 (Gmail sweep health check)._
+_Last updated: 2026-06-30 · Baseline reflects `main` through #184 (Gmail sweep health check); §4–§5.3 refreshed for the staffing-firm and employer `company_blocklist` hard rules._
 
 A single-operator job-search aggregation and triage system. It crawls ATS job
 boards, enriches and scores postings with an LLM, surfaces a keyboard-driven
@@ -93,7 +93,7 @@ Alembic migrations (`apps/api/migrations/versions/`).
 | **gmail_sweep_run** | Audit log per Gmail poll/backfill sweep (kind, started/finished, status, counts) — powers the Gmail health check + last-sweep runtime. |
 | **contact** / **outreach_message** | Networking contacts and outreach log. |
 | **closed_channel** | Records a company/role channel the operator closed, with reason. |
-| **operator_profile** | Singleton (id=1): geo whitelist, seniority bands, `similarity_weight` (semantic sort blend) + `applied_corpus_weight` (Phase-A3 revealed-preference boost), `looking_for_text`/`looking_for_embedding` — drives hard-rule filtering and scoring. |
+| **operator_profile** | Singleton (id=1): geo whitelist, seniority bands, salary floor, applicant cap, `staffing_firm_blocklist` + `company_blocklist` (the two substring employer blocklists), `similarity_weight` (semantic sort blend) + `applied_corpus_weight` (Phase-A3 revealed-preference boost), `looking_for_text`/`looking_for_embedding` — drives hard-rule filtering and scoring. |
 | **triage_result** | Cached hard-rule/scoring evaluation per posting (dormant — the live decomposition lives on `job_posting.score_components`). |
 
 ### Key invariants
@@ -153,10 +153,20 @@ Alembic migrations (`apps/api/migrations/versions/`).
 - `best_fit_semantic` sort blends `fit_score` with calibrated cosine similarity
   behind `operator_profile.similarity_weight` (0 = off) — a separate *sort* knob
   from the A3 *score* boost.
-- `triage/hard_rules.py` applies reversible hard rules (geo whitelist, seniority
-  bands, PM/PO gate) built from the operator profile. The geo gate passes
-  US/unspecified-remote (`_remote_kind`) while still failing region-qualified
-  non-US remote.
+- `triage/hard_rules.py` applies reversible hard rules built from the operator
+  profile, short-circuiting at the first failure in priority order: closed-channel,
+  PM/PO role gate, `staffing_firm` blocklist, `company_blocklist` (employers), geo
+  whitelist, salary floor, applicant cap. The geo gate passes US/unspecified-remote
+  (`_remote_kind`) while still failing region-qualified non-US remote. The two
+  blocklists are substring tests: `staffing_firm` is case-insensitive on the raw
+  name; `company_blocklist` matches on a **normalized** form (lowercased,
+  non-alphanumeric stripped) so employer variants collapse — "J.P. Morgan",
+  "JPMorgan - XML", "JPMorgan Chase & Co." all match a "JPMorgan" entry — with
+  the match required to align to word boundaries of the posting's name, so a
+  short entry like "BofA" can't bleed across words ("Lab of America"). A failed
+  rule stamps `job_posting.hard_rule_failed` (hides the row by default; recoverable
+  via `?include_filtered=true`) — no row deletion. See
+  [ADR-008](DECISIONS.md) / [ADR-013](DECISIONS.md).
 
 ### 5.4 Gmail outcomes pipeline
 - OAuth via stored refresh token; `gmail/backfill.py` runs `run_backfill` (wide

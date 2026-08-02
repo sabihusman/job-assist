@@ -85,6 +85,28 @@ class HardRuleConfig:
         )
     )
 
+    # Substring blocklist for dead-end EMPLOYER canonical company names —
+    # distinct from the staffing-firm list (parallel rule, same mechanism).
+    # Unlike the staffing match, this is matched on a NORMALIZED form
+    # (lowercased, all non-alphanumeric stripped) so company name variants
+    # collapse: "J.P. Morgan", "JPMorgan - XML", "JPMorgan Chase & Co." all
+    # match a "JPMorgan" / "JPMorgan Chase" entry. Matches must align to word
+    # boundaries of the posting's name, so a short entry like "BofA" cannot
+    # bleed across words ("Lab of America" → "labofamerica" is NOT a hit).
+    # Entries are FULL company names, never bare tokens (e.g. not "Chase"),
+    # to avoid over-matching.
+    # Operator-extensible via PUT /operator/profile.
+    company_blocklist: tuple[str, ...] = field(
+        default=(
+            "JPMorgan Chase",
+            "J.P. Morgan",
+            "JPMorgan",
+            "Bank of America",
+            "BofA",
+            "Capital One",
+        )
+    )
+
 
 def hard_rule_config_from_profile(profile: OperatorProfile) -> HardRuleConfig:
     """Build a :class:`HardRuleConfig` from the singleton OperatorProfile row.
@@ -103,4 +125,5 @@ def hard_rule_config_from_profile(profile: OperatorProfile) -> HardRuleConfig:
         geo_whitelist=tuple(profile.geo_whitelist or ()),
         applicant_cap=profile.applicant_cap,
         staffing_firm_blocklist=tuple(profile.staffing_firm_blocklist or ()),
+        company_blocklist=tuple(profile.company_blocklist or ()),
     )

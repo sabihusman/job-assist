@@ -208,10 +208,10 @@ def ingest(
     asyncio.run(_ingest_async(ats, handle, all_companies))
 
 
-# PR #55: iCIMS joined the set. Keep in sync with ``_INGESTABLE_ATS`` and
-# ``_SUPPORTED`` in main.py — see the TODO(adapter-dispatch-drift) tag
-# above the former.
-_SUPPORTED_ATS = {"greenhouse", "lever", "ashby", "workday", "icims"}
+# PR #55: iCIMS joined the set; directive B added Microsoft. Keep in sync
+# with ``_INGESTABLE_ATS`` and ``_SUPPORTED`` in main.py — see the
+# TODO(adapter-dispatch-drift) tag above the former.
+_SUPPORTED_ATS = {"greenhouse", "lever", "ashby", "workday", "icims", "microsoft"}
 
 
 async def _ingest_async(ats: str, handle: str | None, all_companies: bool) -> None:
@@ -256,6 +256,10 @@ async def _ingest_async(ats: str, handle: str | None, all_companies: bool) -> No
         # ``adapter_config`` (optional ``careers_url`` override) lives
         # on each target_company row.
         adapter = None
+    elif ats == "microsoft":
+        from job_assist.adapters.microsoft import MicrosoftCareersAdapter
+
+        adapter = MicrosoftCareersAdapter()
     else:  # pragma: no cover — guarded by _SUPPORTED_ATS above
         raise typer.Exit(1)
 

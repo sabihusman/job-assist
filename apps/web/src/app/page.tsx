@@ -260,11 +260,22 @@ function TriagePageInner() {
                   ? {
                       label: 'Undo',
                       onClick: () =>
-                        bulkAction.mutate({
-                          postingIds: ids,
-                          action_type: 'reset',
-                          reason: null,
-                        }),
+                        bulkAction.mutate(
+                          {
+                            postingIds: ids,
+                            action_type: 'reset',
+                            reason: null,
+                          },
+                          {
+                            onSuccess: (undoRes) => {
+                              const undoSkipped = undoRes.failed
+                                ? ` (${undoRes.failed} skipped)`
+                                : '';
+                              toast.success(`✓ Undone ${undoRes.succeeded}${undoSkipped}`);
+                            },
+                            onError: (err) => showErrorToast(err, "Couldn't undo — try refreshing"),
+                          },
+                        ),
                     }
                   : undefined,
             });

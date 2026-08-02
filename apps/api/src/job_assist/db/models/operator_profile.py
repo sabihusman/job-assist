@@ -82,6 +82,13 @@ class OperatorProfile(Base):
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
 
+    # Mirrors HardRuleConfig.company_blocklist — dead-end EMPLOYER names,
+    # distinct from staffing firms. Normalized-substring matched in
+    # apply_hard_rules; seeded with the initial defaults by the migration.
+    company_blocklist: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+
     # ── Semantic profile embedding (slice 1, feat/embeddings-slice1) ─────
     # gemini-embedding-001 (768-dim) vector of ``looking_for_text``. Re-embedded on
     # PUT /operator/profile when the text changes (hash-gated). NULL until

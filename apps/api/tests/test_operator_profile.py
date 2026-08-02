@@ -50,6 +50,14 @@ _SEED_STAFFING_FIRM_BLOCKLIST = [
     "Kforce",
     "Adecco",
 ]
+_SEED_COMPANY_BLOCKLIST = [
+    "JPMorgan Chase",
+    "J.P. Morgan",
+    "JPMorgan",
+    "Bank of America",
+    "BofA",
+    "Capital One",
+]
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -70,13 +78,15 @@ async def reset_operator_profile(db_session: Any) -> Any:
                    salary_floor_usd = 85000,
                    applicant_cap = 500,
                    applied_corpus_weight = 0,
-                   staffing_firm_blocklist = CAST(:blocklist AS jsonb)
+                   staffing_firm_blocklist = CAST(:blocklist AS jsonb),
+                   company_blocklist = CAST(:company AS jsonb)
              WHERE id = 1
             """
         ),
         {
             "geo": json.dumps(_SEED_GEO_WHITELIST),
             "blocklist": json.dumps(_SEED_STAFFING_FIRM_BLOCKLIST),
+            "company": json.dumps(_SEED_COMPANY_BLOCKLIST),
         },
     )
     await db_session.commit()
@@ -124,6 +134,7 @@ async def test_migration_seeds_row(db_session: Any, reset_operator_profile: Any)
     assert body["salary_floor_usd"] == 85_000
     assert body["applicant_cap"] == 500
     assert body["staffing_firm_blocklist"] == _SEED_STAFFING_FIRM_BLOCKLIST
+    assert body["company_blocklist"] == _SEED_COMPANY_BLOCKLIST
     assert "created_at" in body and "updated_at" in body
 
 
@@ -164,6 +175,7 @@ async def test_put_partial_update(db_session: Any, reset_operator_profile: Any) 
     assert body["salary_floor_usd"] == 85_000
     assert body["applicant_cap"] == 500
     assert body["staffing_firm_blocklist"] == _SEED_STAFFING_FIRM_BLOCKLIST
+    assert body["company_blocklist"] == _SEED_COMPANY_BLOCKLIST
 
 
 @_NEEDS_DB
@@ -220,6 +232,24 @@ async def test_put_dedupes_geo_whitelist(db_session: Any, reset_operator_profile
 
     assert resp.status_code == 200
     assert resp.json()["geo_whitelist"] == ["Remote", "Austin"]
+
+
+@_NEEDS_DB
+async def test_put_extends_company_blocklist(db_session: Any, reset_operator_profile: Any) -> None:
+    """The operator can extend the company blocklist over time via PUT;
+    it round-trips and is cleaned (trim + dedupe) like the other list fields."""
+    ac = await _client(db_session)
+    try:
+        async with ac:
+            resp = await ac.put(
+                "/operator/profile",
+                json={"company_blocklist": ["JPMorgan", "  JPMorgan  ", "Wells Fargo"]},
+            )
+    finally:
+        await _drop_override()
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["company_blocklist"] == ["JPMorgan", "Wells Fargo"]
 
 
 @_NEEDS_DB

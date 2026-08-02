@@ -54,5 +54,14 @@
     "role_filter": null,
     "domain": null,
     "notes": "iCIMS adapter_config is optional — only set careers_url when the board is NOT at the default https://careers-{ats_handle}.icims.com."
+  },
+  {
+    "name": "Microsoft",
+    "tier": 1,
+    "ats": "microsoft",
+    "ats_handle": "microsoft",
+    "role_filter": null,
+    "domain": "microsoft.com",
+    "notes": "Single-tenant native adapter (adapters/microsoft.py) — ats_handle is a constant, not a real per-tenant lookup key; the adapter always searches apply.careers.microsoft.com regardless of its value. Required so this row surfaces via GET /admin/ingest/plan and rides the daily curated cron like Greenhouse/Lever/Ashby."
   }
 ]
