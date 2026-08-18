@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { SettingsRow, SettingsSection } from '@/components/settings/layout';
 import { TagInput } from '@/components/shared/TagInput';
 import { useUpdateProfile } from '@/lib/api/settings';
+import { type PendingField, markPending } from '@/lib/settings/pendingRequeue';
 import type { OperatorProfileRead, OperatorProfileUpdate } from '@/lib/settings/types';
 
 /**
@@ -25,7 +26,7 @@ type ProfileFormState = {
 };
 
 export function ProfileSection({ profile }: { profile: OperatorProfileRead }) {
-  const { handleSubmit, control, register, formState } = useForm<ProfileFormState>({
+  const { handleSubmit, control, register, formState, reset } = useForm<ProfileFormState>({
     defaultValues: {
       looking_for_text: profile.looking_for_text,
       role_keywords: profile.role_keywords,
@@ -40,8 +41,17 @@ export function ProfileSection({ profile }: { profile: OperatorProfileRead }) {
       role_keywords: values.role_keywords,
       geo_whitelist: values.geo_whitelist,
     };
+    // Part B: capture which stale-on-save fields this save touches BEFORE the
+    // reset below re-baselines dirtyFields. looking_for_text is exempt — its
+    // save-hook re-embeds and rescores automatically.
+    const pendingSaved: PendingField[] = [];
+    if (formState.dirtyFields.role_keywords) pendingSaved.push('role_keywords');
+    if (formState.dirtyFields.geo_whitelist) pendingSaved.push('geo_whitelist');
     try {
       const saved = await update.mutateAsync(body);
+      markPending(pendingSaved);
+      // Re-baseline so a later text-only save doesn't re-flag the lists.
+      reset(values);
       // D1 (D-SETTINGS-REWIRE): report the embedding side effect accurately —
       // the vector is rewritten only when looking_for_text actually changed,
       // and the backend now surfaces embed/rescore failures instead of

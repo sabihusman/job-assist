@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { ConfirmRulesModal, type RuleChange } from '@/components/settings/ConfirmRulesModal';
 import { SettingsRow, SettingsSection } from '@/components/settings/layout';
 import { useUpdateProfile } from '@/lib/api/settings';
+import { type PendingField, markPending } from '@/lib/settings/pendingRequeue';
 import { type OperatorProfileRead, SENIORITY_LEVELS } from '@/lib/settings/types';
 import { cn } from '@/lib/utils';
 
@@ -70,6 +71,15 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
 
   const onConfirmSave = async () => {
     const values = getValues();
+    // Part B: capture the stale-on-save fields this save touches BEFORE
+    // reset() re-baselines dirtyFields. The cap/weight sliders are exempt —
+    // they are read live at query time or trigger their own rescore.
+    const pendingSaved: PendingField[] = [];
+    if (formState.dirtyFields.salary_floor_usd) pendingSaved.push('salary_floor_usd');
+    if (formState.dirtyFields.salary_ceiling_usd) pendingSaved.push('salary_ceiling_usd');
+    if (formState.dirtyFields.seniority_levels_included)
+      pendingSaved.push('seniority_levels_included');
+    if (formState.dirtyFields.staffing_firm_blocklist) pendingSaved.push('staffing_firm_blocklist');
     // PR #43: convert "no ceiling" (0 in the form) back to null on the
     // wire — the backend stores NULL to mean "rule disabled".
     const ceiling = values.salary_ceiling_usd > 0 ? values.salary_ceiling_usd : null;
@@ -87,6 +97,7 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
     };
     try {
       await update.mutateAsync(body);
+      markPending(pendingSaved);
       toast.success('✓ Rules saved');
       setModalOpen(false);
       // Reset isDirty to false now that the new values match the backend.
