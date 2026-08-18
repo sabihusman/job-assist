@@ -41,8 +41,24 @@ export function ProfileSection({ profile }: { profile: OperatorProfileRead }) {
       geo_whitelist: values.geo_whitelist,
     };
     try {
-      await update.mutateAsync(body);
-      toast.success('✓ Profile saved · vector rewritten');
+      const saved = await update.mutateAsync(body);
+      // D1 (D-SETTINGS-REWIRE): report the embedding side effect accurately —
+      // the vector is rewritten only when looking_for_text actually changed,
+      // and the backend now surfaces embed/rescore failures instead of
+      // swallowing them under an unconditional "vector rewritten" toast.
+      if (saved.embed_status === 'failed') {
+        toast.error(
+          'Profile saved, but re-embedding failed — semantic scores are stale. Save again to retry.',
+        );
+      } else if (saved.rescore_ok === false) {
+        toast.warning(
+          'Profile saved, but the follow-up rescore failed — fit scores may lag until the next sweep.',
+        );
+      } else if (saved.embed_status === 'rewritten') {
+        toast.success('✓ Profile saved · semantic vector updated');
+      } else {
+        toast.success('✓ Profile saved');
+      }
     } catch {
       // Error message rendered inline below by reading `update.error`.
     }
@@ -84,7 +100,10 @@ export function ProfileSection({ profile }: { profile: OperatorProfileRead }) {
           />
         </SettingsRow>
 
-        <SettingsRow label="What I'm looking for right now" sub="free-form — the strongest signal">
+        <SettingsRow
+          label="What I'm looking for right now"
+          sub="free-form — feeds semantic matching and the classifier"
+        >
           <div className="flex flex-col gap-2">
             <textarea
               {...register('looking_for_text')}
@@ -92,8 +111,8 @@ export function ProfileSection({ profile }: { profile: OperatorProfileRead }) {
               className="min-h-[140px] w-full rounded-md border border-border bg-input px-3 py-2 text-[13px] outline-none placeholder:text-muted-foreground focus:border-border-strong"
             />
             <p className="text-[12px] text-muted-foreground">
-              This is the most important signal the scoring system uses. Rewrite anytime your
-              preferences shift.
+              Feeds the semantic-fit slice of scoring (20%, alongside role family and seniority) and
+              steers the LLM classifier. Rewrite anytime your preferences shift.
             </p>
           </div>
         </SettingsRow>

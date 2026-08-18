@@ -159,6 +159,11 @@ async def test_put_partial_update(db_session: Any, reset_operator_profile: Any) 
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["looking_for_text"] == "Senior PM in fintech, remote-US"
+    # D-SETTINGS-REWIRE D1: a text change attempts a re-embed; the outcome is
+    # surfaced instead of swallowed. In CI (no Gemini key) the embed fails ->
+    # "failed"; with a live key it embeds -> "rewritten". Never "unchanged".
+    assert body["embed_status"] in ("rewritten", "failed")
+    assert isinstance(body["rescore_ok"], bool)
     # Untouched fields keep the seeded defaults.
     assert body["geo_whitelist"] == _SEED_GEO_WHITELIST
     assert body["salary_floor_usd"] == 85_000
@@ -184,6 +189,10 @@ async def test_put_updates_numeric_threshold(db_session: Any, reset_operator_pro
     assert body["salary_floor_usd"] == 120_000
     assert body["applicant_cap"] == 200
     assert body["geo_whitelist"] == _SEED_GEO_WHITELIST  # untouched
+    # D-SETTINGS-REWIRE D1: no looking_for_text change -> no embed attempt,
+    # and no rescore is triggered by threshold-only fields.
+    assert body["embed_status"] == "unchanged"
+    assert body["rescore_ok"] is True
 
 
 @_NEEDS_DB

@@ -2,15 +2,14 @@ import { ManualJobRow } from '@/components/settings/ManualJobRow';
 import { SettingsSection } from '@/components/settings/layout';
 
 /**
- * Manual job triggers. The three admin endpoints were all confirmed
- * to exist during the PR #32d read-first audit:
+ * Manual job triggers. Two admin endpoints:
  *
- *   POST /admin/discover-ats/run?commit=false
  *   POST /admin/gmail/backfill?days=60
  *   POST /admin/ingest/greenhouse/{handle}
  *
- * If any one of these is removed from the backend in a future PR,
- * delete its row here.
+ * If either is removed from the backend in a future PR, delete its
+ * row here. (The discover-ats row was removed in D-SETTINGS-REWIRE:
+ * the UI could only ever fire it as a dry-run.)
  */
 export function ManualJobsSection() {
   return (
@@ -19,11 +18,6 @@ export function ManualJobsSection() {
       description="POSTs to backend admin endpoints. Output stays in place."
     >
       <div className="flex flex-col gap-3">
-        <ManualJobRow
-          title="Run discover-ats"
-          endpoint="/admin/discover-ats/run?commit=false"
-          job="discover-ats"
-        />
         <ManualJobRow
           title="Run Gmail backfill (60 days)"
           endpoint="/admin/gmail/backfill?days=60"
