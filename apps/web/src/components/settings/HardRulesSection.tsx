@@ -7,19 +7,14 @@ import { toast } from 'sonner';
 import { ConfirmRulesModal, type RuleChange } from '@/components/settings/ConfirmRulesModal';
 import { SettingsRow, SettingsSection } from '@/components/settings/layout';
 import { useUpdateProfile } from '@/lib/api/settings';
-import {
-  CLOSED_CHANNELS_STUB,
-  type OperatorProfileRead,
-  SENIORITY_LEVELS,
-} from '@/lib/settings/types';
+import { type OperatorProfileRead, SENIORITY_LEVELS } from '@/lib/settings/types';
 import { cn } from '@/lib/utils';
 
 /**
- * Hard rule thresholds. Four subsections:
- *   - Maximum applicant count    (numeric + slider, backend column)
- *   - Salary floor               (numeric + slider, backend column)
- *   - Closed channels            (read-only stub; no backend API)
- *   - Staffing firm blocklist    (textarea, backend column)
+ * Hard rule thresholds and ranking knobs. Salary floor/ceiling,
+ * seniority levels, and the staffing-firm blocklist are backed by
+ * operator_profile columns and enforced by the hard-rule chain; the
+ * cap/weight sliders tune list queries and scoring.
  *
  * Save button is the only dirty-aware control in the entire Settings
  * page (per UI_SPEC.md). Clicking it on a dirty form opens the
@@ -27,7 +22,6 @@ import { cn } from '@/lib/utils';
  */
 
 type HardRulesFormState = {
-  applicant_cap: number;
   // feat/tunable-per-company-cap: roles surfaced per company; 0 = unlimited.
   per_company_cap: number;
   // Slice 2b: semantic blend weight 0..1; 0 = off (heuristic-only ranking).
@@ -46,7 +40,6 @@ type HardRulesFormState = {
 export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) {
   const form = useForm<HardRulesFormState>({
     defaultValues: {
-      applicant_cap: profile.applicant_cap,
       per_company_cap: profile.per_company_cap,
       // Coalesce to 0 (= off) so the numeric field + displayFormat always
       // bind to a real number. A profile served by an API that predates the
@@ -81,7 +74,6 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
     // wire — the backend stores NULL to mean "rule disabled".
     const ceiling = values.salary_ceiling_usd > 0 ? values.salary_ceiling_usd : null;
     const body = {
-      applicant_cap: values.applicant_cap,
       per_company_cap: values.per_company_cap,
       similarity_weight: values.similarity_weight,
       applied_corpus_weight: values.applied_corpus_weight,
@@ -107,13 +99,6 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
   // Build the field-diff list for the modal — only fields whose dirty flag
   // is set.
   const changes: RuleChange[] = [];
-  if (formState.dirtyFields.applicant_cap) {
-    changes.push({
-      label: 'Maximum applicant count',
-      from: String(profile.applicant_cap),
-      to: String(watch('applicant_cap')),
-    });
-  }
   if (formState.dirtyFields.per_company_cap) {
     const capNow = watch('per_company_cap');
     changes.push({
@@ -179,29 +164,9 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
   return (
     <SettingsSection
       heading="Hard rule thresholds"
-      description="Filters postings with disclosed salary, location, or applicant count outside your thresholds. Postings without disclosed salary (most listings) are always kept."
+      description="Filters postings whose disclosed salary or detected seniority falls outside your thresholds, plus ranking knobs. Postings without disclosed salary (most listings) are always kept."
     >
       <form onSubmit={handleSubmit(onSaveClick)} className="flex flex-col gap-8">
-        <SettingsRow
-          label="Maximum applicant count"
-          sub="Drop postings above this applicant count."
-        >
-          <Controller
-            control={control}
-            name="applicant_cap"
-            render={({ field }) => (
-              <SliderRow
-                value={field.value}
-                onChange={field.onChange}
-                min={50}
-                max={1000}
-                step={10}
-                inputAriaLabel="Maximum applicant count"
-              />
-            )}
-          />
-        </SettingsRow>
-
         <SettingsRow
           label="Roles per company"
           sub="How many of each company's best-fit roles to surface in lists. Set to 0 for unlimited (show every role). Raise it to see more per company."
@@ -309,33 +274,13 @@ export function HardRulesSection({ profile }: { profile: OperatorProfileRead }) 
 
         <SettingsRow
           label="Seniority levels to include"
-          sub="Drop postings outside these levels. Leave empty to include all."
+          sub="Drop postings whose detected level falls outside these. Unknown-level postings are always kept. Leave empty to include all."
         >
           <Controller
             control={control}
             name="seniority_levels_included"
             render={({ field }) => <SeniorityChips value={field.value} onChange={field.onChange} />}
           />
-        </SettingsRow>
-
-        <SettingsRow label="Closed channels" sub="Companies you've explicitly opted out of.">
-          <div className="flex flex-col gap-2">
-            <ul className="flex list-none flex-col gap-1 p-0">
-              {CLOSED_CHANNELS_STUB.map((row) => (
-                <li
-                  key={row.company}
-                  className="flex items-center justify-between rounded border border-border bg-card px-3 py-2 text-[13px]"
-                >
-                  <span className="font-medium">{row.company}</span>
-                  <span className="text-muted-foreground">{row.reason}</span>
-                  <span className="font-mono text-[11px] text-muted-foreground">{row.date}</span>
-                </li>
-              ))}
-            </ul>
-            <p className="text-[12px] italic text-muted-foreground">
-              Add or remove via SQL for now.
-            </p>
-          </div>
         </SettingsRow>
 
         <SettingsRow label="Staffing firm blocklist" sub="one firm per line">

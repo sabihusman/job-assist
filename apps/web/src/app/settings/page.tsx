@@ -1,9 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-
 import { AppShell } from '@/components/chrome/AppShell';
-import { ApiKeysSection } from '@/components/settings/ApiKeysSection';
 import { AppearanceSection } from '@/components/settings/AppearanceSection';
 import { HardRulesSection } from '@/components/settings/HardRulesSection';
 import { ManualJobsSection } from '@/components/settings/ManualJobsSection';
@@ -13,8 +10,8 @@ import { useOperatorProfile } from '@/lib/api/settings';
 /**
  * Settings page (PR #32d).
  *
- * Five sections stacked vertically. Each section is independent —
- * Appearance and API keys are pure-frontend; Profile and Hard Rules
+ * Four sections stacked vertically. Each section is independent —
+ * Appearance is pure-frontend; Profile and Hard Rules
  * round-trip the operator_profile endpoint; Manual Jobs POSTs to
  * admin endpoints.
  *
@@ -41,7 +38,6 @@ export default function SettingsPage() {
             <HardRulesSection profile={profile} />
           </>
         )}
-        <ApiKeysSection />
         <ManualJobsSection />
         <SettingsFooter />
       </div>
@@ -88,26 +84,16 @@ function ProfileLoadError({
 /**
  * Settings-only `contentinfo` footer.
  *
- *   job-assist · build {version} · api {label} · last sync {n}s ago
+ *   job-assist · build {version} · api {label}
  *
  * - version: read from NEXT_PUBLIC_APP_VERSION if set, else "0.4.0".
  * - api label: derived from NEXT_PUBLIC_API_BASE_URL — "railway-prod"
  *   if the URL contains "railway", else "local".
- * - last sync: ticker from page-mount time. A real liveness ping
- *   could replace this when the API gains a /healthz; for now this
- *   matches the chrome's sync-status pattern.
  */
 function SettingsFooter() {
   const version = process.env.NEXT_PUBLIC_APP_VERSION ?? '0.4.0';
   const apiUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
   const apiLabel = apiUrl.includes('railway') ? 'railway-prod' : 'local';
-  const [seconds, setSeconds] = useState(0);
-  useEffect(() => {
-    const start = Date.now();
-    const interval = setInterval(() => setSeconds(Math.floor((Date.now() - start) / 1000)), 1000);
-    return () => clearInterval(interval);
-  }, []);
-
   return (
     // The footer lives inside AppShell's <main>, so `<footer>`'s
     // implicit role becomes `generic` rather than `contentinfo`. The
@@ -118,7 +104,7 @@ function SettingsFooter() {
       role="contentinfo"
       className="mt-12 border-t border-border py-6 text-center font-mono text-[11px] text-muted-foreground"
     >
-      job-assist · build {version} · api {apiLabel} · last sync {seconds}s ago
+      job-assist · build {version} · api {apiLabel}
     </footer>
   );
 }

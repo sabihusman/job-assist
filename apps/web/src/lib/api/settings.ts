@@ -69,7 +69,7 @@ export function useUpdateProfile() {
  *   - `error`            — error message string on failure
  *   - `reset()`          — clear the response so the row collapses back to idle
  */
-export type AdminJobKey = 'discover-ats' | 'gmail-backfill' | 'greenhouse-ingest';
+export type AdminJobKey = 'gmail-backfill' | 'greenhouse-ingest';
 
 export function useRunAdminJob(job: AdminJobKey) {
   const [response, setResponse] = useState<unknown>(null);
@@ -77,13 +77,6 @@ export function useRunAdminJob(job: AdminJobKey) {
 
   const mutation = useMutation({
     mutationFn: async (input?: string) => {
-      if (job === 'discover-ats') {
-        const { data, error } = await api.POST('/admin/discover-ats/run', {
-          params: { query: { commit: false } as never },
-        });
-        if (error) throw error;
-        return data;
-      }
       if (job === 'gmail-backfill') {
         const { data, error } = await api.POST('/admin/gmail/backfill', {
           params: { query: { days: 60 } as never },

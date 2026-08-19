@@ -4,10 +4,10 @@ import { describe, expect, test, vi } from 'vitest';
 
 import { ConfirmRulesModal, type RuleChange } from '@/components/settings/ConfirmRulesModal';
 
-const ONE_CHANGE: RuleChange[] = [{ label: 'Maximum applicant count', from: '500', to: '550' }];
+const ONE_CHANGE: RuleChange[] = [{ label: 'Salary floor', from: '$85K', to: '$90K' }];
 const TWO_CHANGES: RuleChange[] = [
   ...ONE_CHANGE,
-  { label: 'Salary floor', from: '$85K', to: '$100K' },
+  { label: 'Roles per company', from: '3', to: '5' },
 ];
 
 describe('ConfirmRulesModal', () => {
@@ -49,10 +49,10 @@ describe('ConfirmRulesModal', () => {
         error={null}
       />,
     );
-    expect(screen.getByText('Maximum applicant count')).toBeInTheDocument();
-    expect(screen.getByText('500')).toBeInTheDocument();
-    expect(screen.getByText('550')).toBeInTheDocument();
     expect(screen.getByText('Salary floor')).toBeInTheDocument();
+    expect(screen.getByText('$85K')).toBeInTheDocument();
+    expect(screen.getByText('$90K')).toBeInTheDocument();
+    expect(screen.getByText('Roles per company')).toBeInTheDocument();
   });
 
   test('Cancel button calls onOpenChange(false)', async () => {

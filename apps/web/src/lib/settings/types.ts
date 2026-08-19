@@ -37,6 +37,13 @@ export type OperatorProfileRead = {
   seniority_levels_included: string[] | null;
   created_at: string;
   updated_at: string;
+  // PUT-only (D-SETTINGS-REWIRE D1): embedding side-effect outcome of the
+  // save. "rewritten" = looking_for_text changed and was re-embedded;
+  // "failed" = the embed errored (semantic signal is stale); "unchanged" =
+  // no text change. rescore_ok=false means a post-save recompute (semantic
+  // or applied-corpus rescore) errored — scores lag until the next sweep.
+  embed_status?: 'unchanged' | 'rewritten' | 'failed';
+  rescore_ok?: boolean;
 };
 
 export type OperatorProfileUpdate = Partial<{
@@ -65,19 +72,4 @@ export const SENIORITY_LEVELS: readonly { value: string; label: string }[] = [
   { value: 'senior_pm', label: 'Senior PM' },
   { value: 'lead_pm', label: 'Lead PM' },
   { value: 'principal_pm', label: 'Principal PM' },
-] as const;
-
-/**
- * Read-only stub data for the Closed Channels section. Sourced from the
- * spec's example values until a real closed_channel endpoint exists.
- */
-export type ClosedChannelStub = {
-  company: string;
-  reason: string;
-  date: string; // already-formatted "MMM D"
-};
-
-export const CLOSED_CHANNELS_STUB: readonly ClosedChannelStub[] = [
-  { company: 'MetaCorp', reason: 'Compensation cap below floor', date: 'Mar 12' },
-  { company: 'BigBlueCo', reason: 'Onsite required, no remote option', date: 'Feb 28' },
 ] as const;

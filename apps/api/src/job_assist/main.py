@@ -2370,10 +2370,18 @@ async def update_operator_profile(
     )
 
     # Semantic profile embedding (slice 1): re-embed looking_for_text when it
-    # changed (hash-gated inside the helper). Wrapped so an embedding failure
-    # NEVER fails the profile save — same "must not cascade" contract as
-    # scoring at ingest. This is the ONLY scoring-adjacent side effect, and it
-    # writes only the operator_profile vector columns; fit_score is untouched.
+    # changed (hash-gated inside the helper). An embedding/rescore failure
+    # still NEVER fails the profile save — same "must not cascade" contract as
+    # scoring at ingest — but the outcome is now SURFACED in the response
+    # (D-SETTINGS-REWIRE D1) instead of vanishing into a warning log while the
+    # UI toasted "vector rewritten" unconditionally:
+    #   * ``embed_status`` — "unchanged" | "rewritten" | "failed" (the embed
+    #     itself; "rewritten" covers a clear-to-empty too).
+    #   * ``rescore_ok``   — False when a post-save recompute (semantic
+    #     recalibrate+rescore, or the A3 weight-change rescore) errored;
+    #     scores lag until the next sweep.
+    embed_status = "unchanged"
+    rescore_ok = True
     try:
         from job_assist.services.embeddings import (
             embed_profile_if_changed,
@@ -2381,32 +2389,49 @@ async def update_operator_profile(
         )
 
         changed = await embed_profile_if_changed(db)
-        # slice 2a: the profile vector drives every posting's cosine, so a
-        # changed profile invalidates similarity_score — recompute the
-        # calibration. Best-effort; never fails the save.
+    except Exception as exc:
+        embed_status = "failed"
+        logging.getLogger("job_assist.main").warning(
+            "operator_profile.embed_failed", extra={"error": str(exc)[:300]}
+        )
+    else:
         if changed:
-            await recalibrate_similarity(db)
-            # slice 2b: the recalibrated similarity_score feeds the scorer's
-            # semantic_fit feature — re-score open postings so a looking_for_text
-            # edit actually moves fit_score (not just the next embedding sweep).
-            from job_assist.services.rescore import rescore_open_postings
+            embed_status = "rewritten"
+            # slice 2a: the profile vector drives every posting's cosine, so a
+            # changed profile invalidates similarity_score — recompute the
+            # calibration, then (slice 2b) re-score open postings so a
+            # looking_for_text edit actually moves fit_score (not just the
+            # next embedding sweep). Best-effort; never fails the save.
+            try:
+                await recalibrate_similarity(db)
+                from job_assist.services.rescore import rescore_open_postings
 
-            await rescore_open_postings(db)
+                await rescore_open_postings(db)
+            except Exception as exc:
+                rescore_ok = False
+                logging.getLogger("job_assist.main").warning(
+                    "operator_profile.rescore_failed", extra={"error": str(exc)[:300]}
+                )
         elif applied_corpus_weight_changed:
             # A3: weight-only change — looking_for_text (and thus the profile
             # vector + similarity calibration) is unchanged, so skip the
             # re-embed/recalibrate. Just rescore: rescore_open_postings loads the
             # applied-corpus basis when the new weight > 0 (boost lands) and
             # passes basis=None when it's 0 (clean revert to pure fit_score).
-            from job_assist.services.rescore import rescore_open_postings
+            try:
+                from job_assist.services.rescore import rescore_open_postings
 
-            await rescore_open_postings(db)
-    except Exception as exc:
-        logging.getLogger("job_assist.main").warning(
-            "operator_profile.embed_failed", extra={"error": str(exc)[:300]}
-        )
+                await rescore_open_postings(db)
+            except Exception as exc:
+                rescore_ok = False
+                logging.getLogger("job_assist.main").warning(
+                    "operator_profile.rescore_failed", extra={"error": str(exc)[:300]}
+                )
 
-    return OperatorProfileRead.model_validate(row).model_dump(mode="json")
+    body = OperatorProfileRead.model_validate(row).model_dump(mode="json")
+    body["embed_status"] = embed_status
+    body["rescore_ok"] = rescore_ok
+    return body
 
 
 # ── Admin — reclassify sweep (PR #48; async job model D-ASYNC-RESWEEP) ───────

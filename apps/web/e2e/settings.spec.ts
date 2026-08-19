@@ -27,14 +27,6 @@ const DEFAULT_PROFILE = {
   updated_at: '2026-04-01T00:00:00Z',
 };
 
-const DISCOVER_ATS_RESPONSE = {
-  committed: false,
-  matched_count: 0,
-  unmatched_count: 0,
-  matched: [],
-  unmatched: [],
-};
-
 async function mockSettingsApi(page: import('@playwright/test').Page) {
   await mockApi(page, {});
   await page.route(/\/operator\/profile/, async (route: Route) => {
@@ -57,11 +49,11 @@ async function mockSettingsApi(page: import('@playwright/test').Page) {
       await route.continue();
     }
   });
-  await page.route(/\/admin\/discover-ats\/run/, async (route: Route) => {
+  await page.route(/\/admin\/ingest\/greenhouse\//, async (route: Route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(DISCOVER_ATS_RESPONSE),
+      body: JSON.stringify({ ingest_run_id: 'e2e-run', status: 'completed' }),
     });
   });
 }
@@ -70,14 +62,13 @@ test.beforeEach(async ({ page }) => {
   await mockSettingsApi(page);
 });
 
-test('Settings page loads and renders all 5 section headings', async ({ page }) => {
+test('Settings page loads and renders all 4 section headings', async ({ page }) => {
   await page.goto('/settings');
   const content = mainContent(page);
   await expect(content.getByRole('heading', { name: 'Appearance' })).toBeVisible();
   // Wait for profile data to land before checking later sections.
   await expect(content.getByRole('heading', { name: 'Profile' })).toBeVisible({ timeout: 10_000 });
   await expect(content.getByRole('heading', { name: 'Hard rule thresholds' })).toBeVisible();
-  await expect(content.getByRole('heading', { name: 'API keys' })).toBeVisible();
   await expect(content.getByRole('heading', { name: 'Manual job triggers' })).toBeVisible();
 });
 
@@ -91,32 +82,15 @@ test('Settings theme toggle persists across navigation to /pipeline', async ({ p
   await expect(page.locator('html')).toHaveClass(/dark/);
 });
 
-test('API keys section renders all 5 env-var rows', async ({ page }) => {
+test('Manual job: Greenhouse ingestion run shows RESPONSE panel', async ({ page }) => {
   await page.goto('/settings');
   const content = mainContent(page);
-  for (const name of [
-    'DATABASE_URL',
-    'GEMINI_API_KEY',
-    'ANTHROPIC_API_KEY',
-    'GMAIL_CREDENTIALS_JSON',
-    'GMAIL_REFRESH_TOKEN',
-  ]) {
-    await expect(content.getByText(name)).toBeVisible();
-  }
-});
-
-test('Manual job: discover-ats run shows RESPONSE panel', async ({ page }) => {
-  await page.goto('/settings');
-  const content = mainContent(page);
-  // The previous `.locator('div').filter({ hasText: 'Run discover-ats' })`
-  // matched a higher-up container that wraps all three rows, so all
-  // three "run" buttons fell inside scope. Scope to the row card
-  // (ManualJobRow's outermost div has the title text as a direct
-  // descendant) by anchoring on the title span first.
-  const titleSpan = content.getByText('Run discover-ats', { exact: true });
-  // Walk up to the closest rounded-md card. xpath="ancestor::*[contains(@class,'rounded-md')][1]"
-  // is awkward in Playwright; use `locator('..')` chain instead.
+  // Scope to the row card by anchoring on the title span first — a bare
+  // `.filter({ hasText })` matches the container wrapping every row.
+  const titleSpan = content.getByText('Run Greenhouse ingestion', { exact: true });
   const rowCard = titleSpan.locator('xpath=ancestor::div[contains(@class,"rounded-md")][1]');
+  // The run button is disabled until a handle is entered.
+  await rowCard.getByLabel('Run Greenhouse ingestion input').fill('acme');
   await rowCard.getByRole('button').click();
   // RESPONSE panel renders inline with the JSON body.
   await expect(content.getByText(/^Response$/i)).toBeVisible({ timeout: 10_000 });

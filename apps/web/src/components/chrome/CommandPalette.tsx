@@ -27,7 +27,7 @@ import { useUiStore } from '@/lib/stores/ui';
  *   themselves don't fire; the useChordShortcut hook is stubbed)
  * - Footer key-chips ↑↓ navigate · ↵ select · esc close · job-assist
  *
- * The action stubs (discover-ats / Gmail backfill / etc.) fire a
+ * The action stubs (Gmail backfill / etc.) fire a
  * sonner toast "Coming in PR #32c" and close the palette. PR #32c
  * wires Settings → Manual job triggers properly.
  */
@@ -75,10 +75,8 @@ const COMMANDS: readonly PaletteCommand[] = [
   { type: 'nav', label: 'Go to Stats', href: '/stats', shortcut: 'G S' },
   // Settings intentionally has no shortcut hint — matches UI_SPEC.md.
   { type: 'nav', label: 'Go to Settings', href: '/settings' },
-  { type: 'stub', label: 'Run discover-ats', tag: 'job' },
   { type: 'stub', label: 'Run Gmail backfill', tag: 'job' },
   { type: 'stub', label: 'Run Greenhouse ingestion', tag: 'job' },
-  { type: 'stub', label: 'Rotate API keys', tag: 'system' },
   { type: 'stub', label: 'Export postings as CSV', tag: 'data' },
 ];
 

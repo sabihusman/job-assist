@@ -7,10 +7,9 @@ import { ResponsePanel } from '@/components/settings/ResponsePanel';
 import { type AdminJobKey, useRunAdminJob } from '@/lib/api/settings';
 
 /**
- * One row in the Manual Jobs section. Three variants are pre-defined
+ * One row in the Manual Jobs section. Two variants are pre-defined
  * in `ManualJobsSection.tsx`:
  *
- *   - discover-ats          — no input
  *   - gmail-backfill        — no input
  *   - greenhouse-ingest     — text input for `{handle}`
  *
