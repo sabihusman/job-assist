@@ -4,6 +4,7 @@ import { AppShell } from '@/components/chrome/AppShell';
 import { AppearanceSection } from '@/components/settings/AppearanceSection';
 import { HardRulesSection } from '@/components/settings/HardRulesSection';
 import { ManualJobsSection } from '@/components/settings/ManualJobsSection';
+import { PendingChangesBanner } from '@/components/settings/PendingChangesBanner';
 import { ProfileSection } from '@/components/settings/ProfileSection';
 import { useOperatorProfile } from '@/lib/api/settings';
 
@@ -24,6 +25,7 @@ export default function SettingsPage() {
   return (
     <AppShell title="Settings" subtitle="Operator tuning interface · single-user">
       <div className="mx-auto flex max-w-3xl flex-col px-6 py-4">
+        <PendingChangesBanner />
         <AppearanceSection />
         {isError ? (
           <ProfileLoadError
