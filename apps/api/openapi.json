@@ -1320,7 +1320,7 @@
     "/admin/gmail/backfill": {
       "post": {
         "summary": "Gmail Backfill",
-        "description": "Pull the last ``days`` days of mail, classify each, write outcome_event rows.\n\nLong-running (~5-10 minutes for a 60-day window on the Gemini free tier\nbecause of the 15 RPM throttle). Idempotent: re-running over the same\nwindow skips messages whose ``email_message_id`` is already in the table.\n\nReturns 503 with a clear hint when any of the required env vars\n(``GMAIL_CREDENTIALS_JSON``, ``GMAIL_REFRESH_TOKEN``, ``GEMINI_API_KEY``)\nare missing \u2014 preferable to a 500 stack trace.\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
+        "description": "Queue an async Gmail backfill and return 202 immediately.\n\nD-SETTINGS-REWIRE C2: the old synchronous form ran the sweep inside the\nrequest (~5-10 minutes for a 60-day window on the Gemini free tier, 15 RPM\nthrottle) and the browser timed out first. Same job-row + poll shape as\n``POST /admin/reclassify/sweep``, with the EXISTING ``gmail_sweep_run``\naudit row as the job row (kind='backfill') \u2014 no new table. Poll\n``GET /admin/gmail/jobs/{job_id}`` for status and the final counts.\n\nPreserved contracts:\n  * 409 when a sweep (poll or backfill) is already running \u2014 peeked at\n    enqueue; the worker re-acquires the slot, closing the check/start race.\n  * 503 with a clear hint when any required env var\n    (``GMAIL_CREDENTIALS_JSON``, ``GMAIL_REFRESH_TOKEN``,\n    ``GEMINI_API_KEY``) is missing.\n\nIdempotency carries over from the sweep itself: re-running over the same\nwindow skips messages whose ``email_message_id`` is already in the table.\n\nTODO: add authentication before exposing this endpoint publicly.\n      Currently dev-mode only \u2014 single-user deployment.",
         "operationId": "gmail_backfill_admin_gmail_backfill_post",
         "parameters": [
           {
@@ -1335,20 +1335,62 @@
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Gmail Backfill Admin Gmail Backfill Post"
+                  "$ref": "#/components/schemas/GmailBackfillAccepted"
                 }
               }
             }
           },
           "409": {
             "description": "Another Gmail sweep (poll or backfill) is already running"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/gmail/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Get Gmail Sweep Job",
+        "description": "Return one gmail_sweep_run row \u2014 the poll half of the 202 pattern.\n\nServes ANY sweep row (the 6-hourly poll cron's included); ``kind``\ndisambiguates. The backfill UI polls this until status leaves 'running'.",
+        "operationId": "get_gmail_sweep_job_admin_gmail_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GmailSweepJobStatus"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -4853,6 +4895,103 @@
         ],
         "title": "EmbeddingSweepResponse",
         "description": "Counters from ``POST /admin/embeddings/sweep``."
+      },
+      "GmailBackfillAccepted": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Job Id",
+            "description": "gmail_sweep_run row id \u2014 poll GET /admin/gmail/jobs/{job_id}."
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Initial job status; always 'running' at accept time."
+          },
+          "days_back": {
+            "type": "integer",
+            "title": "Days Back",
+            "description": "The window width the job was queued with."
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "days_back"
+        ],
+        "title": "GmailBackfillAccepted",
+        "description": "202 response for POST /admin/gmail/backfill \u2014 poll the job for progress."
+      },
+      "GmailSweepJobStatus": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Job Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "description": "'backfill' (manual wide-window pull) or 'poll' (cron)."
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "running | success | failed."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "messages_listed": {
+            "type": "integer",
+            "title": "Messages Listed",
+            "description": "Gmail messages the sweep listed."
+          },
+          "outcomes_inserted": {
+            "type": "integer",
+            "title": "Outcomes Inserted",
+            "description": "outcome_event rows the sweep inserted."
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message",
+            "description": "Set when status='failed'."
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "kind",
+          "status",
+          "started_at",
+          "messages_listed",
+          "outcomes_inserted"
+        ],
+        "title": "GmailSweepJobStatus",
+        "description": "Response for GET /admin/gmail/jobs/{job_id} \u2014 the sweep row as JSON.\n\nServes any ``gmail_sweep_run`` row (the 6-hourly poll cron's rows\nincluded); ``kind`` disambiguates."
       },
       "HTTPValidationError": {
         "properties": {
