@@ -210,10 +210,12 @@ async def test_worker_finalizes_success_with_counts(
 
     monkeypatch.setattr("job_assist.services.applied_companies.sync_applied_companies", _noop_sync)
 
-    await run_gmail_backfill_job(row.id, gmail=object(), classifier=object(), days=30)
+    job_id = row.id  # capture BEFORE expire_all — reading row.id on an
+    # expired instance is a SYNC lazy load and raises MissingGreenlet.
+    await run_gmail_backfill_job(job_id, gmail=object(), classifier=object(), days=30)
 
     db_session.expire_all()  # worker committed in its own session
-    fresh = await db_session.get(GmailSweepRun, row.id)
+    fresh = await db_session.get(GmailSweepRun, job_id)
     assert fresh is not None
     assert fresh.status == "success"
     assert fresh.messages_listed == 42
@@ -235,10 +237,11 @@ async def test_worker_finalizes_failure_with_error_message(
 
     monkeypatch.setattr("job_assist.gmail.backfill.run_backfill", _boom)
 
-    await run_gmail_backfill_job(row.id, gmail=object(), classifier=object(), days=60)
+    job_id = row.id  # capture BEFORE expire_all (see success test)
+    await run_gmail_backfill_job(job_id, gmail=object(), classifier=object(), days=60)
 
     db_session.expire_all()
-    fresh = await db_session.get(GmailSweepRun, row.id)
+    fresh = await db_session.get(GmailSweepRun, job_id)
     assert fresh is not None
     assert fresh.status == "failed"
     # First line only — some Google errors embed full request URLs.
