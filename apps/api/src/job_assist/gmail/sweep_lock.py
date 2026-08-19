@@ -33,6 +33,16 @@ class GmailSweepBusyError(Exception):
     """Another Gmail sweep (poll or backfill) is already running."""
 
 
+def gmail_sweep_busy() -> bool:
+    """True while a Gmail sweep (poll or backfill) holds the slot.
+
+    Peek only — used by the async-backfill enqueue path to preserve the
+    endpoint's 409 contract without holding the slot across a request. The
+    worker still acquires the slot properly, which closes the check/start race.
+    """
+    return _gmail_sweep_lock.locked()
+
+
 @asynccontextmanager
 async def gmail_sweep_slot() -> AsyncIterator[None]:
     """Hold the single Gmail-sweep slot for the duration of the block.
@@ -46,4 +56,4 @@ async def gmail_sweep_slot() -> AsyncIterator[None]:
         yield
 
 
-__all__ = ["GmailSweepBusyError", "gmail_sweep_slot"]
+__all__ = ["GmailSweepBusyError", "gmail_sweep_busy", "gmail_sweep_slot"]

@@ -29,6 +29,7 @@ from job_assist.schemas.embeddings import (
     EmbeddingSweepResponse,
     NearestResponse,
 )
+from job_assist.schemas.gmail_jobs import GmailBackfillAccepted, GmailSweepJobStatus
 from job_assist.schemas.operator_profile import OperatorProfileUpdate
 from job_assist.schemas.outreach import OutreachMessageCreate
 from job_assist.schemas.public import (
@@ -2041,21 +2042,31 @@ async def _sync_applied_companies_best_effort(db: AsyncSession) -> None:
 
 @app.post(
     "/admin/gmail/backfill",
+    status_code=202,
     responses={409: {"description": "Another Gmail sweep (poll or backfill) is already running"}},
 )
 async def gmail_backfill(
     db: DbSession,
     days: int = 60,
-) -> dict[str, Any]:
-    """Pull the last ``days`` days of mail, classify each, write outcome_event rows.
+) -> GmailBackfillAccepted:
+    """Queue an async Gmail backfill and return 202 immediately.
 
-    Long-running (~5-10 minutes for a 60-day window on the Gemini free tier
-    because of the 15 RPM throttle). Idempotent: re-running over the same
+    D-SETTINGS-REWIRE C2: the old synchronous form ran the sweep inside the
+    request (~5-10 minutes for a 60-day window on the Gemini free tier, 15 RPM
+    throttle) and the browser timed out first. Same job-row + poll shape as
+    ``POST /admin/reclassify/sweep``, with the EXISTING ``gmail_sweep_run``
+    audit row as the job row (kind='backfill') — no new table. Poll
+    ``GET /admin/gmail/jobs/{job_id}`` for status and the final counts.
+
+    Preserved contracts:
+      * 409 when a sweep (poll or backfill) is already running — peeked at
+        enqueue; the worker re-acquires the slot, closing the check/start race.
+      * 503 with a clear hint when any required env var
+        (``GMAIL_CREDENTIALS_JSON``, ``GMAIL_REFRESH_TOKEN``,
+        ``GEMINI_API_KEY``) is missing.
+
+    Idempotency carries over from the sweep itself: re-running over the same
     window skips messages whose ``email_message_id`` is already in the table.
-
-    Returns 503 with a clear hint when any of the required env vars
-    (``GMAIL_CREDENTIALS_JSON``, ``GMAIL_REFRESH_TOKEN``, ``GEMINI_API_KEY``)
-    are missing — preferable to a 500 stack trace.
 
     TODO: add authentication before exposing this endpoint publicly.
           Currently dev-mode only — single-user deployment.
@@ -2070,30 +2081,55 @@ async def gmail_backfill(
             ),
         )
 
-    from job_assist.gmail.backfill import run_backfill
-    from job_assist.gmail.sweep_lock import GmailSweepBusyError, gmail_sweep_slot
-    from job_assist.services.gmail_sweep_run import record_sweep
+    from job_assist.gmail.sweep_lock import gmail_sweep_busy
 
-    try:
-        # fix(audit): one Gmail sweep at a time. A backfill overlapping the
-        # 15-min cron poll double-spends Gemini on shared messages and then
-        # IntegrityErrors on the unique email_message_id, aborting the batch.
-        # feat/gmail-health-check: same sweep recording as the poll path.
-        async with gmail_sweep_slot(), record_sweep("backfill") as sweep:
-            gmail, classifier = _build_gmail_runtime()
-            report = await run_backfill(db, gmail, classifier, days_back=days)
-            sweep.set_counts(report)
-    except GmailSweepBusyError:
+    if gmail_sweep_busy():
         raise HTTPException(
             status_code=409,
             detail="A Gmail sweep (poll or backfill) is already running — retry when it finishes.",
-        ) from None
-    except HTTPException:
-        raise
+        )
+
+    # Built at ENQUEUE so a bad-credentials construction error still surfaces
+    # as an HTTP error on the POST (the worker never imports from main).
+    try:
+        gmail, classifier = _build_gmail_runtime()
     except Exception as exc:
         raise _surface_gmail_failure("/admin/gmail/backfill", exc) from exc
-    await _sync_applied_companies_best_effort(db)
-    return report.model_dump(mode="json")
+
+    from job_assist.db.models.gmail_sweep_run import GmailSweepRun
+    from job_assist.services.gmail_backfill_job import spawn_gmail_backfill_job
+
+    job = GmailSweepRun(kind="backfill", status="running")
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    spawn_gmail_backfill_job(job.id, gmail=gmail, classifier=classifier, days=days)
+    return GmailBackfillAccepted(job_id=job.id, status=job.status, days_back=days)
+
+
+@app.get("/admin/gmail/jobs/{job_id}", tags=["admin"])
+async def get_gmail_sweep_job(job_id: uuid.UUID, db: DbSession) -> GmailSweepJobStatus:
+    """Return one gmail_sweep_run row — the poll half of the 202 pattern.
+
+    Serves ANY sweep row (the 6-hourly poll cron's included); ``kind``
+    disambiguates. The backfill UI polls this until status leaves 'running'.
+    """
+    from job_assist.db.models.gmail_sweep_run import GmailSweepRun
+
+    row = await db.get(GmailSweepRun, job_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No gmail_sweep_run with id {job_id}")
+    return GmailSweepJobStatus(
+        job_id=row.id,
+        kind=row.kind,
+        status=row.status,
+        started_at=row.started_at,
+        finished_at=row.finished_at,
+        messages_listed=row.messages_listed,
+        outcomes_inserted=row.outcomes_inserted,
+        error_message=row.error_message,
+    )
 
 
 @app.post(
